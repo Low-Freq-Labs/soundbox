@@ -55,10 +55,12 @@ resumption. New native DB saves follow local preparation; they never publish an
 intermediate BPM paired with an older key. This is local staging, not permission
 for partial native-component publication.
 
-Analysis priority currently applies to the whole matching queued backlog, so
-unrelated source edits can wait even between detector workers. Bounded fairness
-remains a measured follow-up in the [performance audit](performance-audit.md);
-the responsiveness changes preserve this sequencing and the shared source lane.
+Active captured analysis phases retain priority. After a joined, durably
+acknowledged phase, one eligible source head may use a source-scoped fair turn
+before the next local phase. Each domain keeps its FIFO, prerequisites and fresh
+guards; refusals do not consume the turn. Physical work and prepared-prep/recovery
+reservations remain protected. This is bounded admission, not a latency deadline;
+the [performance audit](performance-audit.md) keeps measured costs separate.
 
 Folder imports enter Collection before header/bookmark probing. Captured imports
 admit BPM/grid and Hot/Memory Cue drafts after detection, including already-added

@@ -22,7 +22,7 @@ class TestSyncEndToEnd(unittest.TestCase):
         # Two real files + one referenced-but-missing track.
         (self.src / "good1.flac").write_bytes(b"AAAA")
         (self.src / "good2.mp3").write_bytes(b"BBBBBB")
-        self.xml = self.root / "rb.xml"
+        self.xml = self.src / "rb.xml"
         write_xml(
             self.xml,
             tracks=[
@@ -189,6 +189,175 @@ class TestSyncEndToEnd(unittest.TestCase):
         after = {path.relative_to(self.target): path.read_bytes()
                  for path in self.target.rglob("*") if path.is_file()}
         self.assertEqual(after, before)
+
+    def _forbid_audio_reads(self, track_ids=("1", "2")):
+        sources = {self.lib.tracks_by_id[key].path.resolve() for key in track_ids}
+        rows = manifest.load(self.target)["files"]
+        forbidden = sources | {
+            (self.target / path.lstrip("/")).resolve()
+            for path, row in rows.items()
+            if row["kind"] == "track" and row["source"] in {str(path) for path in sources}}
+        original = Path.open
+        def checked(path, *args, **kwargs):
+            self.assertNotIn(path.resolve(), forbidden, "Retained audio was opened")
+            return original(path, *args, **kwargs)
+        return mock.patch.object(Path, "open", checked)
+
+    def test_artwork_only_resync_updates_cover_without_opening_retained_audio(self):
+        image = self.root / "art.jpg"
+        image.write_bytes(b"old artwork")
+        cache = mock.Mock()
+        cache.image_path.side_effect = lambda key: image if key == "1" else None
+        sync_mod.run(self.lib, self.lib.playlists, self.target, layout="tree",
+                     dry_run=False, art_cache=cache)
+        before = image.stat()
+        replacement = self.root / "replacement.jpg"
+        replacement.write_bytes(b"new artwork")
+        os.utime(replacement, ns=(before.st_atime_ns, before.st_mtime_ns))
+        replacement.replace(image)
+        with self._forbid_audio_reads(), \
+                mock.patch.object(sync_mod, "acquire_source", side_effect=AssertionError("no acquisition")):
+            report = sync_mod.resync(self.lib, self.target, art_cache=cache)
+        self.assertFalse(any(row.errors for row in report.playlists))
+        self.assertEqual(report.bytes_to_copy, 0)
+        self.assertEqual(report.playlists[0].already_present, 2)
+        self.assertEqual((self.target / "Music/Artist X/Good One/cover.jpg").read_bytes(), b"new artwork")
+        self.assertEqual(image.stat().st_mtime_ns, before.st_mtime_ns)
+
+    def test_artwork_derivatives_update_then_unchanged_sync_does_no_payload_work(self):
+        from PIL import Image
+        image = self.root / "art.jpg"
+        Image.new("RGB", (32, 32), (200, 20, 40)).save(image, "JPEG")
+        cache = mock.Mock()
+        cache.image_path.side_effect = lambda key: image if key == "1" else None
+        derivatives = RockboxArtworkCache(self.root / "art-cache")
+        sync_mod.run(self.lib, self.lib.playlists, self.target, layout="tree", dry_run=False,
+                     art_cache=cache, rockbox_art_cache=derivatives)
+        folder = self.target / "Music/Artist X/Good One"
+        before = {name: (folder / name).read_bytes()
+                  for name in ("cover.160x160.bmp", "cover.116x116.bmp", "cover.bmp")}
+        Image.new("RGB", (32, 32), (20, 180, 70)).save(image, "JPEG")
+        with self._forbid_audio_reads(), \
+                mock.patch.object(sync_mod, "acquire_source", side_effect=AssertionError("no acquisition")):
+            report = sync_mod.resync(self.lib, self.target, art_cache=cache,
+                                     rockbox_art_cache=derivatives)
+        self.assertFalse(any(row.errors for row in report.playlists))
+        self.assertEqual(report.bytes_to_copy, 0)
+        for name, raw in before.items():
+            self.assertNotEqual((folder / name).read_bytes(), raw)
+        with mock.patch.object(sync_mod, "_sha256", side_effect=AssertionError("no payload hash")), \
+                mock.patch.object(derivatives, "prepare", side_effect=AssertionError("no derivative")), \
+                mock.patch.object(manifest, "save", side_effect=AssertionError("no manifest write")), \
+                mock.patch.object(sync_mod.rockbox_config, "theme_album_art_sides",
+                                  side_effect=AssertionError("no theme read")):
+            repeat = sync_mod.resync(self.lib, self.target, art_cache=cache,
+                                     rockbox_art_cache=derivatives)
+        self.assertEqual(repeat.playlists, [])
+
+    def test_changed_art_on_overlap_member_preserves_shared_owners_and_retained_audio(self):
+        first = Playlist("First", [], ["1"], pid="first")
+        second = Playlist("Second", [], ["1"], pid="second")
+        self.lib.playlists = [first, second]
+        image = self.root / "art.jpg"
+        image.write_bytes(b"old art")
+        cache = mock.Mock()
+        cache.image_path.side_effect = lambda key: image if key == "1" else None
+        sync_mod.run(self.lib, [first, second], self.target, layout="tree", dry_run=False,
+                     art_cache=cache)
+        first.keys.append("2")
+        image.write_bytes(b"new art")
+        with self._forbid_audio_reads(("1",)):
+            report = sync_mod.resync(self.lib, self.target, art_cache=cache)
+        self.assertFalse(any(row.errors for row in report.playlists))
+        self.assertEqual(report.bytes_to_copy, 6)
+        rows = manifest.load(self.target)["files"]
+        for path, row in rows.items():
+            if path.startswith("/Music/Artist X/Good One/"):
+                self.assertEqual(row["playlists"], ["first", "second"])
+        self.assertEqual((self.target / "Music/Artist X/Good One/cover.jpg").read_bytes(), b"new art")
+
+    def test_changed_art_cannot_replace_a_preexisting_unowned_cover(self):
+        image = self.root / "art.jpg"
+        image.write_bytes(b"preexisting art")
+        cover = self.target / "Music/Artist X/Good One/cover.jpg"
+        cover.parent.mkdir(parents=True)
+        cover.write_bytes(image.read_bytes())
+        cache = mock.Mock()
+        cache.image_path.side_effect = lambda key: image if key == "1" else None
+        sync_mod.run(self.lib, self.lib.playlists, self.target, layout="tree", dry_run=False,
+                     art_cache=cache)
+        path = "/Music/Artist X/Good One/cover.jpg"
+        self.assertFalse(manifest.load(self.target)["files"][path]["owned"])
+        image.write_bytes(b"new local art")
+        with self._forbid_audio_reads():
+            report = sync_mod.resync(self.lib, self.target, art_cache=cache)
+        self.assertIn("unowned artwork conflict", " ".join(report.playlists[0].errors))
+        self.assertEqual(cover.read_bytes(), b"preexisting art")
+        saved = manifest.load(self.target)
+        self.assertFalse(saved["files"][path]["owned"])
+        self.assertEqual(saved["playlists"][manifest.playlist_key(self.lib.playlists[0])]["sig"], "partial")
+
+    def test_unavailable_local_art_preserves_cover_through_membership_sync(self):
+        playlist = Playlist("First", [], ["1"], pid="first")
+        self.lib.playlists = [playlist]
+        image = self.root / "art.jpg"
+        image.write_bytes(b"keep this art")
+        cache = mock.Mock()
+        cache.image_path.side_effect = lambda key: image if key == "1" else None
+        sync_mod.run(self.lib, [playlist], self.target, layout="tree", dry_run=False, art_cache=cache)
+        playlist.keys.append("2")
+        cache.image_path.return_value = None
+        cache.image_path.side_effect = None
+        with self._forbid_audio_reads(("1",)):
+            report = sync_mod.resync(self.lib, self.target, art_cache=cache)
+        self.assertFalse(any(row.errors for row in report.playlists))
+        self.assertEqual((self.target / "Music/Artist X/Good One/cover.jpg").read_bytes(), b"keep this art")
+        self.assertEqual(manifest.load(self.target)["files"][
+            "/Music/Artist X/Good One/cover.jpg"]["playlists"], ["first"])
+
+    def test_artwork_cancellation_keeps_old_unprocessed_cover_for_retry(self):
+        images = {key: self.root / f"art-{key}.jpg" for key in ("1", "2")}
+        for key, image in images.items():
+            image.write_bytes(f"old art {key}".encode())
+        cache = mock.Mock()
+        cache.image_path.side_effect = images.get
+        sync_mod.run(self.lib, self.lib.playlists, self.target, layout="tree", dry_run=False,
+                     art_cache=cache)
+        for key, image in images.items():
+            image.write_bytes(f"new art {key}".encode())
+        stopped = False
+        def progress(done, _total, _label):
+            nonlocal stopped
+            if done == 1:
+                stopped = True
+        with self._forbid_audio_reads():
+            report = sync_mod.resync(self.lib, self.target, art_cache=cache,
+                                     on_progress=progress, should_cancel=lambda: stopped)
+        self.assertTrue(report.cancelled)
+        self.assertEqual((self.target / "Music/Artist X/Good One/cover.jpg").read_bytes(), b"new art 1")
+        self.assertEqual((self.target / "Music/Artist Y/Good Two/cover.jpg").read_bytes(), b"old art 2")
+        with self._forbid_audio_reads():
+            retry = sync_mod.resync(self.lib, self.target, art_cache=cache)
+        self.assertFalse(retry.cancelled)
+        self.assertFalse(any(row.errors for row in retry.playlists))
+        self.assertEqual((self.target / "Music/Artist Y/Good Two/cover.jpg").read_bytes(), b"new art 2")
+
+    def test_artwork_dry_run_with_retained_inventory_writes_nothing(self):
+        image = self.root / "art.jpg"
+        image.write_bytes(b"old art")
+        cache = mock.Mock()
+        cache.image_path.side_effect = lambda key: image if key == "1" else None
+        sync_mod.run(self.lib, self.lib.playlists, self.target, layout="tree", dry_run=False,
+                     art_cache=cache)
+        before = {path: path.read_bytes() for path in self.target.rglob("*") if path.is_file()}
+        image.write_bytes(b"new art")
+        with mock.patch.object(sync_mod, "_export_artwork", side_effect=AssertionError("no art write")), \
+                mock.patch.object(manifest, "save", side_effect=AssertionError("no manifest write")), \
+                self._forbid_audio_reads():
+            report = sync_mod.run(self.lib, self.lib.playlists, self.target, dry_run=True,
+                                  art_cache=cache, reuse_managed_inventory=True)
+        self.assertTrue(report.dry_run)
+        self.assertEqual({path: path.read_bytes() for path in before}, before)
 
     def test_explicit_sync_propagates_source_display_edits_and_removes_old_owned_paths(self):
         sync_mod.run(self.lib, self.lib.playlists, self.target, layout="tree", dry_run=False)
@@ -426,7 +595,7 @@ class TestSyncEndToEnd(unittest.TestCase):
             mime="image/jpeg", type=3, desc="", data=b"huge-cover" * 1000))
         tags.save(source)
         source_before = source.read_bytes()
-        xml = self.root / "tagged.xml"
+        xml = self.src / "tagged.xml"
         write_xml(
             xml, [("tagged", "Tagged", "Artist", source)], ["tagged"])
         library = rekordbox_xml.load(xml)

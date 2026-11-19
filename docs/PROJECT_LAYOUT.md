@@ -41,6 +41,25 @@ Root build/check scripts recreate their own outputs. Cleanup must identify exact
 
 Unresolved recovery and pending acceptance retain their required payloads. Sonny's November10 cleanup explicitly retires completed diagnostic duplicates and historical pilot DB snapshots outside current runtime recovery; compact proof receipts remain. Current writer recovery, pending captures, required offline fixtures and original music/conversions stay protected. Ordinary completed native transactions continue their accepted receipt-backed retirement rules.
 
+Sonny renewed cleanup on November18. After the verified de410 install, the exact
+reviewed manifest retired completed DB/icon/snapshot copies and reproducible
+personal packaging/Cargo debug output: about2.6GB distinct file bytes. It kept
+the one pending f502 fallback, six ambiguous/pending DB copies,73compact evidence
+files, source/tests, current recovery, originals, pinned inputs and active
+native/check/release outputs. `~/Library/Logs/Soundbox/cleanup-2026-11-18/`
+contains the manifest and completion receipt; retired snapshot payloads must not
+be treated as replay/recovery inputs. Newer curation was never restored over.
+
+The final November18 wrap followed accepted installed iTunes export/reconnect/Sync.
+It retired the sole old application fallback and regenerated personal distributions,
+personal packaging and Cargo debug output:1,612,310,155distinct regular-file bytes.
+The current installed app, `.venv`, active native/check/CDJ release outputs,
+curation/originals/recovery and private fixtures remain. Exact guarded manifests
+are in the current handoff's private `wrap-up/connected-wrap-cleanup-*` receipts.
+This byte count is not a measured physical APFS space gain. No app control or
+source/device write was used, and no duplicate candidate/previous app remains
+from this delivery.
+
 ## Evidence and navigation
 
 Cleanup review/gate/package receipts: `~/Library/Logs/Soundbox/codebase-cleanup-2026-11-08/`.

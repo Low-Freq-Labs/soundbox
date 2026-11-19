@@ -30,7 +30,7 @@ Source launch uses real AppData; development tests/renders must use the supplied
 4. Connect a supported destination and export selected playlists. Generic USBs use explicit Export; iPods retain firmware-specific Sync.
 5. Use Eject before disconnecting. It starts no final verification scan.
 
-Supported stock writes remain MA446 MP3/supported WAV only. Dual stock/Rockbox uses one coordinated transaction. See [device limits](DEVICES.md).
+Supported stock writes use observed Video/Classic iTunesDB/signature profiles on writable FAT32 mounts, with validated MP3 or stereo PCM16/44.1-kHz WAV. Dual iTunes/Rockbox uses one coordinated transaction. See [device limits](DEVICES.md).
 Ordinary playback/export preserves source audio; accepted recoverable conversion and confirmed Graveyard removal are separate domains.
 
 ## Verify and package

@@ -144,8 +144,11 @@ class PlaylistUnificationController(QObject):
             w._apply_settings_to_lib(invalidate_rows=False)
             w._populate_tree(engine.summary(w.lib))
             if (getattr(w,'_view_key','') or '').startswith('sb:'):
-                w.sb_tree.setCurrentItem(w.sb_tree.topLevelItem(0))
-                w._show_collection();w._restore_view('sb:Collection')
+                if w.stack.currentIndex() == 1:
+                    w._view_key='sb:Collection'
+                else:
+                    w.sb_tree.setCurrentItem(w.sb_tree.topLevelItem(0))
+                    w._show_collection();w._restore_view('sb:Collection')
 
     def stop(self):
         self.closing=True;self.timer.stop()

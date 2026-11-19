@@ -224,7 +224,8 @@ class SmartPlaylistTagHandoff(unittest.TestCase):
         w.saves=[];w.save_ok=True
         def save():w.saves.append(deepcopy(w.settings));return w.save_ok
         w._save_state=save
-        def refresh(lib):
+        def refresh(lib,*,prepared_native_ids):
+            self.assertEqual(prepared_native_ids,())
             w.lib=lib;w.model.set_rows(MainWindow._playlist_rows(w,'Smart'))
         w._on_refresh_done=refresh
         return w

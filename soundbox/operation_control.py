@@ -49,6 +49,21 @@ def checkpoint() -> None:
         raise OperationCancelled("Operation cancelled at a safe boundary")
 
 
+def cancellation_enabled() -> bool:
+    """Whether this operation has a cooperative cancellation owner."""
+    return _stop.get() is not None
+
+
+@contextmanager
+def cancellation_disabled() -> Iterator[None]:
+    """Finish a commit/recovery boundary without losing its progress or metrics."""
+    token = _stop.set(None)
+    try:
+        yield
+    finally:
+        _stop.reset(token)
+
+
 def phase_progress(phase: str, done: int, total: int, label: str) -> None:
     callback = _progress.get()
     if callback is not None:

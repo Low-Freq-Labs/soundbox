@@ -1,6 +1,6 @@
 """Real background lane/queue/ack tests on private TEMP audio and native DBs."""
 from copy import deepcopy
-from dataclasses import asdict
+from dataclasses import asdict,replace
 import hashlib
 import json
 from pathlib import Path
@@ -77,6 +77,83 @@ class BackgroundConversion(unittest.TestCase):
         cache=self.root/'data/media-format-cache.json'
         _save_format_cache(cache,str(self.window.lib.source),self.window.lib.source_library_id,entries)
         return cache,entries
+
+    def held_format_scan(self):
+        cache,_entries=self.cache_compatible_audio();cache.unlink()
+        self.controller.cache={};self.controller._cache_identity=None
+        entered=threading.Event();release=threading.Event();self.addCleanup(release.set)
+        inspect=self.controller_compatibility_inspect()
+        def held(path):
+            entered.set()
+            if not release.wait(10):raise AssertionError('Private format scan was not released')
+            return inspect(path)
+        probe=self.enterContext(mock.patch('desktop.media_conversion.compatibility.inspect',side_effect=held))
+        self.controller.discover();self.wait(entered.is_set)
+        return release,probe
+
+    @staticmethod
+    def controller_compatibility_inspect():
+        from soundbox import cdj_compatibility
+        return cdj_compatibility.inspect
+
+    def test_metadata_replacement_accepts_one_in_flight_scan_without_restarting_inventory(self):
+        release,probe=self.held_format_scan();w=self.window;previous=w.lib
+        incoming=replace(previous,tracks_by_id={'1':replace(previous.tracks_by_id['1'],name='Saved title',artist='Saved artist')})
+        self.assertTrue(self.controller.rebind_prepared_library(previous,incoming))
+        w.lib=incoming
+        with mock.patch.object(self.controller,'discover',side_effect=AssertionError('Metadata restarted the format scan')):
+            release.set();self.wait(lambda:self.controller._cache_identity is not None and not self.controller.tasks.pending)
+        self.assertEqual(probe.call_count,1)
+        self.assertEqual(self.controller.facts('1')['facts']['sample_rate'],44100)
+        self.assertEqual(w.lib.tracks_by_id['1'].name,'Saved title')
+        self.assertEqual(self.controller.facts('1')['epoch'],analysis.identity(self.audio.stat()))
+        self.assertFalse(self.controller.pending)
+
+    def test_prepared_facts_rebind_without_track_traversal_file_access_or_fact_copy(self):
+        self.cache_compatible_audio();self.controller.discover()
+        self.wait(lambda:self.controller._cache_identity is not None and not self.controller.tasks.pending)
+        previous=self.window.lib;facts=previous.media_facts
+        class ReadyInventory(dict):
+            def values(self):raise AssertionError('Prepared handoff traversed the library')
+            def items(self):raise AssertionError('Prepared handoff traversed the library')
+        incoming=replace(previous,tracks_by_id=ReadyInventory(previous.tracks_by_id))
+        with mock.patch.object(Path,'stat',side_effect=AssertionError('Prepared handoff touched media')):
+            self.assertTrue(self.controller.rebind_prepared_library(previous,incoming))
+        self.assertIs(incoming.media_facts,facts)
+        self.window.lib=incoming
+        self.assertEqual(self.controller.facts('1')['path'],str(self.audio))
+
+    def test_changed_media_native_inventory_or_visibility_rejects_in_flight_scan(self):
+        baseline=self.window.lib
+        for changed in ('path','size','native','source','added','hidden','removal'):
+            with self.subTest(changed=changed):
+                self.window.lib=replace(baseline,tracks_by_id={tid:replace(track) for tid,track in baseline.tracks_by_id.items()})
+                self.window.hidden=set();self.window.removals={}
+                release,_probe=self.held_format_scan();current=self.window.lib
+                if changed=='path':current.tracks_by_id['1'].location_uri=self.audio.with_name('elsewhere.wav').as_uri()
+                elif changed=='size':current.tracks_by_id['1'].size+=1
+                elif changed=='native':current.tracks_by_id['1'].source_native_id='99'
+                elif changed=='source':current.source=str(self.source/'other.db')
+                elif changed=='added':current.tracks_by_id['new']=replace(current.tracks_by_id['1'],track_id='new')
+                elif changed=='hidden':self.window.hidden.add('1')
+                else:self.window.removals={'playlist':{'1':'saved'}}
+                with mock.patch.object(self.controller,'discover') as restart:
+                    release.set();self.wait(lambda:not self.controller.tasks.pending)
+                restart.assert_called_once_with()
+                self.assertIsNone(self.controller._cache_identity)
+                self.assertFalse(self.controller.pending)
+
+    def test_visibility_and_source_changes_drop_prepared_format_hints(self):
+        self.cache_compatible_audio();self.controller.discover()
+        self.wait(lambda:self.controller._cache_identity is not None and not self.controller.tasks.pending)
+        previous=self.window.lib
+        for changed in ('hidden','removal','source'):
+            with self.subTest(changed=changed):
+                self.window.hidden={'1'} if changed=='hidden' else set()
+                self.window.removals={'playlist':{'1':'saved'}} if changed=='removal' else {}
+                incoming=replace(previous,source=str(self.source/'other.db') if changed=='source' else previous.source)
+                self.assertFalse(self.controller.rebind_prepared_library(previous,incoming))
+                self.assertEqual(incoming.media_facts,{})
 
     def test_persisted_technical_cache_reuses_exact_source_epoch_and_rebinds_current_tracks(self):
         cache,entries=self.cache_compatible_audio();w=self.window

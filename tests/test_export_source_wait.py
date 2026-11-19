@@ -1,4 +1,4 @@
-"""Direct iPod admission waits for the complete native edit generation."""
+"""Legacy physical source waits and new iPod capture entry separation."""
 from copy import deepcopy
 from types import SimpleNamespace
 import unittest
@@ -6,6 +6,7 @@ from unittest import mock
 
 from desktop.export_wait import defer_source_sync,cancel_source_syncs
 from desktop.app import MainWindow
+from desktop.metadata_controller import EDITING_DISABLED_REASON
 from soundbox.library import Library,Playlist,Track
 
 
@@ -19,6 +20,7 @@ class ExportSourceWait(unittest.TestCase):
             metadata_controller=SimpleNamespace(pending=[{'error':''}],queue_error=lambda:'',migration_pending=False),
             _device_mount_tokens={'/fixture/ipod':4},_shutting_down=False,_state_maintenance=False,
             _device_operation_owned=mock.Mock(return_value=False),cancel_btn=mock.Mock(),
+            _export_target_result=mock.Mock(),
             _start_pulse=mock.Mock(),_stop_pulse=mock.Mock(),_flash_status=mock.Mock(),
             _begin_stock_ipod_sync=mock.Mock(),_begin_dual_ipod_sync=mock.Mock())
         return host,playlist
@@ -84,16 +86,18 @@ class ExportSourceWait(unittest.TestCase):
                 self.poll();host._begin_stock_ipod_sync.assert_not_called()
                 if action=='backup':host._state_maintenance=False;self.poll();host._begin_stock_ipod_sync.assert_called_once()
 
-    def test_entry_points_wait_before_device_model_or_snapshot_capture(self):
+    def test_new_export_entry_points_request_saved_capture_before_device_access(self):
         for kind in ('stock','dual'):
-            host,playlist=self.host();host._stock_write_model=mock.Mock()
+            host,playlist=self.host();host._stock_write_access=mock.Mock()
+            host._request_ipod_export_capture=mock.Mock()
             with mock.patch('soundbox.export_snapshot.capture_export') as capture:
                 getattr(MainWindow,f'_begin_{kind}_ipod_sync')(host,'/fixture/ipod',[playlist])
-                capture.assert_not_called();host._stock_write_model.assert_not_called()
-            self.assertEqual(len(host._source_sync_waiting),1)
-            cancel_source_syncs(host)
+                capture.assert_not_called();host._stock_write_access.assert_not_called()
+            args,options=host._request_ipod_export_capture.call_args
+            self.assertEqual(args,(kind,'/fixture/ipod',[playlist]))
+            self.assertFalse(options.get('reconcile',False))
 
-    def test_model_dialog_reentrancy_rechecks_source_generation_before_capture(self):
+    def test_write_admission_rechecks_source_generation_before_capture(self):
         for change in ('pending','source'):
             host,playlist=self.host();host.metadata_controller.pending=[]
             host._device_profiles={};host._defer_device_operation_until_scan_finishes=lambda *args:False
@@ -101,12 +105,13 @@ class ExportSourceWait(unittest.TestCase):
                 if change=='pending':host.metadata_controller.pending=[{'error':''}]
                 else:host.lib.source_library_id='replacement'
                 return 'MA446'
-            host._stock_write_model=model
+            host._stock_write_access=model
             with mock.patch('soundbox.export_snapshot.capture_export') as capture:
-                MainWindow._begin_stock_ipod_sync(host,'/fixture/ipod',[playlist])
+                MainWindow._begin_stock_ipod_sync(host,'/fixture/ipod',[playlist],reconcile=True)
                 capture.assert_not_called()
             if change=='pending':self.assertEqual(len(host._source_sync_waiting),1);cancel_source_syncs(host)
-            else:host._flash_status.assert_called_once()
+            else:
+                host._flash_status.assert_called_once();host._export_target_result.assert_called_once()
 
     def test_local_selection_and_mutable_options_detach_before_waiting(self):
         host,_=self.host();playlist=Playlist('Custom',[],['one']);before=deepcopy(playlist)
@@ -116,13 +121,24 @@ class ExportSourceWait(unittest.TestCase):
 
     def test_disabled_metadata_publication_refuses_export_without_waiting_or_discarding_intentions(self):
         host,playlist=self.host();before=deepcopy(host.metadata_controller.pending)
-        host.metadata_controller.reason=lambda:'Native metadata editing requires separate acceptance for this library'
+        host.metadata_controller.reason=lambda:EDITING_DISABLED_REASON
         self.assertTrue(defer_source_sync(host,'stock','/fixture/ipod',[playlist]))
         self.assertIsNone(getattr(host,'_source_sync_waiting',None))
         self.assertEqual(self.timers,[]);host._start_pulse.assert_not_called()
         host._begin_stock_ipod_sync.assert_not_called()
         self.assertEqual(host.metadata_controller.pending,before)
         self.assertIn('cannot be saved',host._flash_status.call_args.args[0])
+
+    def test_paused_accepted_metadata_reports_resume_without_polling_or_discarding(self):
+        host,playlist=self.host();before=deepcopy(host.metadata_controller.pending)
+        host.metadata_controller.background_paused=True
+        host.metadata_controller.reason=lambda:''
+        self.assertTrue(defer_source_sync(host,'stock','/fixture/ipod',[playlist]))
+        self.assertIsNone(getattr(host,'_source_sync_waiting',None))
+        self.assertEqual(self.timers,[])
+        host._begin_stock_ipod_sync.assert_not_called()
+        self.assertEqual(host.metadata_controller.pending,before)
+        self.assertIn('resume',host._flash_status.call_args.args[0])
 
     def test_metadata_error_after_wait_begins_finishes_wait_without_touching_another_device_owner(self):
         for owned in (False,True):
@@ -146,7 +162,7 @@ class ExportSourceWait(unittest.TestCase):
                 self.timers.clear();host,playlist=self.host()
                 host._defer_device_operation_until_scan_finishes=lambda *_args,**_kwargs:False
                 host._begin_cdj_export=mock.Mock()
-                reason=lambda:'Native metadata editing requires separate acceptance for this library'
+                reason=lambda:EDITING_DISABLED_REASON
                 if not after_wait:host.metadata_controller.reason=reason
                 with mock.patch('desktop.cdj.QTimer.singleShot',side_effect=lambda _ms,fn:self.timers.append(fn)):
                     CdjDeviceMixin._begin_cdj_export(host,'/fixture/ipod',[playlist])

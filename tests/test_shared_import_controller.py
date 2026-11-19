@@ -63,8 +63,10 @@ class SharedImports(unittest.TestCase):
         w.tag_controller=TagEditController(self.root/'state',w,store_factory=lambda _:None)
         w.tag_controller._recover_pending=mock.Mock();w.tag_controller.configure(w.lib,True)
         self.metadata_refreshes=[]
-        def loaded(lib,*,metadata_changed_ids=()):
+        self.prepared_refreshes=[]
+        def loaded(lib,*,metadata_changed_ids=(),prepared_native_ids=None):
             self.metadata_refreshes.append(tuple(metadata_changed_ids))
+            self.prepared_refreshes.append(prepared_native_ids)
             w.lib=jobs.project(lib,w.settings.get(jobs.BINDINGS,[]))
             imports.inject(w.lib,w.imported,repair_missing=False);w.tag_controller.configure(w.lib,True)
         w._on_refresh_done=loaded
@@ -74,6 +76,26 @@ class SharedImports(unittest.TestCase):
     def controller_for_window(self):
         return SharedImportController(self.window,registration_factory=lambda _:self.registration,
             playlist_factory=lambda _:self.playlist,loader=self.load)
+
+    def test_membership_readback_reuses_media_only_for_the_default_reader(self):
+        controller=SharedImportController(self.window)
+        self.addCleanup(controller.stop)
+        previous=self.window.lib;fresh=object()
+        with (mock.patch('desktop.shared_imports.rekordbox_db.load_metadata_readback',return_value=fresh) as read,
+              mock.patch('desktop.shared_imports.rekordbox_db.load_live',side_effect=AssertionError('media resolution'))):
+            self.assertIs(controller._membership_readback(previous),fresh)
+        read.assert_called_once_with(previous)
+        injected=mock.Mock(return_value=fresh);controller.loader=injected
+        with mock.patch('desktop.shared_imports.rekordbox_db.load_metadata_readback',side_effect=AssertionError('injected loader bypass')):
+            self.assertIs(controller._membership_readback(previous),fresh)
+        injected.assert_called_once_with(previous.source)
+
+    def test_injected_membership_reader_keeps_its_source_path_contract(self):
+        previous=self.window.lib;fresh=object();injected=mock.Mock(return_value=fresh)
+        self.controller.loader=injected
+        with mock.patch('desktop.shared_imports.rekordbox_db.load_metadata_readback',side_effect=AssertionError('custom loader bypass')):
+            self.assertIs(self.controller._membership_readback(previous),fresh)
+        injected.assert_called_once_with(previous.source)
 
     def close(self):
         self.controller.stop();self.window.tag_controller.shutdown()
@@ -117,6 +139,7 @@ class SharedImports(unittest.TestCase):
         self.assertEqual([b['local_id'] for b in self.window.settings[jobs.BINDINGS]],['sb-one','sb-two'])
         self.assertEqual(set(self.metadata_refreshes[-1]),
                          {binding['native_id'] for binding in self.window.settings[jobs.BINDINGS]})
+        self.assertEqual(self.prepared_refreshes,[(),()])
         self.assertTrue(any(s[jobs.KEY] and s[jobs.KEY][0]['request'] and not s[jobs.KEY][0]['bindings'] for s in self.saves))
         self.assertTrue(any(s[jobs.KEY] and s[jobs.KEY][0]['membership'] for s in self.saves))
         self.assertTrue(all(not s[jobs.KEY] or not s[jobs.KEY][0]['preferences']['automatic'] for s in self.saves))
@@ -453,6 +476,18 @@ class SharedImports(unittest.TestCase):
         self.assertTrue(acknowledged);self.assertEqual(acknowledged[0][jobs.KEY],[])
         prepared=[s[jobs.KEY][0]['request'] for s in self.saves if s.get(jobs.KEY) and s[jobs.KEY][0]['request']]
         self.assertTrue(prepared);self.assertEqual(prepared[0]['operation_id'],request_id)
+        self.assertEqual(self.prepared_refreshes,[()])
+
+    def test_native_membership_refresh_uses_the_already_registered_owned_library(self):
+        self.admit(('owned-readback',))
+        with mock.patch.object(self.controller,'_membership_readback',wraps=self.controller._membership_readback) as read:
+            self.controller.schedule();self.wait(lambda:not self.controller.pending and not self.window.tag_controller.owned)
+        read.assert_called_once()
+        previous=read.call_args.args[0]
+        self.assertIn('sb-owned-readback',previous.tracks_by_id)
+        self.assertTrue(previous.tracks_by_id['sb-owned-readback'].source_uuid)
+        self.assertEqual(self.window.lib.playlists[0].keys,['sb-owned-readback'])
+        self.assertEqual(self.prepared_refreshes,[(),()])
 
     def test_collection_failed_completion_save_replays_native_receipt_after_restart(self):
         self.admit(('one',),native=False);failed=[False]

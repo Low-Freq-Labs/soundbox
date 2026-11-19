@@ -13,6 +13,7 @@ from tests import test_source_selection as fixtures
 class MetadataRefreshIntegration(unittest.TestCase):
     def window(self):
         window = fixtures.SourceSelection().scoped_window()
+        window.native_reader = SimpleNamespace(read_live=mock.Mock())
         window._on_refresh_done = lambda *args, **kwargs: MainWindow._on_refresh_done(window, *args, **kwargs)
         window.tag_controller.configure = mock.Mock()
         window.tag_controller.update_status_text = ''
@@ -22,6 +23,7 @@ class MetadataRefreshIntegration(unittest.TestCase):
         window.metadata_controller.publish_derived = mock.Mock()
         window.metadata_controller.stage_native_refresh = mock.Mock(return_value=None)
         window._metadata_unaliased_registry = None
+        window.imported = {}
         window.lib.tracks_by_id['2'] = Track('2', 'Song - ZONDO', '', 'file:///synthetic/two.wav',
             source_uuid='00000000-0000-4000-8000-000000000002')
         for name in ('_stop_pulse', '_sync_rekordbox_connection', '_resume_analysis_jobs',
@@ -91,6 +93,36 @@ class MetadataRefreshIntegration(unittest.TestCase):
         window.metadata_controller.publish_derived.assert_not_called()
         window._save_state.assert_not_called()
 
+    def test_metadata_ack_publishes_fresh_snapshot_without_restarting_prepared_services(self):
+        window = self.window()
+        incoming = replace(window.lib, tracks_by_id={key: replace(track,
+            name='Saved '+track.name, source_cues=[{'time': 3}], source_tag_ids=['tag'])
+            for key, track in window.lib.tracks_by_id.items()})
+        with mock.patch('desktop.app.QTimer.singleShot') as timer:
+            self.assertTrue(window._on_refresh_done(incoming, prepared_native_ids=['1']))
+        self.assertEqual(window.lib.tracks_by_id['1'], incoming.tracks_by_id['1'])
+        self.assertEqual(set(window._apply_loaded_library.call_args.kwargs['prepared_native_ids']), {'1','2'})
+        self.assertEqual(window.lib.tracks_by_id['1'].source_cues, [{'time': 3}])
+        self.assertEqual(window.lib.tracks_by_id['1'].source_tag_ids, ['tag'])
+        for name in ('_resume_analysis_jobs','_refresh_devices','_arm_waveform_rechecks',
+                     '_schedule_stock_artwork','_maybe_fill_waveforms'):
+            getattr(window, name).assert_not_called()
+        timer.assert_not_called()
+        window.unification_controller.schedule.assert_not_called()
+        window._cache_library.assert_called_once()
+        window.metadata_controller.publish_derived.assert_not_called()
+
+    def test_metadata_ack_with_changed_media_retains_full_publication(self):
+        window = self.window()
+        incoming = replace(window.lib, tracks_by_id={**window.lib.tracks_by_id,
+            '1': replace(window.lib.tracks_by_id['1'], bpm='140')})
+        with mock.patch('desktop.app.QTimer.singleShot'):
+            self.assertTrue(window._on_refresh_done(incoming, prepared_native_ids=['1']))
+        window._apply_loaded_library.assert_called_once_with(already_projected=True)
+        window._refresh_devices.assert_called_once()
+        window._arm_waveform_rechecks.assert_called_once()
+        window.unification_controller.schedule.assert_called_once()
+
     def test_equal_lookup_context_reuses_registry_owners_for_worker_freeze_cache(self):
         window = self.window()
         owners = window.lib.artist_registry, window._metadata_unaliased_registry
@@ -116,6 +148,7 @@ class MetadataRefreshIntegration(unittest.TestCase):
                     self.assertIs(worker.metadata_baseline[1], window._metadata_native_index)
                 else:
                     self.assertIsNone(worker.metadata_baseline)
+                self.assertIs(worker.native_reader, window.native_reader)
                 worker.start.assert_called_once()
 
     def test_ram_planning_reports_finishing_and_blocks_source_exit_before_descriptor_exists(self):

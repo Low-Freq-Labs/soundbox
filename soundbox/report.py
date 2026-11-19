@@ -41,6 +41,9 @@ class SyncReport:
     # True when the run was cancelled mid-copy. Playlists still got honest partial
     # m3u8s, and the manifest flags incomplete ones so the next Sync finishes them.
     cancelled: bool = False
+    # Exact original target, retained as pure data for deferred batch cleanup.
+    # A later session must compare this identity before inspecting/mutating it.
+    mount_identity: tuple[int, int] | None = None
 
     def print(self) -> None:
         mode = "DRY-RUN (nothing written)" if self.dry_run else "SYNC"

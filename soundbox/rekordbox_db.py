@@ -17,6 +17,8 @@ import tempfile
 import logging
 import math
 import re
+import hashlib
+import json
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -735,18 +737,27 @@ def _read_playlists(
         and (selected_ids is None or node_id in selected_ids)
     }
     tracks_by_pl: dict[str, list] = {}
-    if selected_ids is None:
-        membership_queries = [db.query(DjmdSongPlaylist)]
+    from sqlalchemy.orm import Query
+    membership_query=db.query(DjmdSongPlaylist) if selected_ids is None or normal_ids else None
+    if isinstance(membership_query,Query):
+        # Manual order needs these raw scalar cells, not ten thousand mapped
+        # instances and their cyclic ORM state. The complete raw catalog below
+        # still preserves every clock/status/opaque column for edit guards.
+        membership_query=membership_query.with_entities(DjmdSongPlaylist.ID,
+            DjmdSongPlaylist.PlaylistID,DjmdSongPlaylist.ContentID,DjmdSongPlaylist.TrackNo,
+            DjmdSongPlaylist.rb_local_deleted).yield_per(500)
+    if membership_query is None:
+        membership_queries = []
+    elif selected_ids is None:
+        membership_queries = [membership_query]
     elif normal_ids:
-        from sqlalchemy.orm import Query
-        query = db.query(DjmdSongPlaylist)
         identities = sorted(normal_ids)
-        membership_queries = ([query.filter(DjmdSongPlaylist.PlaylistID.in_(identities[at:at+500]))
+        membership_queries = ([membership_query.filter(DjmdSongPlaylist.PlaylistID.in_(identities[at:at+500]))
                                for at in range(0, len(identities), 500)]
-                              if isinstance(query, Query) else [query])
+                              if isinstance(membership_query, Query) else [membership_query])
     else:
         membership_queries = []
-    for sp in (row for query in membership_queries for row in query.all()):
+    for sp in (row for query in membership_queries for row in (query if isinstance(query,Query) else query.all())):
         playlist_id = str(sp.PlaylistID)
         if _deleted(sp) or playlist_id not in normal_ids:
             continue
@@ -810,18 +821,36 @@ def _read_playlists(
     return playlists
 
 
+def _playlist_catalog_revision(nodes,members):
+    """Hash the native revision bytes without one catalog-sized C encoder call.
+
+    Row order and dictionary encoding exactly match playlist_plan.revision.
+    Only the read-only producer uses this bounded composition; writer protocol
+    hashes and native transaction representations remain unchanged.
+    """
+    digest=hashlib.sha256();digest.update(b'[')
+    for group_index,group in enumerate((nodes,members)):
+        if group_index:digest.update(b',')
+        digest.update(b'[')
+        for index,row in enumerate(sorted(group,key=lambda value:value['ID'])):
+            if index:digest.update(b',')
+            digest.update(json.dumps(row,sort_keys=True,ensure_ascii=False,
+                separators=(',',':'),allow_nan=False).encode())
+        digest.update(b']')
+    digest.update(b']');return digest.hexdigest()
+
+
 def _playlist_catalog(db):
     """Exact raw row clocks/identities from the reader's private DB copy.
 
     ORM DateTime conversion loses native lexical precision. Keep the actual DBAPI
     strings for optimistic edits; this is metadata, never write authority.
     """
-    from .rekordbox_playlist_plan import revision
     rows={}
     connection=db.session.connection()
     for table,key in (('djmdPlaylist','nodes'),('djmdSongPlaylist','members')):
         result=connection.exec_driver_sql('SELECT * FROM "'+table+'"')
         names=list(result.keys())
         rows[key]=[dict(zip(names,row,strict=True)) for row in result]
-    rows['revision']=revision(rows['nodes'],rows['members'])
+    rows['revision']=_playlist_catalog_revision(rows['nodes'],rows['members'])
     return rows

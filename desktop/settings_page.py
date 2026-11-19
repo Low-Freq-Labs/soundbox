@@ -46,7 +46,7 @@ class SettingsPageMixin:
         from .app_icon import apply_saved_icon
         apply_saved_icon(QApplication.instance(), color, persist=not getattr(self, '_isolated', True))
         if save:
-            self._schedule_settings_save()
+            self._schedule_settings_save('theme_accent','theme_text_mode','theme_text_custom')
 
     def _render_theme(self, value, text_color):
         """Paint one theme without changing or saving any user preferences."""
@@ -633,9 +633,16 @@ class SettingsPageMixin:
         """
         from PySide6.QtCore import QCoreApplication, QEvent, QEventLoop, QThread, QTimer
         from .workers import _running
-        if (self._state_maintenance or self._backup_worker is not None
+        if (self._state_maintenance or self._state_publication or self._backup_worker is not None
+                or getattr(getattr(self,'_state_committer',None),'pending',False)
+                or getattr(getattr(self,'prep_controller',None),'admission_pending',False)
+                or getattr(getattr(self,'prep_controller',None),'admission_error','')
                 or self._device_coordinator.active is not None):
             self._flash_status("Wait for the current operation before backup/restore", 8)
+            return False
+        tags = getattr(self, 'tag_controller', None)
+        if getattr(tags, '_cue_queue', None) or getattr(tags, 'grid_waiting', False):
+            self._flash_status('Finish cue/grid updates before backup/restore', 8)
             return False
         self._state_maintenance = True
         if restoring:
@@ -665,10 +672,12 @@ class SettingsPageMixin:
             + list(getattr(self, "_oneshots", []))))
         for worker in workers:
             if _running(worker):
-                if hasattr(worker, "stop"):
-                    worker.stop()
-                elif hasattr(worker, "cancel"):
-                    worker.cancel()
+                cancel = getattr(worker, "cancel", None)
+                stop = getattr(worker, "stop", None)
+                if callable(cancel):
+                    cancel()
+                elif callable(stop):
+                    stop()
                 else:
                     worker.requestInterruption()
         self._start_pulse("Finishing background work")
@@ -990,7 +999,7 @@ class SettingsPageMixin:
         if hasattr(self, "player_bar"):
             self.player_bar.set_waveform_mode(normalized)
         self._sync_settings_controls()
-        self._schedule_settings_save()
+        self._schedule_settings_save('waveform_mode')
 
     def _apply_and_refresh(self):
         """Persist settings, push them to the library, and re-render the view + counts."""

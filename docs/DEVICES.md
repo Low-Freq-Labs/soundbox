@@ -1,5 +1,13 @@
 # SoundBox device layouts
 
+Device, song and playlist labels use **iTunes**, **Rockbox**, or
+**iTunes/Rockbox** for their database availability. Internal stock/dual profile
+identities and the separate generic-USB Export contract remain unchanged.
+Sidebar rows use the connected name, layout and cached total volume capacity:
+`SONNY · iTunes iPod · 1.0 TB`, `Rockbox iPod`, `iTunes/Rockbox iPod`, or `USB`.
+Sync status, filesystem warnings and available space remain in the tooltip.
+An unavailable capacity is omitted; free space is never substituted for it.
+
 November9 source captures immutable export inputs before worker admission.
 Explicit CDJ/Rockbox drops include selected musical records; stock/dual/resync
 retain the complete lightweight identity/display and playlist inventory needed
@@ -7,8 +15,43 @@ for managed-device reconciliation. Every snapshot separately retains all source,
 audio and analysis paths, including hidden/unselected songs, through planning and
 commit overlap checks. Workers materialize private objects from captured bytes;
 later GUI edits cannot change queued intent. Separate drops keep their separate
-captured generations; playlists within one drop still share a plan. Source-edit
-barriers, native readback, device identity and firmware recovery order remain.
+captured generations; playlists within one drop still share a plan. Native
+readback, device identity and firmware recovery order remain.
+Existing stock-catalog Sync captures selected native playlist ID, UUID and
+deletion-state scalars. Full iPod capture retains those lightweight headers for
+other playlists too, so a later export can preserve their verified associations
+without copying the native membership graph. Generic
+USB capture and its explicit Export workflow are unchanged; Sync belongs to
+stock/Rockbox iPods.
+
+iPod exports work with automatic metadata updates paused or running. An ordered
+canonical checkpoint verifies saved selected metadata/membership before admitting
+the frozen generation. Only selected actual source replacement/locator, registration/membership,
+structural and local grid admission work delays that capture; unrelated metadata
+and cue queues do not. Source/repository/restore/mount changes still reject stale
+requests. Later ordinary changes remain saved for the next Sync. Stock exports
+use all seven supported Apple metadata fields; Rockbox derivatives retain their
+accepted title/artist profile. A no-op still verifies its current device readback
+before saving an optional Sync association. Partial or blocked output reports
+attention rather than a successful completion.
+CDJ compatibility intentions do not determine iPod media eligibility. Dormant
+queued/failed policy jobs with no physical effects do not block iPod export,
+including selected sources on another external volume;
+fresh worker checks retain actual replacement/locator recovery fences. Dual
+device Delete/Order also uses its own saved checkpoint and exact confirmed
+manifest rather than the CDJ-wide metadata barrier. Successful cancellation is
+quiet and clears its own controls only after joined worker retirement; failures
+and recovery warnings still require attention.
+The read-only external-source probe preserves native/AppData and recovery guards;
+it grants no external source-replacement permission. Its isolated correction is
+recorded in the [critical audit](critical-audit-2026-11.md#external-source-transition-probe).
+Rockbox-only Sync resolves the existing schema-2 managed keys against the current
+source and pins the observed manifest bytes/absence. If every managed playlist
+is missing locally, it requests explicit selection; removal-only Sync still needs
+its own durable removal fences and is not inferred from an empty selection.
+Unmatched existing iPod entries keep Sync pending even after matched metadata
+and artwork are clean. Without a validated membership witness they remain
+preserved, with an explicit warning; equal names/counts do not authorize removal.
 This source change does not establish a new installed or physical acceptance;
 see [HANDOFF](HANDOFF.md).
 
@@ -35,6 +78,12 @@ cache misses; model detection bounds each SysInfo read. These checks preserve
 existing ownership, source separation and firmware commit order. Validation and
 installed status are recorded separately in [HANDOFF](HANDOFF.md).
 
+FAT32 may assign a different file ID when an empty temporary first receives data.
+Publication ownership must use the current still-open descriptor and no-follow
+named entry, including cleanup; its empty-file ID is not a stable witness.
+Disposable FAT32/exFAT image checks complement copied-catalog tests on APFS.
+They do not establish physical firmware playback or hardware Sync acceptance.
+
 ## The simple model
 
 SoundBox classifies a mounted external volume by the folders already present.
@@ -44,14 +93,24 @@ does not make a device writable by itself.
 | Profile | Existing layout | SoundBox behavior |
 |---|---|---|
 | Rockbox | `/.rockbox/` | Export `/Music`, `/Playlists`, and `/.soundbox` only when the filesystem is FAT32 |
-| Stock iPod | `/iPod_Control/` with an iTunes database area | Read-only readiness by default; guarded playlist sync only for the explicit MA446/MP3/WAV allowlist |
-| Dual boot | Both layouts | Repeatable reference-counted, single-copy playlist sync on FAT32 MA446 |
+| iTunes | `/iPod_Control/` with an iTunes database area | Guarded Sync on writable FAT32 with observed Video v25or117/checksum0 or signed Classic v117/HASH58; new audio uses MP3/PCM16 WAV |
+| iTunes/Rockbox | Both layouts | Reference-counted single-copy sync on FAT32 with the same observed stock database profile |
 | USB | Neither firmware layout | Recoverable classic + Plus playlist/collection export on FAT32/exFAT; hardware limits below |
+
+The new-copy iTunes profile above is narrower than Classic hardware decoder
+support; it does not currently admit AAC/ALAC/AIFF, which
+[Apple lists for Classic](https://support.apple.com/en-gb/112601).
+Excluded containers are omitted
+before whole-file acquisition or cloud hydration. This is a bounded application
+profile, not a claim that Classic hardware cannot play those formats. Accepted
+MP3/WAV still require actual stable byte/header proof. PCM24 WAV remains outside
+iTunesDB and may enter the Rockbox side of a dual export. Adding another format
+also needs correct native track fields and versioned retained-payload promotion.
 
 The mounted on-disk layout selects the export contract automatically; SoundBox
 does not guess which firmware the user most recently booted. A `/.rockbox/`
 marker without `iPod_Control` selects ordinary Rockbox export. When both layouts
-exist, the MA446/FAT32 gate selects the separate composite planner; neither
+exist, observed stock-format/FAT32 admission selects the separate composite planner; neither
 ordinary exporter is allowed to approximate it. Rockbox media under `/Music`
 is not automatically indexed by stock firmware, which is why only the validated
 shared subset enters Apple's database.
@@ -65,6 +124,10 @@ indexes load on demand. Device pages are constructed only for a requested device
 view; passive resizing, theme changes, backup and shutdown never create them.
 Export stays disabled without a capable attached target. Standalone-track menu
 actions use that target's busy state, including during another USB's format.
+The common multi-device Export queue applies each target's own capture rules.
+A generic USB source-save refusal cannot veto a ready iPod target. Earlier device
+results remain visible, pending source edits remain saved, and another
+export/format retains its progress UI. Cancel retires only its request and batch.
 Empty scans do not construct export playlists. After
 detection of an iPod/Rockbox target, the worker obtains GUI-captured inputs before
 checking drift; capture failure remains `Sync status pending` for those profiles.
@@ -119,7 +182,7 @@ opens playlist/folder checkboxes on the left and connected devices on the right;
 one target is preselected and several targets may be checked. One action queues
 those targets through the existing serialized exporters, with source/playlist and
 mount/UUID checks before each target. Cancellation/shutdown clear pending targets;
-existing iPod first-generation plan review remains intact.
+iPod planning and commit stay guarded without an extra normal-action approval.
 Folders start collapsed. Large themed device rows show USB/iPod icons. Generic
 USBs have no Sync-needed, pending-change or database-state badges. Explicit
 exports update the selected playlists only; unrelated source changes are not
@@ -201,6 +264,13 @@ dashboard is presentation-only; selecting while it loads uses the same serialize
 preload. Writes stay guarded by operation ownership and firmware capabilities.
 Remounts invalidate stale views.
 
+Background library reads and title/tag/database acknowledgements retain the open
+device, its selected sidebar row, active tab, selection and scroll. They prepare
+desktop data without reopening Collection. Retaining that page starts no new device
+read or backend. A newer device choice wins over an older read result.
+Disconnecting the active device or explicitly choosing a different desktop source
+still selects the complete Collection view.
+
 ## Lifecycle correction under hardware acceptance
 
 An idle mount is ejectable regardless of missing media, drift, or an earlier
@@ -210,8 +280,26 @@ replacement polls suppressed. Active writes remain owned until their safe
 completion/rollback boundary. A macOS refusal is reported without a forced
 unmount fallback.
 
+Queued idle Eject retains the exact mount session through reader retirement and
+the OS process outcome. A replacement using the same volume path cannot inherit
+that request or lose its sidebar row to an old process result. Post-write
+finalization owns its dashboard/sidebar reads separately from idle inspection;
+Eject becomes available after that terminal refresh. Refresh continuations are
+once-only and bound to their original mount and finalization owner. Disconnect
+or remount reports refresh failure without claiming an old Sync succeeded for
+the replacement, and an older completion cannot replace a newer result or its
+progress. Physical commit truth remains separate from refresh success.
+
 Cancel stops queued work immediately and cooperatively stops the active plan
-or transaction. Composite/stock failures retain recovery evidence; composite
+or transaction. Device copy, hashing and Rockbox preparation check cancellation
+between bounded chunks; an interrupted generic export keeps its verified partial
+playlist/manifest so a later explicit export can resume. Cancellation does not
+start another completion scan or claim a successful Sync. Captured source/catalog
+waits retire their own request without cancelling another device owner or any
+pending library edits. Foreground progress retains priority over metadata status.
+Database publication and rollback finish their critical section before cancellation
+returns. Normal Quit still drains accepted database writes.
+Composite/stock failures retain recovery evidence; composite
 journal states now explicitly distinguish executing, committed, rolled back,
 and recovery required. Cancellation after successful publication leaves the
 committed result intact. Final refresh failure does not undo that commit.
@@ -314,7 +402,7 @@ duplicating the collection. The approved single-copy layout is:
 | Unsupported by both destination profiles | not exported; reported | absent | absent |
 
 `soundbox.dual_ipod` implements repeatable playlist drops for a validated FAT32
-MA446 containing both layouts. A new or changed source is fully normalized and
+iPod with the supported observed stock database containing both layouts. A new or changed source is fully normalized and
 verified during planning, which retains only its reproducible source/output
 contract. An unchanged committed source instead reuses the unified manifest's
 payload identity after canonical path, source size/mtime, effective title/artist,
@@ -352,7 +440,7 @@ unowned paths are never overwritten. The sole adoption exception is a failed
 generation whose recovery directory is bound to the still-current manifest:
 a fresh plan may identify only an overlapping regular file at the freshly
 derived deterministic path and expected size. Full SHA-256 verification is
-deferred from the confirmation-blocking plan into commit preflight, where every
+deferred from the initial plan into commit preflight, where every
 candidate must match the freshly derived payload before the first device write.
 Every adoption/preflight freshly hashes each affected candidate with stable
 descriptor/path identities and cancellation checks. Same-size FAT edits can
@@ -375,19 +463,21 @@ The dedicated CDJ pilot above has its own scoped contract. The legacy filesystem
 erase backend still requires explicit whole-volume confirmation; the native USB
 menu exposes Reformat USB instead. Stock and dual iPods expose neither operation.
 
-Every dual-iPod Sync, playlist drop, and managed-playlist deletion receives an
-immediate concise Yes/No confirmation before expensive planning begins. An
-explicit Delete approval is authoritative: SoundBox removes the checked
+Normal dual-iPod Export/Sync and playlist drops authorize their guarded plan
+and commit directly; no second confirmation or routine success modal is shown.
+A separately requested destructive Delete retains its initial concise consent.
+That explicit Delete approval is authoritative: SoundBox removes the checked
 identities, reconciles other currently available managed-playlist changes in
 the same transaction, and retains an unrelated unavailable playlist from its
-last committed manifest snapshot. It never requires a separate Sync before the
-requested deletion. Confirmed drops are
-identity-deduplicated FIFO jobs. Every playlist already confirmed in the initial
+last committed manifest snapshot when its retained members remain available.
+Unresolved retained members refuse rather than disappearing from the rebuilt
+playlist. It never requires a separate Sync before the requested deletion.
+Accepted drops are identity-deduplicated FIFO jobs. Every playlist accepted in the initial
 drop starts in one generation. Playlists accepted while a prior job is busy
 are coalesced into the next guarded plan/commit batch, avoiding repeated
 iTunesDB parsing and repeated validation of the same baseline. SoundBox carries
 one cumulative progress bar across the queue and shows one combined completion
-summary only after the queue drains. Each follow-up batch reuses the
+nonmodal summary only after the queue drains. Each follow-up batch reuses the
 just-committed Collection media and ordinarily writes only playlist membership
 or genuinely new audio. A failure cancels every unseen queued job and reports
 that cancellation; SoundBox never surprises the user by reviving an old write
@@ -422,10 +512,14 @@ snapshot while planning, syncing, deleting, or performing the post-operation
 read. A successful read replaces all three surfaces together. A transient read
 failure keeps that snapshot visible and reports that it is the last verified
 state; it must never clear individual tabs into a misleading blank view.
-The shared device-header action is Export and opens the playlist/device selector.
-The iPod context menu retains Sync for an explicit managed-library recheck, even
-when its last background drift scan was clean; these iPod semantics do not apply
-to generic USBs. Applying playlist order adds device-presentation fields to schema 3.
+The shared device-header action opens Export for a clean or unassociated iPod;
+pending changes to a current linked iTunes playlist select Sync. Managed
+Rockbox/composite changes retain their separate pending checks.
+iPod context menus always retain an explicit Export playlists action. A stock
+Sync action needs a current regular playlist association; deleted bindings and
+system indexes alone cannot force Sync. Other managed iPod layouts retain their
+explicit recheck. Generic USB always uses its separate Export selector.
+Applying playlist order adds device-presentation fields to schema 3.
 The next explicit Delete treats that reordered generation as its baseline and
 reconciles any other source-side playlist drift in the same confirmed plan;
 presentation changes and unrelated source drift cannot create a Sync-first
@@ -471,6 +565,10 @@ effective ordered title/artist values, so either edit appears as Sync needed
 even when playlist membership is unchanged.
 
 Rockbox artwork derivatives have a persistent canonical-JPEG stat/hash index.
+The index pins device/inode, size and both change clocks. Cache misses capture
+one stable image epoch and use those exact bytes for both hashing and encoding;
+one concurrent replacement retries once. The v7 profile rebuilds potentially
+misassociated older derivatives without modifying curated images.
 An unchanged cover whose verified Mac variant identity matches the ownership
 manifest is retained without hashing the corresponding device BMP during every
 plan. A new/changed source, rewrite, or deletion still takes the full live-byte
@@ -484,27 +582,22 @@ and label each managed row by firmware visibility. A live managed M3U8 that no
 longer matches its committed hash does not invalidate the read-only stock
 identity/database snapshot: Device details remain available, the affected
 playlist is labeled `Sync needed`, and its changed entries stay hidden until the
-confirmed composite planner validates them.
+guarded composite planner validates them.
 During commit, animated `Syncing audio...` status is followed by a separate
 `#/#` field and percentage bar. The count covers audio files actually copied,
 replaced, or removed; a 37-track sync-to-zero therefore advances 0/37 through
 37/37, while a database/playlist-only commit hides the inapplicable counter
 instead of showing 0/0. After a successful commit, the selected Device, Songs,
 and Playlists snapshot refreshes before the sidebar free-space/drift scan under
-an explicit `Finalizing iPod...` state. The completion dialog appears only after
-both workers finish and their owning attributes are cleared. At that terminal
-boundary SoundBox installs an eject-ready latch, releases operation ownership,
-enables Eject, and only then opens the completion dialog. The latch suppresses
-polling throughout the modal; dismissal releases it so subsequent library edits
-can update drift without reconnecting. Eject therefore
-does not cancel or complete dashboard work—the finalization scanner is already
-done. An explicit device action also releases the hold and refreshes normally.
-An up-to-date/no-write Sync and an already-absent playlist Delete use this same
-finalization boundary, so their informational OK is equally Eject-ready.
-All displayed surfaces still update without a navigation round trip.
-The status text
-reserves only its current animation width, and the confirmation shows the
-Both/Rockbox split plus concise add/update/remove totals.
+an explicit `Finalizing iPod...` state. Routine completion is nonmodal only after
+both workers finish/join and their owning attributes are cleared. At that
+terminal boundary SoundBox releases operation ownership, enables Eject, retains
+concise included/skipped counts and releases polling. Genuine failure/committed
+warning dialogs retain the hold only while attention is presented. Eject does
+not cancel or complete dashboard work—the finalization scanner is already done.
+An up-to-date/no-write Sync and already-absent Delete use the same terminal
+boundary without an informational OK. All displayed surfaces update without a
+navigation round trip; status animation width remains stable.
 
 The stock fast-sync shadow records canonical source size/mtime separately from
 the verified device-payload size/hash. This matters whenever embedded pictures
@@ -532,7 +625,7 @@ manifest stable-ID/signature/drift machinery and routes back through this same
 composite planner. Rename, folder move, order/membership change, SoundBox veto,
 and source-playlist removal reconcile the Rockbox m3u8 and matching iTunesDB
 playlist together. A size change to an owned Rockbox M3U8 also surfaces the
-ordinary Sync-needed state. Confirmed planning then reads that bounded playlist
+ordinary Sync-needed state. Accepted planning then reads that bounded playlist
 and accepts only append-only paths that resolve to existing schema-3 managed
 media. Incoming additions apply only to SoundBox-owned custom playlists;
 rekordbox playlists remain managed by rekordbox and an iPod edit to one produces
@@ -594,7 +687,7 @@ user playlists. This produces a genuinely empty stock baseline before the first
 composite generation.
 
 Compatibility belongs to the destination profile, not to a global SoundBox
-allowlist. The current MA446 stock validator controls only which tracks may
+allowlist. The stock validator controls only which tracks may
 enter iTunesDB; it must not suppress a stock-unsafe file from Rockbox when the
 Rockbox firmware supports it. Conversely, a file unsupported by both profiles
 is omitted once and reported honestly by the composite plan.
@@ -608,9 +701,17 @@ some models require model-specific checksums. Copying a normally named song
 into that tree without a correct database update does not create an honest,
 usable stock-iPod export.
 
-SoundBox now has one deliberately narrow stock writer: MA446 iPod Video 5.5G,
-an uncompressed `iTunesDB` with checksum scheme zero, and validated MP3 plus
-stereo PCM16/44.1-kHz WAV sources. The
+SoundBox admits its stock writer from the connected writable FAT32 mount and
+observed uncompressed little-endian `iTunesDB`: Video version25or117/checksum0 or
+Classic version117/HASH58. Both profiles remain supported. Classic verification
+binds the actual USB ancestor of this mount’s BSD node; another connected iPod’s
+ID cannot sign its database. Capture verification includes existing HASH72, and
+final rendering regenerates HASH72 then HASH58 without device HashInfo writes.
+A remembered
+model or device-specific permission is not required; unknown formats show their
+actual refusal reason. New audio remains validated MP3 plus stereo PCM16/44.1-kHz
+WAV. Existing indexed AAC/ALAC or opaque containers can receive metadata/art
+updates without reacquiring audio or granting a new codec-export capability. The
 Clickwheel 0.19.1 dependency supplies the MIT-licensed pure-Python parser/writer,
 but it never receives the live mount as its sync target. `soundbox.stock_ipod`
 parses the live state, folds an exactly matching `Play Counts` delta into the
@@ -625,10 +726,11 @@ Generic CDJ USB export has its own source/native-analysis and player compatibili
 boundaries in the CDJ guide; the broader Rockbox list does not certify CDJ media.
 Disposable artwork/display-metadata derivatives preserve audio essence and
 technical properties; this does not promise byte-identical exported containers.
-The MA446 planner alone
+The stock planner
 omits unsupported extensions and WAV/MP3 encodings from its rendered playlist,
-reports the exact omitted count, and previews affected titles/reasons before a
-Cancel-default confirmation. It never edits the source playlist. This boundary
+reports the exact omitted count and affected titles/reasons in the operation
+details, and proceeds from the original Export/Sync gesture. It never edits the
+source playlist. This boundary
 was added after the physical 5.5G reproducibly rebooted when asked to play
 `Hostage Situation - Loot`, a 24-bit/44.1-kHz PCM WAV; the proven working WAVs
 are stereo PCM16/44.1-kHz. A read-only full-library audit found 722 PCM24/44.1,
@@ -642,23 +744,46 @@ accepted native playlist writer; it is not a new local-only veto. Local custom
 playlists remove their actual local membership, while legacy stored exclusions
 remain honored. Neither curated-away track reaches stock format inspection,
 artwork, copy planning, or iTunesDB rendering. Consequently, the stock
-confirmation's selected count is the effective SoundBox playlist—not raw
+plan's selected count is the effective SoundBox playlist—not raw
 Rekordbox membership—and curated-away tracks do not appear misleadingly in the
 firmware-omission list.
 
-Curated SoundBox JPEGs are also the stock-art source of truth. A background
-worker pre-renders MA446's RGB565 formats 1028 (100×100) and 1029 (200×200)
+Curated SoundBox JPEGs are also the stock-art source of truth. Video RGB565
+formats1028(100×100)/1029(200×200) and Classic1055(128×128)/1060(320×320)/
+1061(small thumbnail) have separate derivative profiles. The observed Classic
+small-thumbnail variant uses a55-pixel canvas and56-pixel stride (6160bytes);
+it is not silently treated as a56×56 image. Preserve opaque existing image
+headers/children when updating incremental art. A background worker pre-renders
+the attached compatible profile
 into a content-addressed AppData cache only with a stock-capable iPod attached,
 pausing during playback and stopping on disconnect. Artwork changes without
 an iPod do not queue derivative work; attachment checks current curated images.
+Source indexes bind device/inode/size/mtime/ctime and recheck a warm hit without
+rereading unchanged JPEG bytes. Misses hash and convert the same descriptor-
+bracketed buffer, with one instability retry. Old incomplete index rows go cold;
+correct content-addressed pixel payloads remain reusable under the same profile.
 A source locator plus completion inventory skips unchanged preparation entries without
 opening derivative manifests or sleeping. Source/profile/derivative identity
 changes invalidate the receipt; deleted derivatives rebuild. Selected sync still
-verifies pixel hashes. One manual cover change queues only that JPEG. Initial reconciliation deduplicates identical images into one segment in
-each `F1028_1.ithmb`/`F1029_1.ithmb`, while ArtworkDB has the per-track MHII
-records stock firmware expects. SoundBox validates every iTunesDB MHIT link,
-ArtworkDB song ID, MHNI format/offset/size, and ithmb boundary before showing
-the confirmation. It never modifies tags or embeds images into source audio.
+verifies pixel hashes. One manual cover change queues only that JPEG. Existing
+playlist Sync pins selected cover and fallback owners plus effective visibility
+through planning and commit admission. Replacing a selected image invalidates
+the request even if its stored metadata is equal. Unrelated cover updates do
+not cancel it. These in-memory checks do no GUI image/file work; actual image
+acquisition and byte checks remain on the worker.
+Initial reconciliation deduplicates identical images into one segment in
+each `F1028_1.ithmb`/`F1029_1.ithmb`, while new independent track images receive
+their own MHII records. Native Music-created catalogs may share one explicit
+image ID across tracks. Preserve that original physical song ID, record order
+and exact captured track/image/owner links, including after owner removal.
+A changed shared cover splits into a new image; untouched references and native
+crops/opaque children remain. The optional shadow indexes the actual referring
+tracks rather than assuming the physical owner is the only user. SoundBox
+retains unchanged MHIT artwork count/size independently from MHII source size;
+Music-created catalogs can encode different values for those fields. SoundBox
+validates every iTunesDB MHIT link, captured native alias, MHNI format/offset/size,
+and ithmb boundary before admitting commit. It never modifies tags or embeds
+images into source audio.
 
 Successful commits publish a disposable Mac-only `stock_ipod_state/` shadow,
 keyed by library persistent ID plus FAT volume UUID. Reconnect compares identity,
@@ -673,28 +798,52 @@ cover writes 20 KB + 80 KB of pixels rather than every ithmb byte. Playlist
 deletion remains the explicit full-compaction path.
 
 A stock drop is two-phase. The first background phase is a no-write plan and
-shows exact reused/new tracks and bytes. Because the real refurb has an empty
-`SysInfo`, the first use originally required its About-screen model; unknown
-models fail closed. The read-only device surface can now independently recover
-the connected unit's Apple hardware serial and firmware from macOS's classic-iPod
-device record, and the serial suffix `V9M` maps through the guarded libgpod-style
-catalog to MA446. IORegistry's SCSI revision `1.62` is shown separately as a
-transport revision, never mislabeled as stock firmware `1.3`. The verified MA446
-catalog entry identifies the audio codec/DAC as Wolfson WM8758BG and labels that
-value as model-derived in the immutable snapshot rather than directly probed; the
-dashboard presents only the concise component name. Ambiguous cache records or
-serial mappings return no claim. SoundBox also remembers confirmation using its stable
-library persistent ID plus FAT volume UUID, and can migrate the already-proven
-model from its own recovery plan. It deliberately does not use `DatabaseID`,
-which Apple changes during normal rewrites. The confirmation defaults to
-Cancel. Commit pins the mount and rechecks
+prepares exact reused/new tracks and bytes. Routine completion reports included/
+omitted counts nonmodally. The original MA446 hardware pilot used explicit About-screen confirmation
+because the refurb had an empty `SysInfo`. Current writer admission follows the
+observed database and mount capabilities, so multiple compatible iPods need no
+remembered model permission. The read-only device surface reads existing bounded
+`SysInfoExtended`/`SysInfo` metadata, then supplements serial/firmware from the
+exact macOS iPod device record matched to the mounted BSD node's USB ancestor or
+a freshly observed hardware serial. A sole historical record supplies no facts.
+Current concrete model fields take precedence over ProductType family labels
+and old model confirmations. Missing display facts are retried rather than
+cached forever. When those observations are incomplete, the worker can read
+extended identity directly over endpoint0 using the isolated native helper.
+It binds the current mount, volume UUID, BSD node and exact USB ancestor, then
+issues bounded vendor IN requests without opening/seizing the device or claiming
+an interface. It never creates SysInfo files. Apple's array-key XML is decoded
+by CoreFoundation and emitted as a binary dictionary for strict Python parsing;
+the returned FireWireGUID must match the currently observed USB identity.
+Complete replies are cached per mounted USB identity; failures use bounded retry
+backoff, and cached-only UI callers perform no discovery or USB requests.
+The display catalog covers Video and Classic models and only
+globally unique serial suffixes: `V9M` identifies MA446 and `9ZU` identifies
+MC297. Conflicting observations suppress model-derived claims and remembered
+fallbacks. IORegistry's SCSI revision remains a transport revision, never stock
+firmware. Video's Wolfson WM8758 (WM8758BG for verified MA446) and Classic's
+Cirrus Logic CS42L55 are explicitly model-derived facts, not direct DAC probes.
+The dashboard presents concise values with provenance in its immutable snapshot.
+The catalog follows [libgpod's device tables](https://github.com/gtkpod/libgpod/blob/master/src/itdb_device.c),
+[Apple's model guide](https://support.apple.com/en-us/103823) and
+[Rockbox's Classic hardware target](https://github.com/Rockbox/rockbox/blob/master/firmware/export/config/ipod6g.h).
+SoundBox remembers observed display facts using the stable library persistent
+ID plus FAT volume UUID, with serial/transport/family conflict checks; it never
+restores a signing identifier from display memory. It can also recover a known
+model from its own prior sync plan. This display catalog grants no write
+authority. It deliberately does not key display memory by `DatabaseID`, which
+Apple changes during normal rewrites. Normal Export/Sync adds no plan question.
+Commit pins the mount and rechecks
 the database, pending play counts, every source hash, and every destination. It
 saves the original database/play-count bytes plus every replaced ArtworkDB and,
 for full compaction only, ithmb file under `.soundbox/stock-ipod-recovery/`.
 Incremental art records verified ranges and never overwrites a referenced slot.
 It atomically copies new media, publishes artwork, writes iTunesDB last, and
-archives consumed play counts. Failure restores the original database/artwork
-set and removes only the exact new media files from that transaction. An
+archives consumed play counts. Failure attempts to restore the original database/
+artwork set and retire that transaction's new media. The later rollback of
+acknowledged copies still needs the foreign-replacement ownership correction
+tracked in the [critical audit](critical-audit-2026-11.md); the new-file copy
+helper's scoped failure cleanup does not complete that later transaction boundary. An
 incomplete existing artwork set fails during the read-only plan instead of
 being silently discarded. A playlist drop remains additive, while ordinary Sync
 uses the committed shadow to remove only exact managed track records/media that
@@ -719,6 +868,15 @@ published before orphan files are unlinked, and the Mac/source library is never
 modified. Deleted device media is intentionally not retained in on-device
 recovery because doing so would not reclaim storage; the confirmation says so
 and defaults to Cancel.
+Delete planning captures the current indexed file entities, sizes, parents and
+mount identity without reading song audio. An unassociated device song is not a
+source-save dependency. Commit rechecks the captured entities and claims each
+orphan by exclusive rename before disposal; a foreign replacement is restored
+without overwriting another file or retained with an explicit cleanup warning.
+This is indexed-file deletion authority, not a reusable content certificate for
+ordinary Sync. Cancel before database publication leaves playlists unchanged;
+after publication it stops remaining orphan cleanup and reports that the playlist
+was deleted, with unresolved files and recovery evidence retained.
 Deleting Videos removes the canonical MHSD-5 smart-playlist record plus any
 matching ordinary-MHLP smart alias Apple stored under a second ID. The device
 snapshot always exposes the canonical identity. Both representations contribute
@@ -734,7 +892,7 @@ Apple's narrowly allowlisted **Videos** smart index. The library root and every
 other built-in smart list remain in the snapshot for database health and
 preservation checks. Videos can be selected and deleted through the same guarded
 transaction without removing track records or media; Music, Movies, TV Shows,
-and Audiobooks remain immutable. A validated writable MA446 exposes
+and Audiobooks remain immutable. A supported writable stock catalog exposes
 **Delete checked playlists…** beneath that list; the context menu retains an
 explicit single-playlist delete. Device refreshes preserve the active tab for repeated
 operations. The playlist table intentionally omits Artist so its expandable
@@ -742,6 +900,84 @@ playlist/track title column receives all spare width. Identity values preserve
 their provenance: mounted metadata,
 Apple's local device record, serial-derived model, or model-derived hardware
 catalog. Parsing runs off the UI thread and eject refuses to race it.
+
+Source saves and background readback preserve the visible device, tab, selected
+song/playlist, expansion and scroll. They update desktop data without rendering
+the hidden desktop page. A pending desktop-playlist deletion cannot steal the
+device page. Collection is the fallback when the playlist actually being viewed
+is deleted, the selected device disconnects, or the user deliberately changes
+source libraries. Returning to a desktop page uses the latest saved data.
+
+**Sync playlist…** updates the selected existing Apple playlist, including one
+manually transferred through Music/Finder. Unique names use trimmed Unicode-NFC,
+case-insensitive matching; duplicate normalized names remain ambiguous. Matching
+name/count bootstraps an association, even if only some songs can be linked.
+Blank-artist device records may use a unique source filename stem and positive
+cached duration agreement; both sides must be unique and the target unclaimed.
+This never proves audio bytes or grants foreign file ownership. A saved source/native-UUID/device-playlist-ID
+binding survives later additions, removals, order changes and renames. A unique
+name with some unambiguous song links can still receive partial metadata/art
+updates; unknown entries remain intact and are reported instead of re-exported.
+
+Sync captures the current displayed title, artist, album, genre, comments, year
+and saved non-estimated integer BPM. It updates those supported Apple fields and
+saved covers, changes safe selected membership/order, reuses retained device
+songs and copies only verified new supported audio. It never walks the retained
+media tree or reacquires its files. Foreign audio, the master playlist, other
+playlists and playback/history fields remain intact. The optional Mac-side
+`stock_catalog_state/` witness stores correspondence, not audio ownership or
+content-integrity claims. Small catalog freshness, recovery and atomic publication
+remain required. Incompatible or ambiguous records stay unchanged with a clear
+summary. Unknown artwork formats do not block supported metadata updates.
+
+Separate exports preserve verified associations for previously exported playlists
+against the actual old and newly rendered catalogs. Bindings retain the actual
+device label separately from the source folder label, and the complete source
+occurrence identities separately from the compatible songs included on iTunes.
+Intentional omissions therefore do not create perpetual pending additions.
+Explicit Sync on a playlist with omissions reevaluates its current eligibility;
+a supported replacement at the same source path can be added. Definite unsupported
+PCM/float WAVs need only a bounded stable header read to be omitted; compatible,
+unknown or unstable headers still use ordinary complete acquisition. No header
+alone admits a song or supplies a content-integrity proof.
+
+Delete asks one short question before planning. After native publication and
+readback, surviving associations and fast-sync state are renewed against the
+actual remaining songs/artwork. Unprovable legacy acceleration is retired only
+if its exact old cache generation still exists; it cannot revive a deleted list.
+Optional association limits stay in diagnostics. Success and expected format
+omissions are nonmodal; real failures show bounded relevant details. Finalization
+refreshes the exported iPod's cached catalog even while Collection or another
+page is visible, without navigating away from that page.
+
+The header changes Export to Sync only for observed pending changes to a linked
+iTunes playlist; the explicit playlist Sync action remains available. The
+binding must still point to a current regular device playlist and its exact
+source identity; stale/deleted or conflicting bindings do not borrow a same-name
+replacement. A unique unbound name is only an affordance hint: the actual request
+checks correspondence and opens Export if none remains. Empty/system-only iPods
+therefore offer Export. The Playlists footer and context action also offer Export
+unless a regular playlist is selected; Apple's Videos index stays separately
+deletable and never enters playlist Sync. Busy, missing-source and read-only
+states disable both paths. Fresh cached dashboard format observations can finish
+discovery readiness while current mount identity, writability and signing guards
+remain required.
+For a managed iPod with a verified shadow and catalog witness, background iTunes
+status compares the seven current effective fields. GUI capture projects only cached linked song IDs;
+the worker validates source/device/catalog/song identities and compares values
+without opening audio. Missing or stale projections remain status-pending.
+Scalar dashboard updates preserve its tables, current tab, selection and scroll.
+The common Export selection and playlist drops also use incremental stock Sync when
+all selected playlists already correspond. These paths use durable displayed
+values without waiting for an unrelated native metadata backlog. New iPod exports
+use the same durable effective values through their selected checkpoint and media
+transition checks. A dual iPod uses its composite
+transaction for catalog metadata/art only and preserves exact ownership-manifest
+bytes or pre-composite absence; stock incremental membership is not a dual claim.
+Source changes, selected values/membership, remounts and stale catalog baselines
+fence every modal/worker phase. Completion retains the current page and uses the
+same serialized final refresh/eject lifecycle.
+
 Non-stock USB/Rockbox devices now use **Overview** and **Playlists** tabs in the
 same device header and dashboard styling. Overview reuses the iPod's alternating
 2×2 detail panels: Identity, Storage, Playlists and SoundBox. Identity/storage
@@ -777,7 +1013,7 @@ mutation/import paths remain, but the new playlist tree exposes no such actions.
 On a schema-3 dual device, Songs and Playlists are composite rather than
 stock-prefixed views. The worker verifies the small manifest-owned M3U8 payloads
 and combines them with the parsed iTunesDB without reading managed audio. Songs
-and playlist rows report `Both`, `Stock`, or `Rockbox` according to which
+and playlist rows report `iTunes/Rockbox`, `iTunes`, or `Rockbox` according to which
 firmware database recognizes them; expanded playlist children retain exact M3U8
 order and carry the same Type label. Stock-only legacy rows remain visible but
 cannot bypass schema-3 ownership deletion. Apple smart indexes remain protected
@@ -816,10 +1052,16 @@ separately validated `iTunesDB` implementation.
 - Resolve the mount and confirm it is external before every write/delete.
 - Pin a `DeviceSession` to the resolved mount identity and reject a disappear,
   remount, symlink escape, source overlap, or case/Unicode destination collision.
-  Preserve that identity from plan through confirmation and commit; do not
+  Preserve that identity from plan through commit and any destructive consent; do not
   reacquire authority from a reused `/Volumes/<name>` path.
+  Schema-2 Rockbox keeps the same session through its first manifest read,
+  nested export, final ownership prune and manifest save. Deferred engine/CLI
+  and growable-batch cleanup compares the original report's mount identity
+  before inspecting payloads; a batch with no written folders does no traversal.
 - Refuse any target that overlaps a source file or source-library parent.
-- Never write below `iPod_Control` except through the guarded MA446-only
+  The boundary includes the source catalog and hidden/unselected media,
+  analysis and native-location paths, including direct engine/CLI callers.
+- Never write below `iPod_Control` except through the guarded observed-format
   `soundbox.stock_ipod` transaction. On dual boot it may be invoked only by the
   composite planner with coordinated recovery, rollback, and manifest-last
   publication.
@@ -848,7 +1090,8 @@ separately validated `iTunesDB` implementation.
   replacement polls. Active writes must finish or stop safely first. Required
   iPod finalization reads remain serialized; generic USB completion starts none.
   Failed integrity does not prevent idle
-  eject. The post-sync polling hold ends when the completion dialog is dismissed.
+  eject. The post-sync polling hold ends at quiet completion or after genuine
+  attention is dismissed.
 
 The retained filesystem-browser backend also supports an explicit threaded
 import action; the current generic USB tabs/menu do not expose that old raw-browser
@@ -880,9 +1123,10 @@ The September lifecycle corrections still require the repeat reconnect/playback,
 unchanged-Sync performance, overlap, cancellation/retry and failure-eject gates
 in `HANDOFF.md`. Earlier acceptance does not complete these newer gates.
 
-Separate future hardware gates are different iPod models/checksum families and any
-separately designed schema-2 ownership migration. Those boundaries remain
-read-only/fail-closed; they do not block normal use of the validated MA446.
+The current source adds observed Video/Classic format and signing profiles,
+with copied-catalog validation; its new physical Sync/playback acceptance remains
+separate in HANDOFF. Other unsupported database/checksum families and any
+separately designed schema-2 ownership migration retain explicit refusal.
 
 ## Real stock-hardware baseline (2026-07-31)
 
@@ -1027,7 +1271,10 @@ artwork as verified new copies when the guarded destination is absent. Normal
 Sync trusts retained manifest inventory and does not look for missing files.
 Existing occupants, symlinks,
 and inaccessible paths are not treated as missing; commit rechecks vacancy and
-rollback removes only files created by that transaction. A fully reconciled stock
+rollback is intended to retire only transaction-created copies. Acknowledged-copy
+rollback still has the replacement-ownership gap recorded in the
+[critical audit](critical-audit-2026-11.md); these guards do not establish safe
+disposal of a foreign replacement. A fully reconciled stock
 library with no semantic changes retains its original iTunesDB bytes even when
 the disposable stock shadow is absent.
 
@@ -1056,8 +1303,9 @@ or playlist drift, only the absent unsupported `sort playlists` setting. Rockbox
 does not define that key. SoundBox no longer inserts or requires it. This corrects
 the prior documented assumption; no device configuration was rewritten for the fix.
 
-Post-sync polling is held through the completion dialog only. Dismissal releases
-the hold so subsequent SoundBox edits can update drift without reconnecting.
+Post-sync polling is held through owned finalization and any actual attention
+dialog. Quiet completion releases the hold immediately so subsequent SoundBox
+edits can update drift without reconnecting.
 
 September 28 durability follow-up: `_safe_copy` explicitly fsyncs its staged
 payload before verification and atomic publication. Flush failure leaves the final
@@ -1066,6 +1314,14 @@ Normal macOS eject remains required; this fixture-tested correction is not new
 physical disconnect/power-loss acceptance.
 
 ## November3 efficiency follow-up
+
+Managed schema-2 Rockbox Sync compares local cover identity/policy separately
+from retained audio. A cover-only change publishes affected owned covers and
+playlist state without opening or hashing retained music. Shared cover references
+and temporarily unavailable local images remain preserved. Changed unowned covers
+are explicit conflicts; matching committed derivative hashes retain existing USB
+covers without reading them. This does not adopt foreign M3Us or apply schema-2
+rules to composite iPods or generic CDJ exports.
 
 USB overview/playlist scrolling stores both positions immediately and coalesces
 preference notification over120ms. Tree selection/expansion capture is reserved

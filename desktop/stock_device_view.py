@@ -95,6 +95,8 @@ class DevicePlaylistRow:
     entries: tuple[DeviceSongRow, ...]
     availability: str
     managed: bool
+    stock_playlist_id: str = ""
+    sync_needed: bool = False
 
 
 def _stock_device_path(location: str) -> str:
@@ -104,7 +106,7 @@ def _stock_device_path(location: str) -> str:
     return "/" + text.lstrip("/")
 
 
-def _stock_song(track, availability: str = "Stock") -> DeviceSongRow:
+def _stock_song(track, availability: str = "iTunes") -> DeviceSongRow:
     return DeviceSongRow(
         track.title,
         track.artist,
@@ -140,7 +142,7 @@ def _composite_song_rows(
         stock_track = stock_by_dbid.get(dbid) or stock_by_path.get(device_path)
         if stock_track is not None:
             claimed_dbids.add(stock_track.dbid)
-            output.append(_stock_song(stock_track, "Both"))
+            output.append(_stock_song(stock_track, "iTunes/Rockbox"))
             continue
         suffix = Path(str(device_path)).suffix.lstrip(".").upper()
         output.append(DeviceSongRow(
@@ -180,10 +182,9 @@ def _composite_playlist_rows(
             tuple(
                 by_dbid[entry.dbid] for entry in playlist.entries
                 if entry.dbid in by_dbid),
-            ("System playlist" if (
-                playlist.kind == "Smart playlist"
-                and playlist.title.casefold() == "videos") else "Stock"),
+            "iTunes",
             True,
+            str(playlist.playlist_id),
         ) for playlist in _managed_playlists(snapshot))
 
     by_path = {item.location: item for item in songs}
@@ -214,9 +215,10 @@ def _composite_playlist_rows(
             f"managed:{key}",
             title,
             entries,
-            "Sync needed" if changed else (
-                "Both" if stock_playlist is not None else "Rockbox"),
+            "iTunes/Rockbox" if stock_playlist is not None else "Rockbox",
             True,
+            str(stock_playlist.playlist_id) if stock_playlist is not None else "",
+            changed,
         ))
     stock_songs = {item.dbid: item for item in songs if item.dbid}
     output.extend(DevicePlaylistRow(
@@ -225,8 +227,9 @@ def _composite_playlist_rows(
         tuple(
             stock_songs[entry.dbid] for entry in playlist.entries
             if entry.dbid in stock_songs),
-        "Stock",
+        "iTunes",
         False,
+        str(playlist.playlist_id),
     ) for playlist in stock_playlists.values())
     return tuple(output)
 
@@ -298,10 +301,21 @@ class StockIpodPages(QWidget):
     # convert it back to a Python int only in the stock-iPod engine call.
     delete_playlists_requested = Signal(object)
     playlist_order_requested = Signal(object)
+    sync_requested = Signal(object)
+    export_requested = Signal()
     # Title stretches with the window; the remaining operational columns keep
     # predictable widths. Album and the internal device path intentionally stay
     # out of this view—the tooltip still exposes the path for diagnostics.
-    MUSIC_FIXED_COLUMN_WIDTHS = (150, 75, 80, 60, 55, 55, 130)
+    MUSIC_FIXED_COLUMN_WIDTHS = (150, 75, 80, 60, 55, 55, 150)
+    SYNC_LABELS = {
+        "up_to_date": "Up to date",
+        "local_changes": "Local changes ready",
+        "reconcile_required": "Reconciliation required",
+        "untracked": "Not yet tracked on this Mac",
+        "catalog_linked": "Playlists linked",
+        "composite_untracked": "Not synced yet",
+        "comparison_pending": "Sync status pending",
+    }
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -370,14 +384,21 @@ class StockIpodPages(QWidget):
         playlist_header.setSectionResizeMode(QHeaderView.Interactive)
         playlist_header.setSectionResizeMode(0, QHeaderView.Stretch)
         self.playlist_tree.setColumnWidth(1, 70)
-        self.playlist_tree.setColumnWidth(2, 110)
+        self.playlist_tree.setColumnWidth(2, 150)
         self.playlist_tree.itemChanged.connect(
             self._update_delete_playlist_button)
         self.playlist_tree.currentItemChanged.connect(
             self._update_playlist_order_buttons)
+        self.playlist_tree.currentItemChanged.connect(
+            self._sync_playlist_button)
         playlist_layout.addWidget(self.playlist_tree)
         playlist_actions = QHBoxLayout()
         playlist_actions.setContentsMargins(12, 0, 12, 10)
+        self.sync_playlist_button = QPushButton("Export playlists…")
+        self.sync_playlist_button.setObjectName("Ghost")
+        self.sync_playlist_button.setEnabled(False)
+        self.sync_playlist_button.clicked.connect(self._request_sync)
+        playlist_actions.addWidget(self.sync_playlist_button)
         self.delete_playlist_button = QPushButton("Delete checked playlists…")
         self.delete_playlist_button.setObjectName("Ghost")
         self.delete_playlist_button.setEnabled(False)
@@ -405,6 +426,12 @@ class StockIpodPages(QWidget):
         self._playlist_order_available = False
         self._committed_playlist_order: tuple[str, ...] = ()
         self._has_snapshot = False
+        self._playlist_sync_available = False
+        self._playlist_sync_ids: frozenset[str] = frozenset()
+        self._playlist_actions_available = True
+        self._playlist_actions_reason = ""
+        self._playlist_write_reason = ""
+        self._sync_revision = 0
 
     def set_page(self, index: int):
         index = max(0, min(2, int(index)))
@@ -451,6 +478,21 @@ class StockIpodPages(QWidget):
             # reserved for information the UI is not already showing.
             QTreeWidgetItem(tree, [label, shown])
 
+    def set_sync_status(self, state: str, detail: str, changes: int, committed_at: str):
+        """Refresh prepared status scalars without replacing the loaded views."""
+        values={
+            "Sync state":self.SYNC_LABELS.get(state,state),
+            "Sync detail":detail,
+            "Pending local changes":str(changes),
+            "Last Sync":committed_at or "Never",
+        }
+        tree=self.detail_trees["SoundBox"]
+        for index in range(tree.topLevelItemCount()):
+            item=tree.topLevelItem(index)
+            if item.text(0) in values:
+                shown=values[item.text(0)] or "Not reported"
+                if item.text(1)!=shown:item.setText(1,shown)
+
     def set_loading(self, *, preserve_page: bool = False):
         current_page = self.stack.currentIndex()
         if preserve_page and self._has_snapshot:
@@ -461,6 +503,10 @@ class StockIpodPages(QWidget):
             return
         self._music_widths_applied = False
         self._has_snapshot = False
+        self._playlist_sync_available = False
+        self._playlist_sync_ids = frozenset()
+        self._sync_revision += 1
+        self._sync_playlist_button()
         self.music_model.set_snapshot(None)
         self.playlist_tree.clear()
         self._playlist_delete_available = False
@@ -477,6 +523,10 @@ class StockIpodPages(QWidget):
         if preserve_snapshot and self._has_snapshot:
             return
         self._has_snapshot = False
+        self._playlist_sync_available = False
+        self._playlist_sync_ids = frozenset()
+        self._sync_revision += 1
+        self._sync_playlist_button()
         self.music_model.set_snapshot(None)
         self.playlist_tree.clear()
         self._playlist_delete_available = False
@@ -495,10 +545,15 @@ class StockIpodPages(QWidget):
             composite: CompositeDeviceData | None = None,
     ):
         self._has_snapshot = True
-        from soundbox.stock_ipod import supports_stock_write
+        self._sync_revision += 1
+        from soundbox.device_readiness import stock_write_readiness
 
         self._clear_details()
-        model_label = snapshot.model or "Not confirmed"
+        model_label = snapshot.model or "Not reported"
+        if snapshot.identity_conflict:
+            model_label = "Conflicting device details"
+        elif snapshot.model_source.startswith("Remembered: "):
+            model_label += " (last observed)"
         firmware_label = snapshot.firmware_version or "Not reported"
         serial_label = snapshot.serial_number or "Not reported"
         if snapshot.firmware_source.startswith("Remembered: "):
@@ -520,24 +575,16 @@ class StockIpodPages(QWidget):
         song_rows = _composite_song_rows(snapshot, composite)
         playlist_rows = _composite_playlist_rows(
             snapshot, composite, song_rows)
-        capability = (
-            "Validated guarded MP3/WAV sync"
-            if supports_stock_write(snapshot.model)
-            else "Read-only until a validated model is confirmed"
-        )
-        sync_labels = {
-            "up_to_date": "Up to date",
-            "local_changes": "Local changes ready",
-            "reconcile_required": "Reconciliation required",
-            "untracked": "Not yet tracked on this Mac",
-            "composite_untracked": "Not synced yet",
-        }
+        readiness = stock_write_readiness(writable=snapshot.writable,
+            filesystem=snapshot.filesystem, stock_format=snapshot.stock_format,
+            firewire_guid=snapshot.firewire_guid or snapshot.usb_serial)
+        capability = "Sync ready" if readiness.ready else readiness.reason
         self._set_detail_rows("Identity", (
             ("Name", snapshot.volume_name),
             ("Family", snapshot.family),
             ("Generation", snapshot.generation),
             ("Model", model_label),
-            ("Stock firmware", firmware_label),
+            ("iPod firmware", firmware_label),
             ("DAC / codec", dac_label),
             ("Serial number", serial_label),
             ("Connection", connection_label),
@@ -556,7 +603,7 @@ class StockIpodPages(QWidget):
         ))
         database_header = self.detail_trees["Database"].headerItem()
         database_header.setText(
-            0, "DUAL LIBRARY" if composite_counts else "DATABASE")
+            0, "ITUNES/ROCKBOX" if composite_counts else "ITUNES")
         if composite_counts is None:
             database_rows = (
                 ("Indexed tracks", str(len(snapshot.tracks))),
@@ -569,7 +616,7 @@ class StockIpodPages(QWidget):
         else:
             database_rows = (
                 ("Managed tracks", str(composite_counts.managed_tracks)),
-                ("Stock-visible tracks", str(composite_counts.stock_visible_tracks)),
+                ("iTunes tracks", str(composite_counts.stock_visible_tracks)),
                 ("Rockbox-only tracks", str(composite_counts.rockbox_only_tracks)),
                 ("Managed playlists", str(composite_counts.managed_playlists)),
                 ("Rockbox database", (
@@ -588,21 +635,26 @@ class StockIpodPages(QWidget):
             )
         self._set_detail_rows("Database", database_rows)
         self._set_detail_rows("SoundBox", (
-            ("Stock sync", capability),
-            ("Sync state", sync_labels.get(snapshot.sync_state, snapshot.sync_state)),
+            ("iTunes Sync", capability),
+            ("Sync state", self.SYNC_LABELS.get(snapshot.sync_state, snapshot.sync_state)),
             ("Sync detail", snapshot.sync_detail),
             ("Pending local changes", str(snapshot.sync_local_changes)),
-            ("Last committed", snapshot.sync_committed_at or "Never"),
-            ("Supported audio", "MP3 · PCM16/44.1-kHz stereo WAV"),
+            ("Last Sync", snapshot.sync_committed_at or "Never"),
+            ("New iTunes audio", "MP3 · PCM16/44.1-kHz stereo WAV"),
             ("Commit policy", "Recovery first · media atomic · iTunesDB last"),
         ))
         self.confirm_model_button.setText(
             "Change confirmed model…" if snapshot.model else "Confirm model…")
-        self.confirm_model_button.setVisible(True)
+        self.confirm_model_button.setVisible(False)
 
         self.music_model.set_snapshot(snapshot, composite)
-        self._playlist_delete_available = bool(
-            snapshot.writable and supports_stock_write(snapshot.model))
+        self._playlist_delete_available = readiness.ready
+        self._playlist_sync_available = readiness.ready
+        self._playlist_write_reason = readiness.reason
+        self._playlist_sync_ids = frozenset(str(row.playlist_id) for row in user_playlists)
+        self.delete_playlist_button.setToolTip(readiness.reason)
+        stock_counts = {str(row.playlist_id): len(row.entries)
+                        for row in snapshot.playlists}
         self.playlist_tree.clear()
         for playlist in playlist_rows:
             parent = QTreeWidgetItem(
@@ -610,7 +662,11 @@ class StockIpodPages(QWidget):
                 [playlist.title, str(len(playlist.entries)),
                  playlist.availability],
             )
+            if playlist.sync_needed:
+                parent.setToolTip(2, "Sync needed")
             parent.setData(0, Qt.UserRole, playlist.identity)
+            parent.setData(0, Qt.UserRole + 1, playlist.stock_playlist_id)
+            parent.setData(0, Qt.UserRole + 2, stock_counts.get(playlist.stock_playlist_id, 0))
             parent.setFlags(parent.flags() & ~Qt.ItemIsSelectable)
             if playlist.managed:
                 # Keep deletion choice independent from row focus/expansion so
@@ -626,12 +682,48 @@ class StockIpodPages(QWidget):
                 )
         self._playlist_order_available = bool(
             composite is not None
-            and snapshot.writable
-            and supports_stock_write(snapshot.model)
+            and readiness.ready
         )
         self._committed_playlist_order = self._managed_playlist_order()
         self._update_delete_playlist_button()
         self._update_playlist_order_buttons()
+        self._sync_playlist_button()
+
+    def _sync_selection(self):
+        item = self._selected_playlist_item()
+        if item is None:
+            return None
+        identity = str(item.data(0, Qt.UserRole + 1) or "")
+        if (identity not in self._playlist_sync_ids
+                or not identity.isdecimal() or int(identity) <= 0):
+            return None
+        return identity, item.text(0), int(item.data(0, Qt.UserRole + 2) or 0)
+
+    def _playlist_action_ready(self):
+        return bool(self._has_snapshot and self._playlist_sync_available
+                    and self._playlist_actions_available)
+
+    def set_playlist_actions_available(self, enabled: bool, reason: str = ""):
+        """The controller gates writes without changing the verified snapshot."""
+        self._playlist_actions_available = bool(enabled)
+        self._playlist_actions_reason = str(reason)
+        self._sync_playlist_button()
+
+    def _sync_playlist_button(self, *_args):
+        selected = self._sync_selection()
+        self.sync_playlist_button.setText("Sync playlist…" if selected is not None else "Export playlists…")
+        self.sync_playlist_button.setEnabled(self._playlist_action_ready())
+        self.sync_playlist_button.setToolTip(
+            self._playlist_actions_reason if not self._playlist_actions_available else self._playlist_write_reason)
+
+    def _request_sync(self):
+        if not self._playlist_action_ready():
+            return
+        selected = self._sync_selection()
+        if selected is not None:
+            self.sync_requested.emit(selected)
+        else:
+            self.export_requested.emit()
 
     def _selected_playlist_item(self) -> QTreeWidgetItem | None:
         item = self.playlist_tree.currentItem()
@@ -761,6 +853,16 @@ class StockIpodPages(QWidget):
             item = item.parent()
         self.playlist_tree.setCurrentItem(item)
         menu = QMenu(self.playlist_tree)
+        selected = self._sync_selection()
+        action = menu.addAction("Sync playlist…" if selected is not None else "Export playlists…")
+        revision = self._sync_revision
+        action.setEnabled(self._playlist_action_ready())
+        def requested(_checked=False):
+            if revision != self._sync_revision or not self._playlist_action_ready():
+                return
+            if selected is not None:self.sync_requested.emit(selected)
+            else:self.export_requested.emit()
+        action.triggered.connect(requested)
         action = menu.addAction("Delete this playlist from iPod…")
         action.setEnabled(
             self._playlist_delete_available

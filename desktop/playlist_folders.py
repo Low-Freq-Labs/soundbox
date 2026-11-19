@@ -7,7 +7,8 @@ from PySide6.QtWidgets import QInputDialog, QMessageBox, QTreeWidgetItem
 from .choices import Menu as QMenu, exec_transient_menu
 
 from soundbox import playlist_folders as folders
-from .trees import CUSTOM_ROLE, CUSTOM_FOLDER_ROLE, NATIVE_TREE_ROLE
+from .track_menu import source_scope
+from .trees import COLLECTION_ROLE, CUSTOM_ROLE, CUSTOM_FOLDER_ROLE, NATIVE_TREE_ROLE
 
 
 class PlaylistFoldersMixin:
@@ -92,7 +93,7 @@ class PlaylistFoldersMixin:
         if expanded:values.add(key)
         else:values.discard(key)
         self.settings['custom_playlist_expanded'] = sorted(values)
-        self._schedule_settings_save()
+        self._schedule_settings_save('custom_playlist_expanded')
 
     def _new_local_playlist(self, parent=None):
         if self.lib is None:
@@ -147,16 +148,45 @@ class PlaylistFoldersMixin:
         except ValueError as exc:QMessageBox.information(self, 'Could not rename '+kind, str(exc))
 
     def _delete_local_node(self, kind, key):
-        nodes = self._local_playlist_tree(); siblings, index, node = folders.locate(nodes, kind, key)
+        scope = source_scope(self.lib)
+        unified = self.unification_controller.state()
+        unified = bool(unified and unified['customs_done'])
+        try:
+            nodes = self._local_playlist_tree(); _siblings, _index, node = folders.locate(nodes, kind, key)
+        except KeyError:
+            self._flash_status('That '+kind+' has changed; select it again');return
         names = [n['playlist'] for n, _ in folders.walk([node]) if 'playlist' in n]
+        members = {name:tuple(self.custom[name]) for name in names}
         label = node['name'] if kind == 'folder' else key
         detail = f' and its {len(names)} playlist(s)' if kind == 'folder' and names else ''
         if QMessageBox.question(self, 'Delete '+kind,
                 f'Delete SoundBox {kind} “{label}”{detail}?\nSongs remain in Collection and audio files are preserved.',
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:return
+        current_unified = self.unification_controller.state()
+        current_unified = bool(current_unified and current_unified['customs_done'])
+        if (source_scope(self.lib) != scope or unified != current_unified
+                or self._shutting_down or self._state_maintenance):
+            self._flash_status('The library changed; reopen Delete '+kind);return
+        current = self._local_playlist_tree()
+        try:siblings, index, reviewed = folders.locate(current, kind, key)
+        except KeyError:
+            self._flash_status('That '+kind+' has changed; select it again');return
+        if reviewed != node or any(tuple(self.custom.get(name, ())) != ids for name, ids in members.items()):
+            self._flash_status('That '+kind+' has changed; review it again before deleting');return
         siblings.pop(index)
-        if self._commit_local_tree(nodes, {name:ids for name, ids in self.custom.items() if name not in names}):
-            self.model.set_rows([])
+        if self._commit_local_tree(current, {name:ids for name, ids in self.custom.items() if name not in names}):
+            # Folder selection deliberately leaves the active song view alone.
+            # Only a playlist removed from that view needs a new complete page.
+            if getattr(self, '_view_key', None) in {'sb:'+name for name in names}:
+                self._stash_view()
+                self._select_only(self.sb_tree)
+                item = self.sb_tree.topLevelItem(0)
+                if item and item.data(0, COLLECTION_ROLE):
+                    blocked = self.sb_tree.blockSignals(True)
+                    try:self.sb_tree.setCurrentItem(item)
+                    finally:self.sb_tree.blockSignals(blocked)
+                self._show_collection()
+                self._restore_view('sb:Collection')
 
     def _move_local_node(self, token, parent, index):
         kind, _, key = token.partition(':')

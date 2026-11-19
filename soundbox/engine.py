@@ -9,6 +9,7 @@ delegates writes to sync.run, which enforces the safety guard).
 from __future__ import annotations
 
 from pathlib import Path
+from collections.abc import Mapping
 from typing import Callable
 
 from . import manifest as manifest_mod, metadata, rekordbox_xml
@@ -123,6 +124,11 @@ def export_playlists(
     art_cache=None,
     rockbox_media_cache=None,
     rockbox_art_cache=None,
+    display_rows: Mapping[str, Mapping] | None = None,
+    validate_inputs: Callable[[], None] | None = None,
+    validate_artwork: Callable[[str], None] | None = None,
+    expected_manifest_payload: bytes | None = None,
+    expected_manifest_absent: bool = False,
 ):
     """Export already-resolved Playlist objects (rekordbox OR custom SoundBox).
 
@@ -140,18 +146,28 @@ def export_playlists(
         art_cache=art_cache,
         rockbox_media_cache=rockbox_media_cache,
         rockbox_art_cache=rockbox_art_cache,
+        display_rows=display_rows,
+        validate_inputs=validate_inputs,
+        validate_artwork=validate_artwork,
+        expected_manifest_payload=expected_manifest_payload,
+        expected_manifest_absent=expected_manifest_absent,
     )
     if (not dry_run and clean and not report.cancelled
             and not any(row.errors for row in report.playlists)):
-        sync_mod.clean_applefiles(target, report.written_dirs)
+        if report.mount_identity is None:
+            raise RuntimeError('Export has no captured device identity for cleanup')
+        sync_mod.clean_applefiles(target, report.written_dirs,
+                                 expected_mount_identity=report.mount_identity)
     return report
 
 
-def clean_device(target: str | Path, dirs=None) -> int:
+def clean_device(target: str | Path, dirs=None, *,
+                 expected_mount_identity: tuple[int, int] | None = None) -> int:
     """Scrub macOS AppleDouble clutter from a target's Music/ + Playlists/. Pass
     `dirs` (the folders written this run) to scrub only those (fast); None = full scan."""
     from . import sync as sync_mod
-    return sync_mod.clean_applefiles(Path(target), dirs)
+    return sync_mod.clean_applefiles(
+        Path(target), dirs, expected_mount_identity=expected_mount_identity)
 
 
 def _rockbox_art_advisory(target: Path) -> str | None:
@@ -227,6 +243,22 @@ def verify_export(target: str | Path, *, deep: bool = False) -> dict:
     return res
 
 
+def capture_device_drift_manifest(target: str | Path) -> tuple[dict, bytes] | None:
+    """One bounded worker observation for managed-ID capture and drift display."""
+    import json
+    from .device_manifest_capture import read_device_manifest
+    payload = read_device_manifest(target)
+    if payload is None:
+        return None
+    try:
+        data = json.loads(payload)
+    except (UnicodeError, ValueError):
+        return manifest_mod.parse(payload), payload
+    if isinstance(data, dict) and int(data.get('schema') or 0) == manifest_mod.COMPOSITE_SCHEMA:
+        return manifest_mod.parse_composite(payload), payload
+    return manifest_mod.parse(payload), payload
+
+
 def device_drift(
     lib: Library,
     target: str | Path,
@@ -234,6 +266,8 @@ def device_drift(
     *,
     artist_overrides: dict | None = None,
     title_overrides: dict | None = None,
+    display_rows: Mapping[str, Mapping] | None = None,
+    captured_manifest: tuple[dict, bytes] | None = None,
 ):
     """How far a device has drifted from the current library since last sync
     (renamed/moved/changed/removed playlists). Read-only. None if no manifest.
@@ -241,7 +275,9 @@ def device_drift(
     `extra` = custom SoundBox playlists (not in lib.playlists) so they aren't
     mis-counted as removed."""
     target_path = Path(target)
-    if manifest_mod.has_composite_ownership(target_path):
+    composite = (int(captured_manifest[0].get('schema') or 0) == manifest_mod.COMPOSITE_SCHEMA
+                 if captured_manifest is not None else manifest_mod.has_composite_ownership(target_path))
+    if composite:
         # Imported lazily: dual_ipod itself composes the lower-level engine
         # modules, while this read-only route only needs its profile-aware diff.
         from .dual_ipod import composite_device_drift
@@ -251,8 +287,10 @@ def device_drift(
             extra,
             artist_overrides=artist_overrides,
             title_overrides=title_overrides,
+            display_rows=display_rows,
+            captured_manifest=captured_manifest,
         )
-    m = manifest_mod.load(target_path)
+    m = captured_manifest[0] if captured_manifest is not None else manifest_mod.load(target_path)
     if not m.get("playlists"):
         return None
     return manifest_mod.diff(m, lib, extra)
@@ -270,6 +308,11 @@ def resync_device(
     rockbox_media_cache=None,
     rockbox_art_cache=None,
     extra=None,
+    display_rows: Mapping[str, Mapping] | None = None,
+    validate_inputs: Callable[[], None] | None = None,
+    validate_artwork: Callable[[str], None] | None = None,
+    expected_manifest_payload: bytes | None = None,
+    expected_manifest_absent: bool = False,
 ):
     """Bring a device in line with rekordbox (see sync.resync). Writes only under target.
 
@@ -279,4 +322,7 @@ def resync_device(
         lib, Path(target), on_progress=on_progress, should_cancel=should_cancel,
         artist_overrides=artist_overrides, title_overrides=title_overrides,
         art_cache=art_cache, rockbox_media_cache=rockbox_media_cache,
-        rockbox_art_cache=rockbox_art_cache, extra=extra)
+        rockbox_art_cache=rockbox_art_cache, extra=extra, display_rows=display_rows,
+        validate_inputs=validate_inputs, validate_artwork=validate_artwork,
+        expected_manifest_payload=expected_manifest_payload,
+        expected_manifest_absent=expected_manifest_absent)

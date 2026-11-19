@@ -117,10 +117,11 @@ class NativeAnalysisController(QObject):
         self.factory=factory;self.closing=False;self.active='';self.not_before=0.0
         self._grid_revalidated=set()
         self._detection_reconciled=set()
+        self._discovery_observation=None
         self.timer=QTimer(self);self.timer.setSingleShot(True);self.timer.setInterval(2000)
         self.timer.timeout.connect(self.pump);self.tags.idle.connect(self.schedule)
         self._pump_wakeup=DeferredCall(lambda:self.pump(),self)
-        self._discovery_wakeup=DeferredCall(lambda:self.discover(),self)
+        self._discovery_wakeup=DeferredCall(self._discover_if_changed,self)
         self.tags.changed.connect(self.schedule_discovery)
 
     @property
@@ -139,6 +140,38 @@ class NativeAnalysisController(QObject):
     def schedule_discovery(self):
         if not self.closing:self._discovery_wakeup.schedule()
 
+    def _discovery_inputs(self):
+        """Cheap scheduling observations, never source/publication authority.
+
+        Relevant durable collections replace their owners on mutation. Their
+        lengths also detect in-place additions/removals without visiting any
+        track, detection record or saved beat array. Full library publication
+        and terminal detection explicitly call discover(), including in-place
+        media changes; metadata-only snapshot replacement is not that event.
+        """
+        w=self.window;lib=w.lib
+        owners=tuple(w.settings.get(key) for key in (
+            'analysis_results',analysis_jobs.KEY,'pending_prep_edits',KEY,DONE))
+        authority_files=[]
+        for profile in (INITIAL_WAV_PROFILE,cbr.PROFILE):
+            path=self.tags.data_root/publication(profile).authority_file
+            try:
+                info=path.lstat()
+                stamp=(info.st_dev,info.st_ino,info.st_size,info.st_mtime_ns,info.st_ctime_ns,info.st_mode)
+            except OSError as exc:stamp=(type(exc),exc.errno)
+            authority_files.append(stamp)
+        facts=((str(lib.source),lib.source_kind,lib.source_library_id) if lib else None,
+               self.tags.verified,tuple(authority_files),
+               tuple(len(owner) if isinstance(owner,(dict,list)) else None for owner in owners))
+        return facts,(*owners,self.factory)
+
+    def _discover_if_changed(self):
+        current=self._discovery_inputs();previous=self._discovery_observation
+        if (previous is not None and current[0]==previous[0]
+                and all(left is right for left,right in zip(current[1],previous[1],strict=True))):
+            return
+        self.discover()
+
     def _detection_index(self):
         # A synchronous discover/pump owns this observation only until it returns.
         try:jobs=analysis_jobs.validate(self.window.settings.get(analysis_jobs.KEY,[]))
@@ -153,6 +186,13 @@ class NativeAnalysisController(QObject):
         return job is not None and analysis_jobs.matches(job,lib,track)
 
     def discover(self):
+        """Explicit inventory invalidation; status-only wakeups are filtered."""
+        if self.closing:return
+        if self._discover() is False:
+            self._discovery_observation=None
+        else:self._discovery_observation=self._discovery_inputs()
+
+    def _discover(self):
         w=self.window
         if self.closing or not w.lib or not self.tags.verified:return
         try:validate(self.pending)
@@ -196,7 +236,7 @@ class NativeAnalysisController(QObject):
             queued.add(tid)
         if queue!=self.pending:
             old=w.settings.get(KEY,[]);w.settings[KEY]=queue
-            if not w._save_state():w.settings[KEY]=old;return
+            if not w._save_state():w.settings[KEY]=old;return False
         self._grid_revalidated.update(revalidated)
         self.schedule()
 

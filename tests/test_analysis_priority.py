@@ -245,7 +245,8 @@ class WaveformPriority(unittest.TestCase):
         jobs=analysis_jobs.admit([],self.lib,[self.track],{})
         worker=AnalysisWorker(self.lib,[self.track],{},{});worker.job_id=jobs[0]['id']
         worker.result=ValueError('Detection fixture failed')
-        host=SimpleNamespace(_shutting_down=False,_analysis_owner=SimpleNamespace(stopping=False),
+        host=SimpleNamespace(_shutting_down=False,_state_publication=False,
+            _analysis_owner=SimpleNamespace(stopping=False),
             settings={analysis_jobs.KEY:jobs},_save_state=mock.Mock(return_value=True),
             _flash_status=mock.Mock(),_analysis_offer_source_turn=mock.Mock(),_schedule_next_analysis=mock.Mock())
         AnalysisMixin._analysis_retired(host,worker)

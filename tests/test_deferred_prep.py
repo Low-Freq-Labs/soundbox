@@ -122,6 +122,36 @@ class DurablePrep(unittest.TestCase):
         fields=rekordbox_db.cue_snapshot_fields(self.native.state)
         self.assertEqual(sorted(c['position_ms'] for c in fields['source_cues']),[777,1234])
 
+    def test_native_cue_then_grid_captures_later_ram_grid_and_replays_after_restart(self):
+        self.native.shared.busy=True
+        before=self.native.dat
+        pb=self.window.player_bar
+        publish=pb.refresh_live_grid
+        pb.refresh_live_grid=mock.Mock(wraps=publish)
+        self.assertTrue(self.controller.request_cue(self.tid,'hot',0,'add',777))
+        cue_job=self.controller.job(self.tid)
+        self.assertEqual(cue_job['grid'],[])
+        self.assertTrue(cue_job['native_ready'])
+        pb.refresh_live_grid.assert_not_called()
+        original=deepcopy(pb._analysis_parts['beats'])
+        self.assertEqual(self.native.dat,before)
+        self.assertTrue(self.controller.request_grid(self.tid,'shift',1))
+        job=self.controller.job(self.tid)
+        self.assertEqual([op['kind'] for op in job['operations']],['cue','grid'])
+        self.assertEqual(job['operations'][1]['before'],prep_edits.digest(original))
+        desired=deepcopy(job['grid'])
+        self.assertEqual(cue_job['grid'],[])
+        self.controller.stop()
+        self.window.settings=json.loads((self.native.shared.data_root/'state.json').read_bytes())
+        self.controller=PrepEditController(self.window)
+        self.window.prep_controller=self.controller
+        self.native.shared.busy=False
+        self.controller.pump()
+        self.wait(lambda:not self.controller.pending and not self.native.shared.busy)
+        self.assertEqual([kind for kind,_ in self.writes],['cue','grid'])
+        self.assertEqual([[b.number,b.time_ms,b.tempo/100] for b in read_grid(self.native.dat)],desired)
+        self.assertTrue(any(c['InMsec']==777 for c in self.native.state.cues))
+
     def test_lane_release_promotes_delayed_retry_but_rechecks_all_ownership_gates(self):
         shared=self.native.shared;w=self.window;shared.busy=True
         self.assertTrue(self.controller.request_cue(self.tid,'hot',0,'add',777))

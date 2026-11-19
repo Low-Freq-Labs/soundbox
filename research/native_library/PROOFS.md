@@ -5,8 +5,9 @@ workspaces have no source discovery or publish-to-source API. Separate
 one-plan source pilots are described below. Ordinary core registration and initial
 full WAV/narrow CBR MP3 analysis now have separate accepted authorities and desktop
 integration; these research workspaces never provision or load those permissions.
-The accepted domains remain installed in responsiveness build167/runtime3fb0ff60…;
-current binary/source provenance is in HANDOFF. Whole-app build165/runtime7ffde716…
+The accepted domains remain supported; current binary/source and exact-library
+authority provenance is in HANDOFF. Responsiveness build167/runtime3fb0ff60…,
+whole-app build165/runtime7ffde716…
 and build160/source release `4a3d29a`/runtime `7bbe8577…` are prior delivery evidence. Existing
 Tag/Cue/Grid/Playlist permissions do not authorize registration or analysis writes.
 The [shared-workflow plan](../../docs/shared-library-workflow-plan.md) defines the
@@ -313,5 +314,6 @@ code and full native recovery remain protected. The core scanner/planner promoti
 retains exact old proposal outputs; research wrappers reexport those APIs.
 Production uses its own accepted CBR authority/store/FIFO and contains no research
 modules. The original build155 delivery passed2200tests/package/native/curation
-checks; it is historical, superseded by the build167/2795-test delivery in HANDOFF.
+checks; it and the later build167/2795-test delivery are historical checkpoints.
+HANDOFF records current validation and installation separately.
 VBR/Info/gapless/mono/48kHz publication remains outside that accepted profile.

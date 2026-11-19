@@ -1,6 +1,6 @@
 """One durable bulk-tag gesture on the existing joined native source lane."""
 from copy import deepcopy
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from uuid import uuid4
 
@@ -8,8 +8,19 @@ from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QMessageBox
 
 from soundbox.rekordbox_tags import SelectedTagTrack, TagWriteRequest
+from soundbox import smart_playlist_order
 
 KEY = 'pending_tag_assignments'
+
+
+@dataclass(frozen=True)
+class _VerifiedTagReadback:
+    # Private unpublished worker result, consumed once before GUI publication.
+    # All native aliases were verified; this is not a published-Library cache.
+    library: object
+    source: str
+    request: TagWriteRequest
+    promotions: smart_playlist_order.Promotions | None
 
 
 def restore_request(raw):
@@ -52,6 +63,11 @@ class TagAssignmentIntents:
     def _init_tag_intents(self, intent_owner):
         self._tag_intent_owner = intent_owner
         self._tag_waiting = False
+        self._tag_recency_assignment = None
+        self._tag_ack = None
+        self._tag_ack_inflight = False
+        self._tag_ack_conflict = False
+        self.order_error = ''
         self._tag_timer = QTimer(self)
         self._tag_timer.setSingleShot(True)
         self._tag_timer.timeout.connect(self._pump_tag_intent)
@@ -60,6 +76,24 @@ class TagAssignmentIntents:
     @property
     def pending(self):
         return self._tag_intent_owner.settings.get(KEY, []) if self._tag_intent_owner else []
+
+    @property
+    def durable_assignment_ack(self):
+        return callable(getattr(self._tag_intent_owner, '_commit_tag_state', None))
+
+    @property
+    def tag_ack_pending(self):
+        return self._tag_ack is not None or self._tag_ack_inflight
+
+    def _tag_source_current(self, job):
+        libraries = (self.lib, getattr(self._tag_intent_owner, 'lib', self.lib))
+        return all(lib is not None and lib.source_kind == 'rekordbox-db'
+                   and (str(lib.source), lib.source_library_id) == (job['source'], job['library_id'])
+                   for lib in libraries)
+
+    def _tag_state_epoch(self):
+        repository = getattr(self._tag_intent_owner, '_state_repository', None)
+        return (repository, repository.generation, repository.area.generation) if repository is not None else None
 
     def queue_error(self):
         try:
@@ -83,7 +117,7 @@ class TagAssignmentIntents:
                 or getattr(self._tag_intent_owner,'_shutting_down',False)):
             return False
         return bool(self.lib and self.verified and not self.queue_error() and self.pending
-                    and not self.pending[0]['error'] and (str(self.lib.source), self.lib.source_library_id)
+                    and not self._tag_ack_conflict and not self.pending[0]['error'] and (str(self.lib.source), self.lib.source_library_id)
                     == (self.pending[0]['source'], self.pending[0]['library_id']))
 
     def _persist_tag_intent(self, jobs):
@@ -101,7 +135,7 @@ class TagAssignmentIntents:
             return False
         return True
 
-    def _queue_tag_request(self, request):
+    def _queue_tag_request(self, request, assignment=None):
         job = dict(source=str(self.lib.source), library_id=request.library_id,
                    request=asdict(request), error='')
         job['request']['tracks'] = [asdict(track) for track in request.tracks]
@@ -110,19 +144,25 @@ class TagAssignmentIntents:
             self.failed.emit(str(exc));return False
         if not self._persist_tag_intent([deepcopy(job)]):
             return False
+        self._tag_recency_assignment = (request.operation_id, assignment)
+        self._tag_ack_conflict = False
         self._pending = request
         self.changed.emit()
         self._pump_tag_intent()
         return True
 
     def _schedule_tag_intent(self):
-        if self.pending and not self._closing and not self._tag_timer.isActive():
+        if self.pending and (not self._closing or self._tag_ack is not None) and not self._tag_timer.isActive():
             self._tag_timer.start(0)
 
     def _pump_tag_intent(self):
-        if self._closing or not self.pending or self.queue_error() or self.pending[0]['error']:
+        if self._tag_ack is not None:
+            self._try_tag_ack()
+            return
+        if self._closing or self._tag_ack_conflict or not self.pending or self.queue_error() or self.pending[0]['error']:
             return
         if (self.busy or self.checking or self.prep_priority or self.admission_paused
+                or getattr(self,'state_commit_owned',False)
                 or self._analysis_blocks_source() or self.owner.stopping
                 or getattr(self._tag_intent_owner,'_state_maintenance',False)
                 or getattr(self._tag_intent_owner,'_shutting_down',False)
@@ -152,11 +192,24 @@ class TagAssignmentIntents:
             return
         request = restore_request(job['request'])
         library = worker.result
-        if not worker.error and not verified_readback(library, job['source'], request):
+        promotions = None
+        if isinstance(library, _VerifiedTagReadback):
+            worker.result = None  # Consume the unpublished proof before any callbacks.
+            proof = library;library = proof.library
+            valid = (proof.source == job['source'] and proof.request == request
+                     and library.source_kind == 'rekordbox-db'
+                     and (str(library.source), library.source_library_id) == (job['source'], job['library_id']))
+            promotions = proof.promotions
+        else:
+            valid = verified_readback(library, job['source'], request) if not worker.error else False
+        if not worker.error and not valid:
             worker.error = 'My Tag source readback differs from the saved intention; retry to reconcile'
-        if not worker.error and (not self.lib or (str(self.lib.source), self.lib.source_library_id)
-                                 != (job['source'], job['library_id'])):
+        if not worker.error and not self._tag_source_current(job):
             worker.error = 'My Tags saved in the original library; switch back to acknowledge'
+        if self.durable_assignment_ack:
+            self._tag_ack = (job, library, promotions, worker.error, self._tag_state_epoch())
+            self._try_tag_ack()
+            return
         if not worker.error and not self._persist_tag_intent([]):
             worker.error = 'My Tags saved in rekordbox; local acknowledgement failed. Retry after fixing storage.'
         self._pending = None
@@ -171,22 +224,128 @@ class TagAssignmentIntents:
             if not self.owner.stopping and not self._closing:self.saved.emit(library)
         self.changed.emit();self.idle.emit()
 
+    def _try_tag_ack(self):
+        """One ordered queue/order delta; admission never publishes completion."""
+        if self._tag_ack is None or self._tag_ack_inflight:
+            return
+        job, library, promotions, error, epoch = self._tag_ack
+        if not self.pending or self.pending[0] != job:
+            self._tag_ack = None;self._pending = None
+            self.changed.emit();self.idle.emit()
+            return
+        if not error and not self._tag_source_current(job):
+            error = 'My Tags saved in the original library; switch back to acknowledge'
+        owner = self._tag_intent_owner
+        replacements = {('settings', KEY): [{**job, 'error': error[:4096]}] if error else []}
+        self.order_error = ''
+        previous = owner.settings.get(smart_playlist_order.KEY)
+        order_pins = None
+        if not error:
+            try:
+                after = smart_playlist_order.record_prepared(previous, promotions)
+                if after is not previous:
+                    if previous is None:
+                        replacements[('settings', smart_playlist_order.KEY)] = after
+                    else:
+                        replacements[('settings', smart_playlist_order.KEY, 'sequence')] = after['sequence']
+                        for scope, uuids in promotions.ranks:
+                            for uuid in uuids:
+                                replacements[('settings', smart_playlist_order.KEY, 'playlists', scope, uuid)] = after['sequence']
+                    # Exact affected scalar pins catch in-place edits as well as
+                    # owner replacement; unrelated newer preferences merge.
+                    order_pins = None if previous is None else (
+                        previous['version'], previous['sequence'],
+                        tuple((scope, uuid, previous['playlists'].get(scope, {}).get(uuid))
+                              for scope, uuids in promotions.ranks for uuid in uuids))
+            except ValueError as exc:
+                self.order_error = 'Tags saved; ' + str(exc)
+        has_order = any(path[:2] == ('settings', smart_playlist_order.KEY) for path in replacements)
+        def current():
+            if self._tag_state_epoch() != epoch:
+                return False
+            if not self.pending or self.pending[0] != job:
+                return False
+            if not error and not self._tag_source_current(job):
+                return False
+            if not has_order:
+                return True
+            value = owner.settings.get(smart_playlist_order.KEY)
+            if value is not previous:
+                return False
+            if order_pins is None:
+                return value is None
+            try:
+                version, sequence, ranks = order_pins
+                return (type(value['version']) is int and value['version'] == version
+                        and type(value['sequence']) is int and value['sequence'] == sequence
+                        and all(type(value['playlists'].get(scope, {}).get(uuid)) is type(rank)
+                                and value['playlists'].get(scope, {}).get(uuid) == rank
+                                for scope, uuid, rank in ranks))
+            except (KeyError, TypeError, AttributeError):
+                return False
+        self._tag_ack_inflight = True
+        def finish(failure=None):
+            self._tag_ack_inflight = False;self._tag_ack = None;self._pending = None
+            message = error
+            if failure is not None:
+                self._tag_ack_conflict = True
+                if error:
+                    message = error + ('; newer local state was retained' if getattr(failure, 'durable', False)
+                                       else '; the local failure note could not be saved. Intention retained.')
+                else:
+                    message = ('My Tags saved in rekordbox; ' + str(failure) if getattr(failure, 'durable', False)
+                               else 'My Tags saved in rekordbox; local acknowledgement failed. Retry after fixing storage.')
+                # The canonical request is retained on storage failure. Do not
+                # persist a second full document, or overwrite a newer RAM head.
+                if self._tag_state_epoch() == epoch and self.pending and self.pending[0] == job:
+                    owner.settings[KEY] = [{**job, 'error': message[:4096]}]
+            if message:
+                self._ready = False;self._probe_error = message
+                if not self.owner.stopping and not self._closing:self.failed.emit(message)
+            else:
+                self._ready = True;self._probe_error = ''
+                self._tag_recency_assignment = None
+                if not self.owner.stopping and not self._closing:self.saved.emit(library)
+            self.changed.emit();self.idle.emit()
+        try:
+            accepted = owner._commit_tag_state(replacements, (), lambda:finish(), finish, current=current)
+        except (OSError, ValueError, RuntimeError) as exc:
+            finish(exc);return
+        if not accepted:
+            self._tag_ack_inflight = False
+            if not self._closing:self._tag_timer.start(500)
+
     def retry(self):
-        if self._closing or self.busy or self.checking or not self.pending or self.queue_error():
+        if self._closing or self.busy or self.checking or self.tag_ack_pending or not self.pending or self.queue_error():
             return False
         if not self._persist_tag_intent([{**self.pending[0], 'error': ''}]):
             return False
+        self._tag_ack_conflict = False
         self._schedule_tag_intent()
         return True
 
     def discard(self):
-        if self._closing or self.busy or self.checking or not self.pending or self.queue_error():
+        if self._closing or self.busy or self.checking or self.tag_ack_pending or not self.pending or self.queue_error():
             return False
+        reviewed = deepcopy(self.pending);epoch = self._tag_state_epoch()
+        def current():
+            owner = self._tag_intent_owner
+            return (not self._closing and not self.owner.stopping and not self.busy and not self.checking
+                    and not self.tag_ack_pending and not self.state_commit_owned
+                    and not getattr(owner, '_state_maintenance', False)
+                    and not getattr(owner, '_shutting_down', False)
+                    and not getattr(owner, '_state_publication', False)
+                    and getattr(owner, '_refresh_worker', None) is None
+                    and self._tag_state_epoch() == epoch and self.pending == reviewed
+                    and self._tag_source_current(reviewed[0]))
+        if not current():return False
         if QMessageBox.question(self.parent(), 'Discard pending My Tag assignment',
                 'Discard this pending intention? Assignments already saved in rekordbox remain saved.',
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
             return False
+        if not current():return False
         if not self._persist_tag_intent([]):return False
+        self._tag_ack_conflict = False
         self._pending = None;self._tag_timer.stop();self.changed.emit();self.idle.emit()
         return True
 

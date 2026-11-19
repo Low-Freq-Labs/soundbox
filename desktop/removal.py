@@ -462,7 +462,8 @@ class RemovalController(QObject):
             if w.player_bar.current_track() in job['ids']:w.player_bar.stop()
             if not self.closing and not w._shutting_down:
                 w._publish_created_library(library)
-                w._after_track_edit(f"Removed {len(job['ids'])} from native Collection; files kept")
+                w._after_track_edit(f"Removed {len(job['ids'])} from native Collection; files kept",
+                                    persist=False,refresh_devices=False)
             self.schedule();return
         done=deepcopy(w.settings.get(DONE,{}))
         for selected in plan['selections']:
@@ -481,7 +482,7 @@ class RemovalController(QObject):
             message=f"Removed {len(job['ids'])} tracks"
             if plan['audio']:message+=' — files are in Trash'
             if kept:message+=f"; kept {kept} shared file{'s' if kept!=1 else ''}"
-            w._after_track_edit(message)
+            w._after_track_edit(message,persist=False,refresh_devices=False)
         self.schedule()
 
     def stop(self):self.closing=True;self.timer.stop();self.tags.foreground_waiting=False

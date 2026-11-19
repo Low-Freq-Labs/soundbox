@@ -290,6 +290,109 @@ class NativeDeckContract(unittest.TestCase):
                 win.close()
                 self.app.processEvents()
 
+    def test_playing_pending_cues_are_visible_and_usable_before_canonical_acknowledgement(self):
+        from threading import Event
+        from PySide6.QtCore import QTimer
+        from desktop.app import MainWindow
+        from soundbox.library import Library, Track
+        from soundbox.providers import Providers
+        from soundbox.state_repository import read_state
+        before_audio=_sha256(self.audio)
+        with tempfile.TemporaryDirectory(prefix='sb-playing-pending-cues-') as area, \
+                mock.patch.object(MainWindow,'_refresh_devices'), \
+                mock.patch('soundbox.rekordbox_db.load_live',side_effect=AssertionError('Real source read')):
+            root=Path(area)
+            win=MainWindow(isolated_dir=root/'state',providers=Providers('public'))
+            pb=win.player_bar;pb._deck_volume=0
+            release=Event();entered=Event();heartbeat=QTimer()
+            patches=[]
+            for controller,method in ((win.graveyard_controller,'prepare_library'),
+                                      (win.native_analysis_controller,'discover'),
+                                      (win.media_controller,'discover')):
+                patch=mock.patch.object(controller,method);patch.start();patches.append(patch)
+            for method in ('_cache_library','_arm_waveform_rechecks','_schedule_stock_artwork',
+                           '_resume_analysis_jobs','_maybe_fill_waveforms'):
+                patch=mock.patch.object(win,method);patch.start();patches.append(patch)
+            track=Track('pending-native','Generated native cue fixture','Artist',self.audio.as_uri(),
+                total_time=2,source_native_id='1',source_uuid='00000000-0000-4000-8000-000000000001',
+                source_cues=[],source_cue_revision='a'*64)
+            win.lib=Library({track.track_id:track},[],root/'synthetic-master.db',
+                            source_kind='rekordbox-db',source_library_id='generated-cue-library')
+            win._rekordbox_source_verified=True
+            win.tag_controller._requires_cue_authority=False
+            win._apply_loaded_library()
+            win.move(80,200);win.show()
+            try:
+                self.assertTrue(win._open_track(track,autoplay=True))
+                self._wait_until(lambda:pb.player.duration()==2000 and not pb._pending_autoplay,5000)
+                self._wait_until(lambda:not pb._waveform_tasks.pending,5000)
+                QTest.qWait(100)
+                pb.quantize_enabled=False
+                pb.seek_ms(200)
+                if not pb.is_playing():pb.toggle()
+                self._wait_until(lambda:pb.is_playing() and 200<=pb.player.position()<1000)
+                win._sync_cue_editing();self.assertTrue(pb.cue_panel._editable)
+                self.assertTrue(win._save_state())
+                commit=win._state_repository.commit_patch;captured=[];positions=[];ticks=[]
+                def held(patch):
+                    if ('settings','pending_prep_edits') in patch.edits()[0]:
+                        entered.set()
+                        if not release.wait(5):raise AssertionError('Canonical cue fixture was not released')
+                    return commit(patch)
+                capture=pb.capture_cue_position
+                def position():
+                    value=capture();positions.append(value);return value
+                heartbeat.setInterval(2);heartbeat.timeout.connect(lambda:ticks.append(time.perf_counter()))
+                with mock.patch.object(win._state_repository,'commit_patch',side_effect=held), \
+                        mock.patch.object(win.tag_controller,'run_prep_job',return_value=False) as source_writer, \
+                        mock.patch.object(pb,'capture_cue_position',side_effect=position):
+                    heartbeat.start()
+                    for kind in ('hot','memory'):
+                        button=(pb.cue_panel.hot_slots if kind=='hot' else pb.cue_panel.memory_slots)[0]
+                        self.assertTrue(button.isEnabled())
+                        start=time.perf_counter();button.click()
+                        captured.append((time.perf_counter()-start)*1000)
+                        cue=pb.cue_panel._cues[kind][0]
+                        self.assertIsNotNone(cue);self.assertEqual(cue['position_ms'],positions[-1])
+                        self.assertTrue(pb.is_playing());self.assertFalse(win.prep_controller.pending)
+                        self.assertFalse(release.is_set())
+                        if kind=='hot':self._wait_until(entered.is_set);QTest.qWait(20)
+                    self.assertEqual(pb.player.diagnostic_cue_marker_count(),2)
+                    self.assertEqual(len(pb.wave._cues),2)
+                    source_writer.assert_not_called()
+                    self.assertFalse(read_state(win._state_repository.path).get('settings',{}).get('pending_prep_edits'))
+                    auditions=[]
+                    start=time.perf_counter();pb.cue_panel._press('hot',0)
+                    self._wait_until(lambda:pb.is_playing() and positions[0]<=pb.player.position()<positions[0]+100)
+                    auditions.append((time.perf_counter()-start)*1000);pb.cue_panel._release('hot',0)
+                    pb.toggle();self._wait_until(lambda:not pb.is_playing() and not pb._pause_pending)
+                    start=time.perf_counter();pb.cue_panel._press('memory',0)
+                    self._wait_until(lambda:pb.is_playing() and positions[1]<=pb.player.position()<positions[1]+100)
+                    auditions.append((time.perf_counter()-start)*1000);pb.cue_panel._release('memory',0)
+                    self._wait_until(lambda:not pb.is_playing() and not pb._pause_pending)
+                    self.assertFalse(release.is_set());self.assertTrue(win.prep_controller.admission_pending)
+                    QTest.qWait(30);heartbeat.stop()
+                    self.assertGreaterEqual(len(ticks),4)
+                    gaps=[(b-a)*1000 for a,b in zip(ticks,ticks[1:])]
+                    self.assertLess(max(captured),60,captured)
+                    self.assertLess(max(auditions),100,auditions)
+                    self.assertLess(max(gaps),60,gaps)
+                    release.set();self._wait_until(lambda:not win.prep_controller.admission_pending,5000)
+                    durable=read_state(win._state_repository.path)['settings']['pending_prep_edits'][0]
+                    self.assertEqual([op['position'] for op in durable['operations']],positions)
+                    self.assertEqual({cue['kind'] for cue in durable['cues']},{'hot','memory'})
+                    self.assertIsNone(durable['prepared'])
+                    print('optimistic_native_cue_evidence '+json.dumps(dict(
+                        gesture_ms=captured,audition_ms=auditions,heartbeat_max_ms=max(gaps),
+                        captured_native_positions=positions,native_markers=pb.player.diagnostic_cue_marker_count(),
+                        durable_operations=len(durable['operations']),source_sql_executed=False)))
+                self.assertEqual(_sha256(self.audio),before_audio)
+            finally:
+                heartbeat.stop();release.set();win.shutdown()
+                for patch in reversed(patches):patch.stop()
+                win.close();win.deleteLater()
+                self.app.processEvents()
+
     def test_playing_hot_cues_and_navigation_preserve_intent_through_seek_fades(self):
         from desktop.player import PlayerBar
         pb = PlayerBar()

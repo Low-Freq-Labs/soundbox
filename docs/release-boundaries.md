@@ -4,11 +4,13 @@ Sonny deferred further public splitting/release work on November9,2026 until the
 personal app is finished. Preserve the implemented profiles and provider boundary;
 this is no new distribution or dependency/service clearance.
 
-Allocation requested October26,2026; status checked November8 against accepted
-personal build169 and its separately validated public package. Exact provenance
-and profile checks are recorded in [HANDOFF](HANDOFF.md).
-Both retain the same shared/optional boundary; both signed
-profiles/code parity and isolated native/SQLCipher checks pass. No new dependency
+Allocation requested October26,2026; the November8 checkpoint used accepted
+personal build169 and its separately validated public package. Those dated checks
+retain their original scope. Current source, package and installed identities
+are recorded separately in [HANDOFF](HANDOFF.md); a validated source candidate
+does not identify the installed application.
+Both profiles retain the same shared/optional boundary; their November8 signed
+profile/code parity and isolated native/SQLCipher checks passed. No new dependency
 or distribution clearance is implied.
 Product direction: one shared application,
 nearly identical public/personal UI, optional installed modules adding a small
@@ -93,8 +95,8 @@ or completed dependency clearance.
 | `yt_dlp` and provider-specific network/matching code | Exclude package | Optional dependency | Personal bundles it; public physically excludes it |
 | Device discovery, loading status, dashboard, normal eject | Keep | Same | Core serialized device controller |
 | Rockbox filesystem export / generic FAT32–exFAT native CDJ export | Shared scope, guarded | Same implemented selected-playlist export | Generic USBs export selected playlists without sync/drift status or idle catalog reads; remaining player/hardware gates and iPod firmware/layout contracts stay separate |
-| Stock MA446 export | Keep after acceptance | Same allowlist | Validated MP3/supported WAV only |
-| Dual MA446 stock/Rockbox single-copy sync | Keep after acceptance | Same allowlist | Schema 3; one transaction authority |
+| Stock Video/Classic export | Shared core, guarded | Same observed-format admission | Supported Video v25/117 checksum0 and Classic v117/HASH58; validated new MP3/supported WAV only; physical acceptance remains separately recorded |
+| Dual Video/Classic stock/Rockbox single-copy sync | Shared core, guarded | Same observed-format admission | Schema 3; one transaction authority and destination-specific media profiles; physical acceptance remains separate |
 | Managed playlist deletion, reference-counted cleanup | Keep, confirmed | Same | Core sync semantics, not an unlock bypass |
 | Rockbox append adoption into custom playlists | Keep | Same | Existing managed paths only; no rekordbox writes |
 | Verify / Deep Verify | Keep, explicit | Same | Read-only; never prerequisite for idle eject |
@@ -106,7 +108,7 @@ or completed dependency clearance.
 | Exact native traces, developer scripts and legacy XML CLI | Not product UI | Developer tools | Separate tools; do not treat as personal feature unlock |
 | Packaged native CDJ USB exporter | Implemented; public distribution withheld | Selected-playlist export with small physical fixture proof | Both frozen profiles include the dedicated renderer; player/hardware and dependency/distribution gates remain open |
 | CDJ research harnesses and hardware fixtures | Exclude | Developer workspace only | Only the compiled dedicated renderer enters app profiles; research code and private fixtures are not bundled |
-| Other stock models, schema-2→3 migration, Windows | Not yet supported | Same | Personal profile does not expand firmware authority |
+| Other unsupported stock database/checksum families, schema-2→3 migration, Windows | Not yet supported | Same | Personal profile and remembered model labels do not expand firmware authority |
 
 No personal library, photos, absolute source paths, device captures, credentials
 or private workflows belong in a distributable artifact. Private workflows

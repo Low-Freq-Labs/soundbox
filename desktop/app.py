@@ -50,6 +50,29 @@ _DEVICE_POLL_ACTIVE_MS = 3_000
 _DEVICE_POLL_IDLE_MS = 3_000
 
 
+class _DeviceRefreshCompletion:
+    """One terminal delivery for the accepted mount and finalization owner."""
+    def __init__(self, window, device, identity, owner, callback):
+        self.window=window;self.device=device;self.identity=identity
+        self.owner=owner;self.callback=callback;self.completed=False
+
+    def finish(self, error=None):
+        if self.completed:return
+        self.completed=True
+        window=self.window
+        if getattr(window,'_device_finalization_token',None) is not self.owner:return
+        if window._shutting_down:
+            if self.owner is not None:
+                window._device_finalization_token=None
+                window._device_finalization_refreshing=False
+                window._exporting=False
+            return
+        if self.identity is None or window._device_coordinator.mounts.get(self.device)!=self.identity:
+            error=RuntimeError(f'{Path(self.device).name} disconnected or remounted during finalization')
+        if error is not None:window._device_finalization_error=error
+        self.callback()
+
+
 def setup_logging() -> Path | None:
     """Console + production file log; Qt test mode never touches the real log."""
     if LOG.handlers:
@@ -114,6 +137,7 @@ from PySide6.QtWidgets import (
 )
 from .choices import Menu as QMenu, exec_transient_menu
 from .progress import ThemeProgressBar
+from .device_progress import stock_phase_progress
 
 
 _WINDOW_EVENT_TYPES = frozenset((
@@ -126,7 +150,7 @@ _WINDOW_EVENT_TYPES = frozenset((
 
 from soundbox import (
     browser_cache, engine, file_locations, imports, libcache,
-    manifest as device_manifest, metadata, metadata_provenance, paths, rekordbox_db,
+    manifest as device_manifest, metadata, paths, rekordbox_db,
     rockbox_config, smart_playlist_order, track_analysis,
 )
 from soundbox.device_profile import plan_stock_ipod_export
@@ -158,6 +182,7 @@ from .prep_grid import BpmValue, grid_edit_buttons, quantize_button
 from .grid_controller import GridEditController
 from .wordmark import Wordmark
 from .keyboard import KeyboardRouter, Keymap, event_binding
+from .inline_drafts import add_recovery_actions, observe_inline_commit, preserve_inline_drafts
 from .usb_device_view import UsbDevicePages
 from .model import (
     COLUMNS, TrackModel, row_matches as _row_matches,
@@ -355,7 +380,13 @@ from .analysis_priority import AnalysisPriorityMixin
 from .playlist_folders import PlaylistFoldersMixin
 from .cdj import CdjDeviceMixin
 from .export_dialog import ExportSelectionMixin
-from .track_menu import TrackMenuButton, TrackMenuMixin
+from .track_menu import TrackMenuButton, TrackMenuMixin, capture_tracks, source_scope
+
+
+def _edit_footer_text(controller):
+    """Keep lifecycle busy state separate from foreground status presentation."""
+    message = getattr(controller, 'footer_status_text', None)
+    return message if isinstance(message, str) else getattr(controller, 'update_status_text', '')
 
 
 class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, AnalysisPriorityMixin, TrackInfoMixin, TrackMenuMixin, ExportSelectionMixin, CdjDeviceMixin, SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
@@ -377,6 +408,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         self._state_repository = StateRepository(self._data_file)
         self._state_maintenance = False
         self._state_publication = False
+        self._state_committer = None
         self._libcache_path = data_dir / "libcache.json"  # last lib snapshot (instant paint)
         self.art_cache = ArtCache(data_dir / "art")  # cover-art cache
         # One-time Rockbox-safety sweep: any cached art that isn't baseline JPEG
@@ -424,6 +456,9 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         self._rekordbox_connection_error = ""
         self._libcache_worker = None
         self._libcache_pending = None
+        self._cache_process = None
+        self.native_reader = None
+        self._cache_tasks = TaskOwner(self)
         self._import_location_worker = None
         self._shutting_down = False
         self._resync_worker: ResyncWorker | None = None
@@ -455,6 +490,12 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         self._stock_view_callbacks: dict[str, list] = {}
         self._stock_view_cache: dict[
             str, tuple[StockIpodSnapshot, CompositeDeviceData | None]] = {}
+        self._stock_catalog_witness_cache = {}
+        self._device_finalization_token = None
+        self._device_finalization_mounts = {}
+        self._device_finalization_refreshing = False
+        self._eject_owner = None
+        self._eject_session = None
         self._stock_view_warming: set[str] = set()
         self._stock_view_failures: dict[str, str] = {}
         self._device_coordinator = DeviceOperationCoordinator()
@@ -518,6 +559,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         # state again later would also lose the repository's recovery receipt.
         self._initial_state = self._state_repository.load()
         self.settings.update(self._initial_state.get('settings') or {})
+        self._prepare_library_processes()
         self._apply_theme_color(self.settings.get('theme_accent'), save=False)
         self.playlist_controller = PlaylistEditController(self)
         self.tag_definition_controller = TagDefinitionController(self)
@@ -565,8 +607,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         self._settings_save_timer = QTimer(self)
         self._settings_save_timer.setSingleShot(True)
         self._settings_save_timer.setInterval(400)
-        self._settings_save_timer.timeout.connect(
-            lambda: self._save_state(invalidate_views=False))
+        self._settings_dirty_keys = set()
+        self._settings_save_timer.timeout.connect(self._flush_settings_preferences)
         self._art_status_timer = QTimer(self)
         self._art_status_timer.setSingleShot(True)
         self._art_status_timer.setInterval(500)
@@ -678,12 +720,20 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
     @cached_property
     def stock_ipod_pages(self):
         pages = StockIpodPages()
-        pages.confirm_model_requested.connect(self._confirm_current_stock_model)
         pages.stack.currentChanged.connect(self._remember_stock_device_view)
         pages.delete_playlists_requested.connect(self._begin_stock_playlist_delete)
         pages.playlist_order_requested.connect(self._apply_composite_playlist_order)
+        from .stock_catalog_sync import request_sync
+        pages.sync_requested.connect(lambda selected: request_sync(self, selected))
+        pages.export_requested.connect(lambda: self._show_export_dialog(self._current_device_path)
+            if not self._shutting_down and not self._state_maintenance else None)
         self._replace_device_page(1, pages)
         return pages
+
+    @cached_property
+    def stock_catalog_witness_store(self):
+        from soundbox.stock_ipod_catalog_state import StockCatalogWitnessStore
+        return StockCatalogWitnessStore(self._data_file.parent / 'stock_catalog_state')
 
     @cached_property
     def usb_device_pages(self):
@@ -831,6 +881,9 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             self._sync_playlists_cache = None
         try:
             if self._state_publication:
+                committer=getattr(self,'_state_committer',None)
+                if getattr(self,'_settings_dirty_keys',None):self._flush_settings_preferences()
+                if committer is not None and committer.pending:committer.defer_save()
                 return False
             self._state_repository.save({
                 "custom": self.custom,
@@ -846,6 +899,9 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 "last_xml": self._last_xml,
                 "settings": self.settings,
             })
+            getattr(self,'_settings_dirty_keys',set()).clear()
+            committer=getattr(self,'_state_committer',None)
+            if committer is not None:committer.preferences_saved()
             self.setWindowTitle("Soundbox")
             controller=getattr(self,'unification_controller',None)
             if controller:controller.schedule()
@@ -860,9 +916,25 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             self._flash_status("Library NOT saved — check available space/permissions and retry", 20)
             return False
 
+    def _commit_metadata_state(self,replacements,removals,committed,failed):
+        """Admit a small background delta; only its callback means durable save."""
+        from .state_commit import StateCommitter
+        if self._state_committer is None:self._state_committer=StateCommitter(self)
+        try:return self._state_committer.submit(replacements,removals,committed,failed)
+        except (OSError,ValueError,TypeError) as exc:
+            failed(exc);return True
+
+    def _commit_tag_state(self,replacements,removals,committed,failed,*,current):
+        """Admit a tag ACK; only the ordered durable callback publishes it."""
+        from .state_commit import StateCommitter
+        if self._state_committer is None:self._state_committer=StateCommitter(self)
+        try:return self._state_committer.submit(replacements,removals,committed,failed,current=current)
+        except (OSError,ValueError,TypeError) as exc:
+            failed(exc);return True
+
     # ---------- settings ----------
 
-    def _build_artist_registry(self):
+    def _build_artist_registry(self, *, invalidate_rows=True):
         """Canonical-artist map, rebuilt each load: dedups spellings (DENNETT/
         dennett -> one artist, most-tracks spelling wins, collabs kept separate),
         rescues Unknown tracks from a known artist in the title, and gates the
@@ -870,24 +942,22 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         user's own overrides, so every manual fix teaches the deriver."""
         if self.lib is None:
             return
-        scope = dict(source=str(self.lib.source),kind=self.lib.source_kind,library_id=self.lib.source_library_id)
-        by_local = {}
-        for row in self.settings.get('source_truth_artist_origins',{}).values():
-            if not isinstance(row,dict) or row.get('scope') != scope:
-                continue
-            local = row.get('local_id')
-            by_local[local] = None if local in by_local else row
-        bases, trusted = [], []
-        for track in self.lib.tracks_by_id.values():
-            origin = None if track.track_id in self.lib.source_binding_issues else by_local.get(track.track_id)
-            name, artist, fulfilled = metadata_provenance.display_registry_inputs(track,scope,origin)
-            bases.append(metadata.derive_artist(name,artist)[0])
-            if artist:
-                trusted.append(artist)
-            if fulfilled is not None and track.track_id not in self.overrides:
-                trusted.append(fulfilled)
-        trusted.extend(v for v in self.overrides.values() if v.strip())
+        from .prepared_browser import registry_inputs
+        bases,trusted,self._artist_registry_prepared=registry_inputs(
+            self.lib,self.settings.get('source_truth_artist_origins',{}),self.overrides,
+            getattr(self,'_artist_registry_prepared',None))
+        self._artist_registry_changed_ids=self._artist_registry_prepared['changed_ids']
         previous = self.lib.artist_registry or getattr(self,'_display_registry',None)
+        from collections import Counter
+        # The registry votes by spelling/count, never source iteration order.
+        # An acknowledged override can move the same trusted vote into its
+        # origin row without changing any canonical/trusted lookup semantics.
+        inputs=(frozenset(Counter(bases).items()),frozenset(Counter(trusted).items()),
+                frozenset(self.aliases.items()))
+        if inputs==getattr(self,'_artist_registry_inputs',None) and previous is not None:
+            self.lib.artist_registry=previous
+            if invalidate_rows:self._invalidate_rows()
+            return
         registry = metadata.build_registry(bases, trusted, self.aliases)
         self.lib.artist_registry = previous if metadata.registry_context_equal(previous,registry) else registry
         unaliased = (metadata.build_registry(bases, trusted)
@@ -895,14 +965,17 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         previous_unaliased = getattr(self,'_metadata_unaliased_registry',None)
         self._metadata_unaliased_registry = (previous_unaliased
             if metadata.registry_context_equal(previous_unaliased,unaliased) else unaliased)
-        self._invalidate_rows()  # canonical spellings may have changed
+        self._artist_registry_inputs=inputs
+        if invalidate_rows:self._invalidate_rows()  # canonical spellings may have changed
 
-    def _default_to_collection(self):
+    def _default_to_collection(self, *, force=False):
         """On open (or any load with nothing selected), land on the Collection
         view instead of an empty table."""
-        if (self.tree.currentItem() is None
-                and self.sb_tree.currentItem() is None
-                and self.sb_tree.topLevelItemCount()):
+        if self.stack.currentIndex() == 1 and not force:
+            return  # An open device is already a complete navigation choice.
+        if (self.sb_tree.topLevelItemCount() and (force or
+                self.tree.currentItem() is None and self.sb_tree.currentItem() is None)):
+            if force:self._select_only(self.sb_tree)
             self.sb_tree.setCurrentItem(self.sb_tree.topLevelItem(0))
 
     def _annotate_art(self, rows: list[dict]) -> list[dict]:
@@ -1096,8 +1169,14 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         self._row_cache.update(res)
         LOG.info("Row cache warmed: %d rows", len(res))
 
+    @preserve_inline_drafts
     def _reload_current_view(self):
         """Refresh rows without stealing the user's selection or scroll seat."""
+        if self.stack.currentIndex() == 1:
+            # The retained desktop view key is not the active device page.
+            # Its prepared data is refreshed by library publication; an ordinary
+            # browser click will render it without touching device controls now.
+            return
         seat=self._browser_seat()
         previous=self.model._rows
         self._render_current_view()
@@ -1187,6 +1266,13 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         # constructing a page. Only input, browser geometry and quit belong here.
         if event_type not in _WINDOW_EVENT_TYPES:
             return super().eventFilter(obj, ev)
+        if event_type in (QEvent.KeyPress, QEvent.MouseButtonPress, QEvent.MouseButtonDblClick,
+                          QEvent.Wheel, QEvent.ApplicationDeactivate, QEvent.ApplicationActivate):
+            drafts = vars(self).get('_inline_drafts')
+            if drafts is not None:
+                drafts.gesture += 1
+                if event_type == QEvent.ApplicationDeactivate:drafts.inactive = True
+                elif event_type == QEvent.ApplicationActivate:drafts.inactive = False
         tags_button = getattr(self, 'my_tags', None)
         if tags_button is not None:
             if event_type in (QEvent.MouseButtonPress, QEvent.MouseButtonDblClick):
@@ -1395,7 +1481,11 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         if not panel._loaded:
             self._flash_status('Load a track before setting a cue',5);return False
         kind='hot' if panel.pages.currentIndex()==0 else 'memory'
-        slot=next((i for i,cue in enumerate(panel._cues[kind]) if cue is None),None)
+        prep=getattr(self,'prep_controller',None)
+        staged=prep.requested_cues(self.player_bar.current_track()) if prep else None
+        occupied=({cue['slot'] for cue in staged if cue['kind']==kind} if staged is not None
+                  else {i for i,cue in enumerate(panel._cues[kind]) if cue is not None})
+        slot=next((i for i in range(8) if i not in occupied),None)
         if slot is None:
             self._flash_status('All '+('Hot Cue' if kind=='hot' else 'Memory Cue')+' slots are full',5);return False
         return self._edit_cue(kind,slot,'add')
@@ -1585,7 +1675,9 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             analysis_path=getattr(t, "source_analysis_path", ""),
             autoplay=autoplay,
             detected_analysis=self._analysis_result(t),
-            cues=(self.tag_controller.session_cues(t.track_id)
+            cues=(self.prep_controller.cue_rows(t.track_id)
+                  if self.prep_controller.handles(t.track_id) else
+                  self.tag_controller.session_cues(t.track_id)
                   if self.tag_controller.lib is self.lib else getattr(t, "source_cues", None)))
         self._sync_cue_editing()
         self._highlight_now_playing(t.track_id)
@@ -1749,6 +1841,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             self._highlight_now_playing(tid)
         self.table.setFocus()
 
+    @observe_inline_commit
     def _on_cell_edited(self, field: str, track_id: str, value: str):
         if not track_id or field not in ('title','artist'):
             return False
@@ -1800,25 +1893,31 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         # screen (the gear switches pages; Settings has its own Back button).
         self.body_stack = QStackedWidget()
 
-        # page 0: fixed sidebar + main area (no splitter — sidebar can't be hidden).
-        body = QWidget()
-        bl = QHBoxLayout(body)
-        bl.setContentsMargins(0, 0, 0, 0)
-        bl.setSpacing(0)
-        bl.addWidget(self._sidebar())
-        divider = QWidget()  # full-height vertical line between sidebar and main
-        divider.setObjectName("VDivider")
-        divider.setFixedWidth(1)
-        divider.setAttribute(Qt.WA_StyledBackground, True)
-        bl.addWidget(divider)
-        bl.addWidget(self._main_stack(), 1)
-        self.body_stack.addWidget(body)
+        self.body_stack.addWidget(self._browser_body())
 
         # Reserve its slot; all Settings controls are prepared during startup.
         self.body_stack.addWidget(QWidget())
         outer.addWidget(self.body_stack, 1)
 
         outer.addWidget(self._bottom_bar())
+
+    def _browser_body(self):
+        """Resize the shared playlist/device column without collapsing either pane."""
+        split = QSplitter(Qt.Horizontal)
+        split.setChildrenCollapsible(False)
+        split.setHandleWidth(5)
+        split.addWidget(self._sidebar())
+        content = self._main_stack()
+        content.setMinimumWidth(320)
+        split.addWidget(content)
+        split.setStretchFactor(0, 0)
+        split.setStretchFactor(1, 1)
+        handle = split.handle(1)
+        handle.setObjectName('VDivider')
+        handle.setAttribute(Qt.WA_StyledBackground, True)
+        self._browser_split = split
+        split.splitterMoved.connect(self._save_sidebar_width)
+        return split
 
     def _top_bar(self) -> QWidget:
         bar = QWidget(); bar.setObjectName("TopBar")
@@ -2047,7 +2146,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             self.quantize_btn.blockSignals(blocked)
         self.settings['quantize'] = enabled
         if save:
-            self._schedule_settings_save()
+            self._schedule_settings_save('quantize')
 
     def _sync_grid(self):
         if not hasattr(self, 'grid_edit_buttons'):
@@ -2172,7 +2271,12 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
     def _sync_edit_status(self):
         if not hasattr(self, 'status_label'):
             return
-        message = self.tag_controller.update_status_text
+        message = _edit_footer_text(self.tag_controller)
+        if self._edit_status_deferred():
+            if message:
+                self._deferred_edit_status = message
+            return
+        self._deferred_edit_status = ''
         if message and (message != self._prep_update_message
                         or self.status_label.text() != message):
             self._prep_update_message = message
@@ -2180,7 +2284,16 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
 
     def _finish_edit_status(self, *, quiet=False):
         """Only verified save callbacks can report completion, never probes."""
-        if self.tag_controller.update_status_text:
+        if self._edit_status_deferred():
+            message = _edit_footer_text(self.tag_controller)
+            if message:
+                self._deferred_edit_status = message
+            elif self._prep_update_message or getattr(self, '_deferred_edit_status', ''):
+                self._deferred_edit_status = '' if quiet else 'Done'
+            if not message:
+                self._prep_update_message = ''
+            return
+        if _edit_footer_text(self.tag_controller):
             self._sync_edit_status()
         elif self._prep_update_message:
             previous = self._prep_update_message
@@ -2190,6 +2303,36 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                     self._set_status_text('Ready')
             else:
                 self._flash_status('Done', 2)
+
+    def _edit_status_deferred(self):
+        """A foreground device command owns the status, including its waits."""
+        return bool(getattr(self, '_cancelling', False) or self._device_operation_owned()
+                    or getattr(self, '_source_sync_waiting', None) is not None
+                    or getattr(self, '_cdj_waiting', None) is not None)
+
+    def _restore_edit_status(self):
+        if self._edit_status_deferred():
+            return
+        notice = getattr(self, '_deferred_background_notice', None)
+        if notice is not None:
+            self._deferred_background_notice = None
+            self._deferred_edit_status = ''
+            self._flash_status(*notice)
+            return
+        if _edit_footer_text(self.tag_controller):
+            self._sync_edit_status()
+        elif getattr(self, '_deferred_edit_status', ''):
+            message = self._deferred_edit_status
+            self._deferred_edit_status = ''
+            self._prep_update_message = ''
+            self._flash_status(message, 2)
+
+    def _background_notice(self, message, seconds=15):
+        """Retain attention without taking the foreground device's status row."""
+        if self._edit_status_deferred():
+            self._deferred_background_notice = (message, seconds)
+            return
+        self._flash_status(message, seconds)
 
     def _sync_cue_editing(self):
         pb = self.player_bar
@@ -2212,8 +2355,12 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         track = self.lib.tracks_by_id.get(track_id) if self.lib else None
         if not track or str(track.path) != pb._src_path:
             return False
-        if operation == 'delete' and pb.cue_panel._cues[kind][slot] is None:
-            return False
+        if operation == 'delete':
+            prep=getattr(self,'prep_controller',None)
+            staged=prep.requested_cues(track_id) if prep else None
+            present=(any(cue['kind']==kind and cue['slot']==slot for cue in staged)
+                     if staged is not None else pb.cue_panel._cues[kind][slot] is not None)
+            if not present:return False
         local_reason = self._local_cue_reason(track_id)
         reason = local_reason if local_reason is not None else self.tag_controller.cue_reason(track_id)
         if reason:
@@ -2260,7 +2407,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             self._flash_status('Tags saved in the original library; current library unchanged',15)
             return
         order_error=''
-        if context:
+        if context and getattr(self.tag_controller,'durable_assignment_ack',False) is not True:
             missing=object();previous=self.settings.get(smart_playlist_order.KEY,missing)
             try:
                 after=smart_playlist_order.record(None if previous is missing else previous,context[2],lib)
@@ -2272,9 +2419,13 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                         order_error='Tags saved; smart-playlist display order could not be saved'
             except ValueError as exc:
                 order_error='Tags saved; '+str(exc)
+        elif getattr(self.tag_controller,'durable_assignment_ack',False) is True:
+            order_error=getattr(self.tag_controller,'order_error','')
         seat = self._browser_seat() if self.stack.currentIndex() == 0 else None
-        self._on_refresh_done(lib)
-        if seat is not None and self.stack.currentIndex() == 0:self._restore_browser_seat(seat)
+        previous_rows=self.model._rows
+        self._on_refresh_done(lib,prepared_native_ids=())
+        if seat is not None and self.stack.currentIndex() == 0 and self.model._rows is not previous_rows:
+            self._restore_browser_seat(seat)
         self._finish_tag_refresh()
         self._finish_edit_status()
         if order_error:self._flash_status(order_error,15)
@@ -2292,7 +2443,9 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         controller = self.tag_controller
         track = controller.lib.tracks_by_id.get(track_id) if controller.lib else None
         if track is not None:
-            self.player_bar.refresh_live_cues(track_id, track.path, controller.session_cues(track_id))
+            cues=(self.prep_controller.cue_rows(track_id)
+                  if self.prep_controller.handles(track_id) else controller.session_cues(track_id))
+            self.player_bar.refresh_live_cues(track_id, track.path, cues)
         self._sync_edit_status()
 
     def _tag_failed(self, error):
@@ -2324,19 +2477,37 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             text, Qt.ElideRight, available))
         self.now_playing.setToolTip("")
 
-    def _schedule_settings_save(self):
-        """Coalesce preferences; curation/backup/shutdown still flush immediately."""
+    def _schedule_settings_save(self, *keys):
+        """Coalesce exact preference leaves without a whole-library GUI save."""
+        from .state_commit import PREFERENCE_KEYS
+        if not keys or any(key not in PREFERENCE_KEYS for key in keys):
+            raise ValueError('Preference saves require explicit UI preference keys')
+        self._settings_dirty_keys.update(keys)
         if not self._shutting_down and not self._state_maintenance:
             self._settings_save_timer.start()
 
+    def _flush_settings_preferences(self):
+        """Admit detached preference leaves; enqueueing never means durable save."""
+        keys=frozenset(getattr(self,'_settings_dirty_keys',()))
+        if not keys:return True
+        from .state_commit import StateCommitter
+        if self._state_committer is None:self._state_committer=StateCommitter(self)
+        values={key:self.settings[key] for key in keys if key in self.settings}
+        removals=keys-values.keys()
+        if not self._state_committer.queue_preferences(values,removals):
+            self._flash_status('Preferences could not be saved — retry after fixing storage',20)
+            return False
+        self._settings_dirty_keys.difference_update(keys)
+        return True
+
     def _on_jump_mode_changed(self, mode: str):
         self.settings["beat_jump_mode"] = mode
-        self._schedule_settings_save()
+        self._schedule_settings_save('beat_jump_mode')
 
     def _on_waveform_zoom_changed(self, pixels_per_second: float):
         self.settings["waveform_zoom"] = pixels_per_second
         self._sync_grid()
-        self._schedule_settings_save()
+        self._schedule_settings_save('waveform_zoom')
 
     def _toggle_autoplay_mode(self, mode: str):
         self._set_autoplay_mode("" if self._autoplay_mode == mode else mode)
@@ -2365,7 +2536,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 button.update()
         self.settings["autoplay_mode"] = mode
         if save and changed:
-            self._schedule_settings_save()
+            self._schedule_settings_save('autoplay_mode')
 
     def _on_playback_active(self, active: bool):
         """Reserve CPU/UI time for the deck while audio is running."""
@@ -2403,7 +2574,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         return w
 
     def _sidebar(self) -> QWidget:
-        panel = QWidget(); panel.setObjectName("Sidebar"); panel.setFixedWidth(272)
+        panel = QWidget(); panel.setObjectName("Sidebar"); panel.setMinimumWidth(160)
         panel.setAttribute(Qt.WA_StyledBackground, True)  # paint the right divider
         v = QVBoxLayout(panel); v.setContentsMargins(0, 0, 0, 0); v.setSpacing(0)
 
@@ -2416,6 +2587,9 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         self.tree = UnifiedPlaylistTree()
         self.sb_tree = self.tree  # compatibility names refer to the same model/scrollbar
         self.tree.setHeaderHidden(True)
+        self.tree.header().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.tree.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.tree.setTextElideMode(Qt.ElideRight)
         self.tree.setMinimumHeight(72)
         self.tree.currentItemChanged.connect(self._on_playlist_select)
         self.tree.itemExpanded.connect(self._collapse_siblings)
@@ -2434,6 +2608,9 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
 
         self.device_tree = DeviceTree()
         self.device_tree.setHeaderHidden(True)
+        self.device_tree.header().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.device_tree.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.device_tree.setTextElideMode(Qt.ElideRight)
         self.device_tree.setMinimumHeight(48)  # was fixed 96 — now user-sized
         self.device_tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.device_tree.customContextMenuRequested.connect(self._device_menu)
@@ -2584,7 +2761,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         self.device_sync_btn.setObjectName("DeviceAction")
         self.device_sync_btn.setFixedHeight(22)
         self.device_sync_btn.clicked.connect(
-            lambda: self._show_export_dialog(self._current_device_path))
+            self._device_primary_action)
         dhh.addWidget(self.device_sync_btn)
         self.eject_btn = QPushButton("⏏ Eject")
         self.eject_btn.setObjectName("DeviceAction")
@@ -2737,8 +2914,16 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
 
     def _source_selection_reason(self, path=None):
         tags = getattr(self, 'tag_controller', None)
+        prep = getattr(self, 'prep_controller', None)
+        if getattr(prep, 'admission_pending', False):
+            return 'Finish cue/grid saves before changing library sources'
+        if getattr(prep, 'admission_error', ''):
+            return 'Cue/grid save needs attention before changing library sources'
         if (self._refresh_worker is not None or self._state_maintenance or self._shutting_down
+                or getattr(self,'_state_publication',False) or getattr(tags,'state_commit_owned',False)
+                or getattr(getattr(self,'_state_committer',None),'pending',False)
                 or self._device_operation_owned() or getattr(tags, 'busy', False)
+                or getattr(tags, 'owned', False)
                 or getattr(tags, 'checking', False) or getattr(tags, 'admission_paused', False)
                 or getattr(self, '_analysis_worker', None) is not None
                 or getattr(getattr(self, '_import_tasks', None), 'pending', 0)):
@@ -2809,16 +2994,16 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             self._last_xml = previous_path
             self._flash_status('Library selection could not be saved; the previous library is retained', 10)
             return False
+        reset_navigation = not initial and source_scope(self.lib) != source_scope(library)
         self.lib = library
         LOG.info("Loaded %s: %d tracks, %d playlists",
                  Path(path).name, self.lib.track_count, len(self.lib.playlists))
         self._rekordbox_source_verified = True
         self._rekordbox_connection_error = ""
-        self._apply_loaded_library()
+        self._apply_loaded_library(**({'reset_navigation': True} if reset_navigation else {}))
         QTimer.singleShot(0,self,self._resume_analysis_jobs)
         self._sync_rekordbox_connection()
         self._refresh_devices()
-        self.stack.setCurrentIndex(0)
         self._cache_library()  # snapshot for the next instant paint
         self._arm_waveform_rechecks()
         self.unification_controller.schedule()
@@ -2828,11 +3013,13 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         QTimer.singleShot(500, self._maybe_fill_waveforms)
         return True
 
-    def _apply_loaded_library(self, *, already_projected=False):
-        """Shared post-load wiring: fold in imported tracks, (re)build the artist
-        registry, apply hide settings, repopulate the sidebar + land on
-        Collection. Used by open_library, the live-refresh completion, AND the
-        instant paint from the on-disk snapshot."""
+    def _apply_loaded_library(self, *, already_projected=False,prepared_native_ids=None,
+                              reset_navigation=False):
+        """Prepare the loaded source without replacing the current device page.
+
+        Source selection explicitly resets navigation; ordinary readback and
+        metadata acknowledgements retain the user's latest presentation choice.
+        """
         # A fresh library can have different add-times than the one it replaces
         # (the instant-paint snapshot vs the live rekordbox read), so the per-path
         # landed-time cache MUST be dropped — otherwise a birthtime computed off
@@ -2849,15 +3036,18 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             self._rekordbox_source_verified=False
             self._rekordbox_connection_error='Native identity needs reconciliation: '+str(exc)
             LOG.error('%s',self._rekordbox_connection_error)
+        prepared_only=prepared_native_ids is not None
+        previous_browser_generation=self._cache_gen
         self.tag_controller.configure(self.lib, self._rekordbox_source_verified)
-        if (not self.grid_controller.pending(self.player_bar.current_track())
-                and not self.grid_controller.is_local(self.player_bar.current_track())):
-            self.player_bar.clear_live_grid()
-        self.grid_controller.configure()
-        self._landed_cache.clear()
+        if not prepared_only:
+            if (not self.grid_controller.pending(self.player_bar.current_track())
+                    and not self.grid_controller.is_local(self.player_bar.current_track())):
+                self.player_bar.clear_live_grid()
+            self.grid_controller.configure()
+            self._landed_cache.clear()
         self._sync_playlists_cache = None
         had_view=bool(getattr(self,'_view_key',None))
-        repaired = imports.inject(self.lib, self.imported)  # livesets rejoin the pool
+        repaired = 0 if prepared_only else imports.inject(self.lib, self.imported)  # livesets rejoin the pool
         if repaired:
             LOG.info("Repaired duration/size metadata for %d imported track(s)",
                      repaired)
@@ -2875,45 +3065,114 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         # Retain scalar native comparison inputs during the existing browser
         # inventory pass. Refresh workers reuse this owned map without cloning
         # the Library, cue/reference graphs or saved beat arrays.
-        native_metadata = {}
+        previous_track_inputs=getattr(self,'_display_track_inputs',None)
+        incremental_inputs=bool(prepared_only and previous_track_inputs is not None
+                                and getattr(self,'_display_input_generation',None)==previous_browser_generation
+                                and len(previous_track_inputs)==len(self.lib.tracks_by_id)
+                                and previous_track_inputs.keys()==self.lib.tracks_by_id.keys())
+        native_metadata = dict(self._metadata_native_index) if incremental_inputs else {}
+        track_inputs=dict(previous_track_inputs) if incremental_inputs else {}
         def display_input(t):
             identity = t.native_id
             pin = (t.source_uuid, t.source_native_path or str(t.path), t.name, t.artist)
-            native_metadata[identity] = None if identity in native_metadata else pin
-            return tuple(getattr(t, f) for f in (
+            if incremental_inputs:
+                if native_metadata.get(identity) is not None:native_metadata[identity]=pin
+            else:native_metadata[identity] = None if identity in native_metadata else pin
+            value=tuple(getattr(t, f) for f in (
                 'track_id', 'name', 'artist', 'location_uri', 'bpm', 'key',
                 'total_time', 'date_added', 'added_ts', 'genre', 'kind',
                 'size', 'bitrate', 'rating', 'year', 'imported')) + (json.dumps(t.info,sort_keys=True),)
+            track_inputs[t.track_id]=value
+            return value
+        if incremental_inputs:
+            scalar_inputs=set(self._display_inputs[0])
+            for identity in prepared_native_ids:
+                track=self.lib.tracks_by_id.get(identity)
+                if track is not None:
+                    scalar_inputs.discard(track_inputs[identity])
+                    scalar_inputs.add(display_input(track))
+            scalar_inputs=frozenset(scalar_inputs)
+        else:scalar_inputs=frozenset(display_input(t) for t in self.lib.tracks_by_id.values())
         display_inputs = (
-            frozenset(display_input(t) for t in self.lib.tracks_by_id.values()),
+            scalar_inputs,
             tuple(sorted(self.overrides.items())), tuple(sorted(self.titles.items())),
             tuple(sorted(self.aliases.items())), tuple(self._title_junk()),
         )
         reuse = display_inputs == getattr(self, '_display_inputs', None)
-        if reuse:
+        previous_registry=getattr(self,'_display_registry',None)
+        if reuse and not prepared_only:
             self.lib.artist_registry = self._display_registry
         else:
-            self._build_artist_registry()
-        self._apply_settings_to_lib(invalidate_rows=not reuse)
+            if prepared_only:self._build_artist_registry(invalidate_rows=False)
+            else:self._build_artist_registry()
+        if prepared_only:
+            # Source compatibility compares incoming/current Tracks. Retain
+            # the detached painted baseline too: a mutable current Track may
+            # already equal the incoming value while its cached row is older.
+            extra=set(self._artist_registry_changed_ids)-set(prepared_native_ids)
+            if incremental_inputs and extra:
+                scalar_inputs=set(scalar_inputs)
+                for identity in extra:
+                    scalar_inputs.discard(track_inputs[identity])
+                    scalar_inputs.add(display_input(self.lib.tracks_by_id[identity]))
+                display_inputs=(frozenset(scalar_inputs),*display_inputs[1:])
+                reuse=display_inputs==getattr(self,'_display_inputs',None)
+            dirty=tuple(sorted(set(prepared_native_ids)|set(self._artist_registry_changed_ids)))
+            affected=(tuple(self.lib.tracks_by_id) if not metadata.registry_context_equal(
+                previous_registry,self.lib.artist_registry) else dirty)
+            self._apply_settings_to_lib(invalidate_rows=False,configure_artwork=False)
+            self._invalidate_rows(affected)
+        else:self._apply_settings_to_lib(invalidate_rows=not reuse)
         self._display_inputs = display_inputs
         self._display_registry = self.lib.artist_registry
         self._metadata_native_index = native_metadata
-        self._browser_cache_key = browser_cache.fingerprint(display_inputs)
-        if not reuse:
+        self._display_track_inputs=track_inputs
+        self._display_input_generation=self._cache_gen
+        self._browser_cache_inputs=display_inputs
+        # A disposable checkpoint can fingerprint these detached scalar inputs
+        # in its existing worker. Complete loads still need the key here to
+        # look up their prepared rows before the first interactive frame.
+        self._browser_cache_key = None if prepared_only else browser_cache.fingerprint(display_inputs)
+        if not reuse and not prepared_only:
             prepared_rows = browser_cache.load(
                 self._data_file.with_name('browsercache.json'), self._browser_cache_key)
             if prepared_rows is not None:
                 self._row_cache.update({tid: row for tid, row in prepared_rows.items()
                                         if tid in self.lib.tracks_by_id})
-        self._populate_tree(engine.summary(self.lib))
-        self.graveyard_controller.prepare_library()
-        self.tag_definition_controller.schedule()
-        self.metadata_controller.schedule()
-        self.shared_import_controller.schedule()
-        self.native_analysis_controller.discover()
-        self.media_controller.discover()
-        self._default_to_collection()
-        if had_view:self._reload_current_view()
+        from .prepared_browser import context as browser_context
+        current_browser_context=browser_context(self)
+        same_registry=metadata.registry_context_equal(previous_registry,self.lib.artist_registry)
+        if (prepared_only and same_registry and getattr(self,'_artists_context',None)==current_browser_context
+                and getattr(self,'_artists_library',None) is not None):
+            # Native/media compatibility was proved before this publication.
+            # Retain the prepared Artists baseline; its existing dirty-ID path
+            # still rebuilds every changed row and preserves fresh source data.
+            self._artists_library=self.lib
+        collection_refresh=(
+            (tuple(affected),previous_browser_generation,current_browser_context)
+            if prepared_only and same_registry else None)
+        if (prepared_only and same_registry
+                and getattr(self,'_tree_browser_context',None)==current_browser_context):
+            # Source identity, visibility and complete ordered organization are
+            # unchanged. Keep the existing tree items/editors/scroll position;
+            # only dirty Artists rows need their ordinary prepared publication.
+            self._prepare_artists(prepared_context=current_browser_context)
+        else:
+            self._populate_tree(engine.summary(self.lib))
+        if not prepared_only:
+            self.graveyard_controller.prepare_library()
+            self.tag_definition_controller.schedule()
+            self.metadata_controller.schedule()
+            self.shared_import_controller.schedule()
+            self.native_analysis_controller.discover()
+            self.media_controller.discover()
+            if reset_navigation:self._default_to_collection(force=True)
+            else:self._default_to_collection()
+        self._prepared_collection_refresh=collection_refresh
+        try:
+            if had_view:self._reload_current_view()
+        finally:
+            self._prepared_collection_refresh=None
 
     def _cache_library(self):
         """Snapshot the current library to disk OFF the UI thread, so the next
@@ -2931,24 +3190,77 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             return
         self._start_library_cache(self.lib)
 
+    def _prepare_library_processes(self):
+        """Ordinary engine services are ready before the first interaction."""
+        from soundbox.cache_process import CacheProcess
+        from soundbox.native_reader_process import NativeReaderProcess
+        root = self._data_file.parent
+        root.mkdir(parents=True, exist_ok=True)
+        self._cache_process = CacheProcess(root)
+        self.native_reader = NativeReaderProcess(root)
+        for label, service in (('Snapshot cache', self._cache_process),
+                               ('Native library reader', self.native_reader)):
+            try:
+                service.start()
+            except (OSError, RuntimeError, ValueError) as exc:
+                LOG.warning('%s helper unavailable: %s', label, exc)
+
+    def _close_library_processes(self):
+        """Join every helper off the GUI while Qt remains alive for teardown."""
+        from .workers import OneShotTask
+        services = [getattr(self, name, None) for name in ('_cache_process', 'native_reader')]
+        services = [service for service in services if service is not None]
+        if not services:
+            return
+
+        def close():
+            for service in services:
+                while True:
+                    try:
+                        service.close()
+                        break
+                    except (OSError, RuntimeError) as exc:
+                        process = service.process if hasattr(service, 'process') else service.worker.process
+                        if process is None or process.poll() is not None:
+                            LOG.warning('Library helper shutdown reported: %s', exc)
+                            break
+                        # A timeout closes admission but retains this actor.
+                        LOG.warning('Waiting for owned library helper: %s', exc)
+
+        class JoinTask(OneShotTask):
+            def cancel(self):
+                # Closing admission cannot cancel the required owned join.
+                pass
+
+        owner = TaskOwner(self)
+        worker = JoinTask(close)
+        owner.adopt(worker)
+        worker.start()
+        owner.drain()
+        owner.deleteLater()
+
     def _start_library_cache(self, lib):
-        if getattr(self, "_state_maintenance", False):
+        if getattr(self, "_state_maintenance", False) or getattr(self, '_shutting_down', False):
             return
         from .workers import OneShotTask
-        path = self._libcache_path
+        service = getattr(self, '_cache_process', None)
+        if service is None or not service.available:
+            return  # Disposable caches never choose a blocking GUI fallback.
         key = getattr(self, '_browser_cache_key', None)
+        inputs=(getattr(self,'_browser_cache_inputs',None)
+                if getattr(self,'_display_input_generation',None)==self._cache_gen
+                and getattr(self,'_browser_cache_inputs',None) is getattr(self,'_display_inputs',None)
+                else None)
         rows = {tid: dict(row) for tid, row in self._row_cache.items()}
         def save():
-            libcache.dump(lib, path)
-            if key is not None:
-                browser_cache.dump(self._data_file.with_name('browsercache.json'), key, rows)
+            service.write(lib, inputs, rows, key=key)
         w = OneShotTask(save,
                         log_label="Library snapshot cache")
         self._libcache_worker = w
         self._oneshots = getattr(self, "_oneshots", [])
         self._oneshots.append(w)
         w.done.connect(self._on_library_cache_done)
-        w.finished.connect(lambda ww=w: self._finish_library_cache(ww))
+        self._cache_tasks.adopt(w, self._finish_library_cache)
         w.start()
 
     def _on_library_cache_done(self, result):
@@ -3057,9 +3369,14 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             self.tree.verticalScrollBar().setValue(scroll)
             self.tree.horizontalScrollBar().setValue(horizontal)
         finally:
+            # Recursive closure cells must not retain borrowed Qt items or an
+            # obsolete Library beyond this synchronous publication.
+            visible = collect = reconcile = None
             self.tree.blockSignals(blocked)
             self.tree.setUpdatesEnabled(updates)
         self._native_pending_changed(presentation=presentation)
+        from .prepared_browser import context as browser_context
+        self._tree_browser_context=browser_context(self)
 
     def _make_item(self, node: dict) -> QTreeWidgetItem:
         it = QTreeWidgetItem()
@@ -3154,6 +3471,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         if not self._device_operation_owned():
             self._start_pulse("Loading")
         w = RefreshWorker(path)
+        w.native_reader = self.native_reader
         # A warm browser snapshot is not a completed publication checkpoint.
         # Each process's first verified source read re-derives all rows in its
         # worker, so a crash before a sparse plan saved cannot strand curation.
@@ -3192,14 +3510,31 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         if pending and not self._shutting_down:
             QTimer.singleShot(0, self._refresh_rekordbox)
 
-    def _on_refresh_done(self, lib, *, metadata_changed_ids=(), selection_path=None):
+    @preserve_inline_drafts
+    def _on_refresh_done(self, lib, *, metadata_changed_ids=(), selection_path=None,prepared_native_ids=None,
+                         projected_bindings_owner=None,projected_scope=None):
         try:
-            lib = shared_imports.project(lib,self.settings.get(shared_imports.BINDINGS,[]),unavailable={})
+            if projected_scope is not None:
+                if (projected_bindings_owner is None
+                        or self.settings.get(shared_imports.BINDINGS) is not projected_bindings_owner
+                        or projected_scope!=(str(lib.source),lib.source_library_id)):
+                    raise ValueError('Song registration identities changed during metadata refresh')
+            else:
+                lib = shared_imports.project(lib,self.settings.get(shared_imports.BINDINGS,[]),unavailable={})
             aliases = {binding['native_id']: binding['local_id']
                 for binding in self.settings.get(shared_imports.BINDINGS,[])
                 if (binding['source'],binding['library_id']) == (str(lib.source),lib.source_library_id)}
             changed_ids = tuple(aliases.get(identity,identity) if aliases.get(identity,identity) in lib.tracks_by_id
                                 else identity for identity in metadata_changed_ids)
+            if prepared_native_ids is not None:
+                from .native_publication import reuse_prepared_imports
+                prepared_native_ids=tuple(aliases.get(identity,identity) for identity in prepared_native_ids)
+                changed_display_ids=set()
+                if selection_path is not None or not reuse_prepared_imports(
+                        self.lib,lib,self.imported,changed_ids=changed_display_ids):
+                    prepared_native_ids=None
+                else:
+                    prepared_native_ids=tuple(sorted(set(prepared_native_ids)|changed_display_ids))
         except (ValueError,TypeError,KeyError,RuntimeError) as exc:
             self._rekordbox_connection_error = 'Native identity needs reconciliation: '+str(exc)
             self._rekordbox_source_verified = False
@@ -3224,10 +3559,17 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             self._stop_pulse()
         previous_registry = self.lib.artist_registry if self.lib else None
         previous_unaliased = getattr(self,'_metadata_unaliased_registry',None)
+        previous_library=self.lib
+        reset_navigation = previous_library is not None and source_scope(previous_library) != source_scope(lib)
         self.lib = lib
         self._rekordbox_source_verified = True
         self._rekordbox_connection_error = ""
-        self._apply_loaded_library(already_projected=True)
+        media=getattr(self,'media_controller',None)
+        if prepared_native_ids is not None and media is not None:
+            if not media.rebind_prepared_library(previous_library,lib):media.discover()
+        navigation = {'reset_navigation': True} if reset_navigation else {}
+        if prepared_native_ids is None:self._apply_loaded_library(already_projected=True,**navigation)
+        else:self._apply_loaded_library(already_projected=True,prepared_native_ids=prepared_native_ids,**navigation)
         controller = getattr(self,'metadata_controller',None)
         if controller is not None and changed_ids:
             # A changed canonical/trusted name can affect other raw rows (for
@@ -3239,8 +3581,9 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 changed_ids = tuple(self.lib.tracks_by_id)
             controller.publish_derived(self.lib,changed_ids=changed_ids,
                 context=(self.lib.artist_registry,self._metadata_unaliased_registry),verified=True)
-        QTimer.singleShot(0,self,self._resume_analysis_jobs)
-        self._refresh_devices()
+        if prepared_native_ids is None:
+            QTimer.singleShot(0,self,self._resume_analysis_jobs)
+            self._refresh_devices()
         LOG.info("Loaded %d tracks / %d playlists from rekordbox",
                  lib.track_count, len(lib.playlists))
         self._sync_rekordbox_connection()
@@ -3254,15 +3597,16 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             self._sync_edit_status()
         elif not self._rekordbox_source_verified:
             self._flash_status(self._rekordbox_connection_error,20)
-        elif not self._device_operation_owned():
+        elif not self._device_operation_owned() and prepared_native_ids is None and not metadata_changed_ids:
             self._flash_status("Updated ✓", 6)
         self._cache_library()  # refresh the snapshot for the next instant paint
-        self._arm_waveform_rechecks()
-        self.unification_controller.schedule()
-        if self.providers.allows("artwork.search"):
-            QTimer.singleShot(3000, self._maybe_autostart_art_fill)  # NEW tracks only
-        self._schedule_stock_artwork()
-        QTimer.singleShot(500, self._maybe_fill_waveforms)
+        if prepared_native_ids is None:
+            self._arm_waveform_rechecks()
+            self.unification_controller.schedule()
+            if self.providers.allows("artwork.search"):
+                QTimer.singleShot(3000, self._maybe_autostart_art_fill)  # NEW tracks only
+            self._schedule_stock_artwork()
+            QTimer.singleShot(500, self._maybe_fill_waveforms)
         return True
 
     def _on_refresh_fail(self, err):
@@ -3278,6 +3622,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
 
     def _rb_header_menu(self, widget, pos):
         menu = QMenu(self)
+        add_recovery_actions(self, menu)
         self._native_menu_actions(menu)
         menu.addSeparator()
         menu.addAction("Refresh from rekordbox", self._refresh_rekordbox)
@@ -3293,6 +3638,14 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             menu.addAction("Suggest artists for Unknowns…", self._suggest_artists)
         menu.addAction("Suggest artist merges…", self._suggest_merges)
         exec_transient_menu(menu, widget.mapToGlobal(pos))
+
+    def _set_metadata_background_paused(self,paused,expected_scope):
+        lib=self.lib
+        if not lib or (str(lib.source),lib.source_kind,lib.source_library_id)!=expected_scope:
+            self._flash_status('Library changed; reopen its menu',8);return False
+        if not self.metadata_controller.set_background_paused(paused):return False
+        self._sync_edit_status()
+        return True
 
     @_provider_action("artists.suggest")
     def _suggest_artists(self):
@@ -4062,7 +4415,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         if refresh is not None and not self._shutting_down:
             refresh.schedule()
 
-    def _prepare_artists(self, *, tracks=None):
+    @preserve_inline_drafts
+    def _prepare_artists(self, *, tracks=None, prepared_context=None):
         """Prepare the complete hidden view when library presentation changes."""
         if self._shutting_down or self._state_maintenance:
             return
@@ -4076,10 +4430,14 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         changed = [track for track in tracks if track.track_id not in previous
                    or dirty is None or track.track_id in dirty]
         prepared = {row['id']: row for row in self._artist_rows(changed)} if self.lib is not None else {}
+        filter_changed=True
         if (incremental and previous.keys() == {track.track_id for track in tracks}
                 and all((row['artist'], row['title']) == (previous[track_id]['artist'], previous[track_id]['title'])
                         for track_id, row in prepared.items())):
-            self._artists_browser.update_rows(list(prepared.values()))
+            from .prepared_browser import clean_row
+            displayed=[row for identity,row in prepared.items() if clean_row(row)!=clean_row(previous[identity])]
+            if displayed:self._artists_browser.update_rows(displayed)
+            filter_changed=bool(displayed)
             self._artists_rows = {**previous, **prepared}
         else:
             # Preserve chronological ties inside identical artist/title groups.
@@ -4091,11 +4449,13 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         self._artists_library = self.lib
         self._artists_dirty_ids = set()
         self._artists_generation = generation
+        from .prepared_browser import context as browser_context
+        self._artists_context = browser_context(self) if prepared_context is None else prepared_context
         for index in range(self.sb_tree.topLevelItemCount()):
             item = self.sb_tree.topLevelItem(index)
             if item.data(0, ARTISTS_ROLE):
                 item.setText(0, f'♪  Artists  ({len(self._artist_children)})')
-        self._filter_artists()
+        if filter_changed:self._filter_artists()
 
     def _show_artists(self, *, preserve=False):
         """Reveal the ready Artists tree; every song already has its row."""
@@ -4110,20 +4470,23 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             return
         tid = it.data(0, ARTIST_TRACK_ROLE)
         # Selection to act on: the track row (or every track of a header row).
-        ids = ArtistsTree._ids(self.artists_view.selectedItems() or [it])
+        selected = self.artists_view.selectedItems()
+        ids = ArtistsTree._ids(selected if it in selected else [it])
         if not ids:
             return
         col = self.artists_view.columnAt(pos.x())
         menu = QMenu(self)
+        binding = capture_tracks(self, ids)
         if tid and col in (0, 1):
-            menu.addAction("Edit", lambda: (self.artists_view.setCurrentItem(it, col),
-                                            self.artists_view.editItem(it, col)))
+            menu.addAction("Edit", self._artists_menu_edit(tid, col))
         if self.custom:  # add to an existing SoundBox playlist (drag also works)
             sub = menu.addMenu(f"Add {len(ids)} to Playlist" if len(ids) > 1
                                else "Add to Playlist")
             for name in self.custom:
-                sub.addAction(name, lambda n=name, i=list(ids): self._on_tracks_dropped(n, i))
-        self._add_track_file_actions(menu, ids, reveal=bool(tid))
+                sub.addAction(name, self._playlist_menu_action(binding, name,
+                    lambda n=name, i=list(ids): self._on_tracks_dropped(n, i)))
+        self._add_track_file_actions(menu, ids, reveal=bool(tid), binding=binding)
+        add_recovery_actions(self, menu)
         exec_transient_menu(menu, self.artists_view.viewport().mapToGlobal(pos))
 
     def _on_artist_item_edited(self, item, col):
@@ -4152,15 +4515,48 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             self._load_track(t)
 
     def _show_collection(self):
-        self.model.set_rows(self._annotate_art(
-            self._rows_for(self._collection_tracks())))
+        from .prepared_browser import clean_row, context as browser_context
+        prepared=getattr(self,'_prepared_collection_refresh',None)
+        baseline=getattr(self,'_collection_prepared',None)
+        if (prepared is not None and baseline is not None
+                and prepared[1]==baseline[1] and prepared[2]==baseline[0]
+                and baseline[2] is self.model._all_rows):
+            changed=set(prepared[0]);previous=self.model._all_rows
+            by_id={row['id']:row for row in previous}
+            # Collection is unique by logical ID. Native playlist occurrence
+            # identity/order continues through the ordinary playlist renderer.
+            sort_keys=baseline[3]
+            if len(by_id)==len(previous) and by_id.keys()==sort_keys.keys():
+                tracks=[self.lib.tracks_by_id[identity] for identity in changed if identity in by_id]
+                updates={row['id']:row for row in self._annotate_art(
+                    [self._row_for(track) for track in tracks])}
+                revised={track.track_id:(-self._landed_time(track),track.name.casefold(),
+                                         track.name.lower(),sort_keys[track.track_id][-1]) for track in tracks}
+                raw_order_changed=any(sort_keys[identity]!=key for identity,key in revised.items())
+                if raw_order_changed:
+                    sort_keys={**sort_keys,**revised}
+                    order=sorted(by_id,key=sort_keys.__getitem__)
+                else:order=list(by_id)
+                same_order=all(identity==row['id'] for identity,row in zip(order,previous,strict=True))
+                if (not same_order or any(clean_row(row)!=clean_row(by_id[key]) for key,row in updates.items())):
+                    if not same_order or not self.model.patch_rows(updates):
+                        self.model.set_rows([updates.get(identity,by_id[identity]) for identity in order])
+                self._collection_prepared=(prepared[2],self._cache_gen,self.model._all_rows,sort_keys)
+                self.stack.setCurrentIndex(0)
+                return
+        tracks=self._collection_tracks()
+        self._set_refreshed_rows(self._annotate_art(self._rows_for(tracks)))
+        positions={identity:index for index,identity in enumerate(self.lib.tracks_by_id)} if self.lib else {}
+        sort_keys={track.track_id:(-self._landed_time(track),track.name.casefold(),track.name.lower(),
+                                  positions[track.track_id]) for track in tracks}
+        self._collection_prepared=(browser_context(self),self._cache_gen,self.model._all_rows,sort_keys)
         self.stack.setCurrentIndex(0)
 
     def _show_custom(self, name: str):
         tracks = [t for i in self.custom.get(name, [])
                   if i not in self.hidden
                   and (t := self.lib.tracks_by_id.get(i) if self.lib else None)]
-        self.model.set_rows(self._annotate_art(self._rows_for(tracks)))
+        self._set_refreshed_rows(self._annotate_art(self._rows_for(tracks)))
         self.stack.setCurrentIndex(0)
 
     # ---------- devices ----------
@@ -4208,22 +4604,15 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         return self._sync_playlists_cache
 
     def _device_label(
-            self, name: str, free, drift: int | None, fs: str = "",
+            self, name: str, capacity, drift: int | None, fs: str = "",
             profile=None) -> str:
-        # When a device is out of sync, HIDE the "GB free" so the full
-        # "⚠ Sync needed" state fits (it was getting truncated). Free space
-        # returns once everything is synced again.
-        if getattr(profile, 'kind', '') == 'generic_usb':
-            return f"⛃  {name} · USB    {human(free)} free"
-        if drift is None:
-            return f"⛃  {name}    Sync status pending"
-        if drift:
-            return f"⛃  {name}    ⚠ Sync needed"
-        if fs and fs not in ("msdos", "fat32") and not getattr(profile,'cdj_export',False):
-            # Rockbox runs on FAT32 only — flag HFS+/exFAT devices immediately.
-            return f"⛃  {name}    ⚠ {fs.upper()} (not FAT32)"
-        kind = f" · {profile.label}" if profile is not None else ""
-        return f"⛃  {name}{kind}    {human(free)} free"
+        kind = {'stock_ipod': 'iTunes iPod', 'rockbox': 'Rockbox iPod',
+                'dual_boot': 'iTunes/Rockbox iPod', 'generic_usb': 'USB'}.get(
+                    getattr(profile, 'kind', ''), getattr(profile, 'label', 'USB'))
+        parts = [name, kind]
+        if isinstance(capacity, (int, float)) and not isinstance(capacity, bool) and capacity > 0:
+            parts.append(human(capacity))
+        return ' · '.join(parts)
 
     def _on_volume_mount_changed(self):
         """Mount changes supersede idle/eject/playback holds, never an owner."""
@@ -4311,14 +4700,46 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             worker.cancel()
             return
         try:
+            extra=self._sync_playlists()
+            captures=getattr(worker,'drift_captures',{})
+            options={}
+            stock_witnesses={}
+            if captures and self.lib is not None:
+                from .ipod_export_capture import effective_rows
+                from soundbox.stock_ipod_catalog_state import StockCatalogWitness
+                members={path:self._managed_ipod_display_ids(captured[0],extra)
+                         for path,captured in captures.items() if captured is not None}
+                source=(str(self.lib.source),self.lib.source_kind,self.lib.source_library_id)
+                stock_witnesses={path:witness for path,witness in
+                    getattr(self,'_stock_catalog_witness_cache',{}).items()
+                    if path in captures and isinstance(witness,StockCatalogWitness) and witness.source==source}
+                for path,witness in stock_witnesses.items():
+                    members[path]=tuple(set(members.get(path,())) | {row.local_id for row in witness.rows})
+                self._ipod_drift_member_ids=members
+                self._ipod_drift_display_source=(str(self.lib.source),self.lib.source_library_id)
+                options['display_rows']=effective_rows(self,
+                    {identity for identities in members.values() for identity in identities})
             worker.provide_playlists(
-                self._sync_playlists(), lib=self.lib,
+                extra, lib=self.lib,
                 artist_overrides=self.overrides, title_overrides=self.titles,
-                stock_shadow_store=(self.stock_ipod_shadow_store if worker.stock_detected else None))
+                stock_shadow_store=(self.stock_ipod_shadow_store if worker.stock_detected else None),
+                stock_catalog_witnesses=stock_witnesses,
+                stock_catalog_store=(getattr(self,'stock_catalog_witness_store',None)
+                    if worker.stock_detected else None),**options)
         except Exception as exc:  # noqa: BLE001 — status remains unknown on failure
             LOG.warning("Device playlist capture failed: %s", exc)
             worker.provide_playlists((), lib=None, artist_overrides={},
                                      title_overrides={}, error=exc)
+
+    def _managed_ipod_display_ids(self,manifest,extra):
+        """Only managed members/current additions need idle display projection."""
+        ids={identity for row in manifest.get('playlists',{}).values() if isinstance(row,dict)
+             for identity in (row.get('tracks',()) if isinstance(row.get('tracks',()),(list,tuple)) else ())
+             if isinstance(identity,str)}
+        if self.lib is not None:
+            ids.update(track.track_id for playlist in device_manifest.managed_current_playlists(manifest,self.lib,extra)
+                       for track in self.lib.resolve(playlist))
+        return ids
 
     def _poll_devices(self):
         # Stat only the local /Volumes directory, not its mounted children. This
@@ -4374,14 +4795,32 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             or self._stock_view_warming
             or self._stock_view_pending
             or self._pending_device_operation is not None
+            or getattr(self, '_cancelled_source_syncs', None)
             or self._exporting
             or self._deleting
             or any(getattr(self, name, None) is not None for name in owners)
         )
 
+    def _stock_has_sync_source(self, dev: str) -> bool:
+        """A cached playlist association changes the action, not media authority."""
+        from .stock_catalog_sync import has_sync_source
+        return has_sync_source(self, dev)
+
+    def _device_primary_action(self):
+        from .stock_catalog_sync import needs_sync
+        dev = self._current_device_path
+        profile = self._device_profiles.get(dev)
+        kind = getattr(profile, 'kind', '')
+        if ((kind == 'stock_ipod' and needs_sync(self, dev))
+                or (kind in {'rockbox', 'dual_boot'} and self._drift_cache.get(dev))):
+            self._sync_device(dev)
+        else:
+            self._show_export_dialog(dev)
+
     def _update_device_action_state(self) -> None:
         """Make device action availability match actual transaction ownership."""
-        busy = self._device_operation_owned() or bool(getattr(self,'_export_batch',None))
+        busy = (self._device_operation_owned() or bool(getattr(self,'_export_batch',None))
+                or getattr(self, '_device_finalization_refreshing', False))
         ready = bool(self._current_device_path) and not busy
         for button in (
                 getattr(self, "eject_btn", None),
@@ -4404,11 +4843,41 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             if export_ready:
                 self.device_sync_btn.setToolTip('')
 
+        button = getattr(self, 'device_sync_btn', None)
+        if button is not None:
+            from .stock_catalog_sync import needs_sync
+            profile = self._device_profiles.get(self._current_device_path)
+            kind = getattr(profile, 'kind', '')
+            pending = kind == 'stock_ipod' and needs_sync(self, self._current_device_path)
+            caption = 'Sync' if pending or (kind in {'rockbox', 'dual_boot'}
+                and bool(self._drift_cache.get(self._current_device_path))) else 'Export'
+            if button.text() != caption:
+                button.setText(caption)
+            if ready and kind in {'stock_ipod', 'dual_boot'}:
+                from .devices import device_export_readiness
+                cached = self._stock_view_cache.get(self._current_device_path)
+                readiness = device_export_readiness(profile,
+                    device_facts(self._current_device_path, cached_only=True),
+                    self._device_mount_tokens.get(self._current_device_path, 0),
+                    stock_snapshot=cached[0] if cached is not None else None)
+                button.setEnabled(readiness.ready)
+                button.setToolTip(readiness.reason)
+            if self.lib is None:
+                button.setEnabled(False)
+                button.setToolTip('Open a library to export playlists')
+            pages = self.__dict__.get('stock_ipod_pages')
+            if pages is not None:
+                pages.set_playlist_actions_available(
+                    button.isEnabled() and kind in {'stock_ipod', 'dual_boot'},
+                    button.toolTip())
+
         active = self._device_coordinator.active
         if (getattr(self, "eject_btn", None) is not None
                 and self._current_device_path
                 and active is not None
                 and active.phase in {Phase.DISCOVERING, Phase.INSPECTING}
+                and not self._exporting
+                and not getattr(self,'_device_finalization_refreshing',False)
                 and not self._device_coordinator.eject_pending):
             self.eject_btn.setEnabled(True)
             self.eject_btn.setToolTip("Eject after the current read finishes")
@@ -4439,11 +4908,15 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 token and previous_token and token != previous_token)
             if remounted:
                 self._stock_view_cache.pop(path, None)
+                self._stock_catalog_witness_cache.pop(path, None)
                 self._stock_view_failures.pop(path, None)
                 self._dual_sync_queue.pop(path, None)
             if token:
                 self._device_mount_tokens[path] = token
                 self._device_coordinator.observe(DeviceSessionIdentity(path, token))
+            if remounted:
+                self._stock_view_pending.pop(path, None)
+                self._discard_stock_view_callbacks(path, 'The iPod remounted before its refresh')
             stock = bool(getattr(profile, "has_stock_ipod", False))
             if (stock and path not in self._stock_view_cache
                     and path not in self._stock_view_failures):
@@ -4460,7 +4933,9 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 if self._current_device_path == path:
                     self._current_device_path = ""
                     self._stock_snapshot = None
-                    self.stack.setCurrentIndex(0)
+                    if self.stack.currentIndex() == 1:
+                        self.stack.setCurrentIndex(0)
+                        self._default_to_collection()
                 self._device_profiles[path] = profile
                 self._drift_cache.setdefault(path, None)
             if path not in current:
@@ -4474,6 +4949,13 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
     def _deliver_device_scan_callbacks(self, worker):
         callbacks = getattr(worker, "_surface_refresh_callbacks", ())
         worker._surface_refresh_callbacks = []
+        current=[]
+        for callback in callbacks:
+            owner=getattr(callback,'_finalization_owner',None)
+            if getattr(self,'_device_finalization_token',None) is not owner:
+                callback()  # The once wrapper retires without touching a newer owner.
+            else:current.append(callback)
+        callbacks=current
         if not callbacks:
             return
         # Discovery marks future dashboard work as warming before this slot.
@@ -4512,6 +4994,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
     def _retire_device_scan_worker(self, worker):
         if self._dev_scan_worker is not worker:
             self._finish_worker("_dev_scan_worker", worker)
+            self._deliver_device_scan_callbacks(worker)
             return
         if getattr(worker, "retry_discovery", True):
             delay = getattr(self, "_device_retry_delay", 3.0)
@@ -4531,20 +5014,26 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         # Eject and every other device operation use.
         self._finish_worker("_dev_scan_worker", worker)
         if cancelled or self._shutting_down or self._device_coordinator.eject_pending:
-            if not self._shutting_down and getattr(worker, "_surface_refresh_callbacks", ()):
+            owned_callbacks=any(getattr(callback,'_finalization_owner',None) is getattr(self,'_device_finalization_token',None)
+                for callback in getattr(worker,'_surface_refresh_callbacks',()))
+            if not self._shutting_down and owned_callbacks:
                 self._device_finalization_error = RuntimeError("The final device scan was cancelled")
                 self._deliver_device_scan_callbacks(worker)
             else:
-                worker._surface_refresh_callbacks = []
+                self._deliver_device_scan_callbacks(worker)
             return
         if results is not None:
             self._usb_view_cache.update(usb_snapshots)
             self._on_devices_scanned(results, mount_tokens=mount_tokens)
+            if getattr(worker,'stock_status',None):
+                self._publish_stock_sync_observations(worker)
             if not self.settings.get('cdj_my_settings'):
                 native_profiles=[s for s in usb_snapshots.values() if getattr(s,'native',None) is not None]
                 if len(native_profiles)==1:self._sync_usb_my_settings(native_profiles[0])
         callbacks = getattr(worker, "_surface_refresh_callbacks", ())
-        if callbacks and results is None:
+        owned_callbacks=any(getattr(callback,'_finalization_owner',None) is getattr(self,'_device_finalization_token',None)
+            for callback in callbacks)
+        if owned_callbacks and results is None:
             self._device_finalization_error = RuntimeError("The final device scan did not return a result")
         self._deliver_device_scan_callbacks(worker)
         # The first usable row already has drift. Queue a full,
@@ -4573,6 +5062,52 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             profile = self._stock_view_pending.pop(next_dev)
             self._read_stock_device_view(next_dev, profile)
 
+    def _publish_stock_sync_observations(self, worker):
+        """Publish scalar status only for the same source, mount and native view."""
+        library = self.lib
+        scope = ((str(library.source),library.source_kind,library.source_library_id)
+                 if library is not None else None)
+        if scope is None or getattr(worker,'captured_source_scope',None) != scope:
+            return
+        updated = False
+        for dev,status in getattr(worker,'stock_status',{}).items():
+            cached = self._stock_view_cache.get(dev)
+            token = getattr(worker,'mount_tokens',{}).get(dev,0)
+            if (cached is None or not token or self._device_mount_tokens.get(dev) != token
+                    or getattr(self._device_profiles.get(dev),'kind','') != 'stock_ipod'
+                    or not getattr(status,'database_sha256','')):
+                continue
+            observed_art=getattr(status,'artwork_database_sha256',None)
+            if (status.database_sha256 != cached[0].database_sha256
+                    or observed_art is not None and observed_art != cached[0].artwork_database_sha256):
+                # This exact scan already observed the changed small catalog.
+                # Reuse the serialized view lane rather than asking the user
+                # to reconnect or weakening a later plan's freshness guard.
+                self._stock_view_pending.setdefault(dev,self._device_profiles[dev])
+                continue
+            from soundbox.stock_ipod_catalog_state import StockCatalogWitness
+            witness=getattr(worker,'stock_catalog_witnesses',{}).get(dev)
+            if (isinstance(witness,StockCatalogWitness) and witness.source==scope
+                    and witness.device_key==cached[0].identity_key
+                    and witness.database_sha256==status.database_sha256
+                    and (observed_art is None or witness.artwork_database_sha256==observed_art)
+                    and self._stock_catalog_witness_cache.get(dev)!=witness):
+                # Let the existing owned native reader publish a cold cache.
+                # The next scan can then capture its exact managed row IDs.
+                self._stock_view_pending.setdefault(dev,self._device_profiles[dev])
+            snapshot = replace(cached[0],sync_state=status.state,sync_detail=status.detail,
+                sync_local_changes=status.local_changes,sync_committed_at=status.committed_at)
+            if snapshot == cached[0]:
+                continue
+            self._stock_view_cache[dev] = (snapshot,cached[1])
+            if dev == self._current_device_path:
+                self._stock_snapshot = snapshot
+                self.stock_ipod_pages.set_sync_status(status.state,status.detail,
+                    status.local_changes,status.committed_at)
+            updated = True
+        if updated:
+            self._update_device_action_state()
+
     def _defer_device_operation_until_scan_finishes(self, callback, *, target='') -> bool:
         """Serialize a device operation behind an already-running poll.
 
@@ -4590,6 +5125,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             return {path: (self._device_mount_tokens.get(path, 0),
                            device_facts(path, cached_only=True).volume_uuid) for path in paths}
         authority = identities()
+        captured_batch = getattr(self, '_export_batch', None)
+        captured_target = captured_batch.get('active') if captured_batch else None
         self._pending_device_operation = callback
         self._exporting = True
         self.progress.setVisible(False)
@@ -4601,6 +5138,23 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             if self._pending_device_operation is not callback:
                 return
             self._pending_device_operation = None
+            if (getattr(self, '_export_batch', None) is not captured_batch
+                    or captured_batch is not None and captured_batch.get('active') is not captured_target):
+                return
+            active = self._device_coordinator.active
+            if ((active is not None and active.phase != Phase.DISCOVERING)
+                    or getattr(self, '_usb_format_device', '')):
+                request = getattr(callback, '_catalog_request', None)
+                if request is not None:
+                    from .stock_catalog_sync import _end_deferred_catalog
+                    _end_deferred_catalog(self, request, 'A different device operation started; retry the waiting Sync')
+                elif captured_batch is not None:
+                    captured_batch['error'] = 'A different device operation started; retry the waiting export'
+                    self._maybe_finish_export_target()
+                if active is None or active.phase == Phase.DISCOVERING:
+                    self._exporting = False
+                    self._cancelling = False
+                return
             self._exporting = False
             self._stop_pulse()
             fresh = identities()
@@ -4650,9 +5204,31 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 self._dev_scan_worker, "mount_tokens", {}))
         for path in all_paths:
             token = int(mount_tokens.get(path, 0) or 0)
+            previous_token = self._device_mount_tokens.get(path, 0)
+            remounted = bool(token and previous_token and token != previous_token)
+            if remounted:
+                # The preview may be skipped during a drag. This finished scan
+                # independently retires the previous occupant of a reused path.
+                self._stock_view_cache.pop(path, None)
+                self._stock_catalog_witness_cache.pop(path, None)
+                self._stock_view_failures.pop(path, None)
+                self._dual_sync_queue.pop(path, None)
+                profile = self._device_profiles.get(path)
+                if getattr(profile, 'has_stock_ipod', False):
+                    self._stock_view_warming.add(path)
+                    self._stock_view_pending[path] = profile
+                    self._start_ipod_loading_status()
+                if self._current_device_path == path:
+                    self._current_device_path = ''
+                    self._stock_snapshot = None
+                    if self.stack.currentIndex() == 1:
+                        self.stack.setCurrentIndex(0)
+                        self._default_to_collection()
             if token:
                 self._device_mount_tokens[path] = token
                 self._device_coordinator.observe(DeviceSessionIdentity(path, token))
+            if remounted:
+                self._discard_stock_view_callbacks(path, 'The iPod remounted before its refresh')
         for path, snapshot in tuple(self._usb_view_cache.items()):
             if snapshot.mount_token != self._device_mount_tokens.get(path, 0):
                 self._usb_view_cache.pop(path, None)
@@ -4665,11 +5241,14 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         ) - set(all_paths)
         for stale in stale_stock_paths:
             self._stock_view_cache.pop(stale, None)
+            self._stock_catalog_witness_cache.pop(stale, None)
             self._stock_view_failures.pop(stale, None)
             self._stock_view_warming.discard(stale)
         for stale in set(self._device_mount_tokens) - set(all_paths):
             self._device_mount_tokens.pop(stale, None)
             self._device_coordinator.disconnect(stale)
+            self._stock_view_pending.pop(stale, None)
+            self._discard_stock_view_callbacks(stale, 'The iPod disconnected before its refresh')
             self._dual_sync_queue.pop(stale, None)
         # Reconcile any cached presentation left by a completed dashboard read.
         ready_paths = {
@@ -4684,7 +5263,9 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 and self._current_device_path not in visible_paths):
             self._current_device_path = ""
             self._stock_snapshot = None
-            self.stack.setCurrentIndex(0)
+            if self.stack.currentIndex() == 1:
+                self.stack.setCurrentIndex(0)
+                self._default_to_collection()
         cur = [self.device_tree.topLevelItem(i).data(0, DEVPATH_ROLE)
                for i in range(self.device_tree.topLevelItemCount())]
         if visible_paths != cur and QApplication.mouseButtons() & Qt.LeftButton:
@@ -4698,17 +5279,21 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 it = self.device_tree.topLevelItem(i)
                 if it is not None:
                     it.setDisabled(False)
+                    capacity = getattr(device_facts(path, cached_only=True), 'capacity_bytes', 0)
                     it.setText(0, self._device_label(
-                        name, free, drift, device_fs(path), profile))
-                    it.setToolTip(0, self._device_tip(path, free, profile))
+                        name, capacity, drift, device_fs(path), profile))
+                    it.setToolTip(0, self._device_tip(path, free, profile,
+                                                   capacity=capacity, drift=drift))
             self._finish_ipod_loading_status()
             return
         self.device_tree.clear()
         for name, path, free, drift, profile in visible_devs:
+            capacity = getattr(device_facts(path, cached_only=True), 'capacity_bytes', 0)
             it = QTreeWidgetItem([self._device_label(
-                name, free, drift, device_fs(path), profile)])
+                name, capacity, drift, device_fs(path), profile)])
             it.setData(0, DEVPATH_ROLE, path)
-            it.setToolTip(0, self._device_tip(path, free, profile))
+            it.setToolTip(0, self._device_tip(path, free, profile,
+                                           capacity=capacity, drift=drift))
             self.device_tree.addTopLevelItem(it)
         self._finish_ipod_loading_status()
 
@@ -4721,17 +5306,21 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             device_facts(dev, cached_only=True).volume_uuid, library_id)
 
     def _stored_stock_model(self, dev: str, profile=None) -> str:
-        from soundbox.stock_ipod import normalize_model_number, supports_stock_write
-        profile_model = normalize_model_number(
+        from soundbox.stock_ipod_identity import normalize_display_model, hardware_model
+        profile_model = normalize_display_model(
             str(getattr(profile, "model", "") or ""))
-        if supports_stock_write(profile_model):
+        if hardware_model(profile_model) is not None:
             return profile_model
         values = self.settings.get("stock_ipod_models")
         if not isinstance(values, dict):
             return ""
-        model = normalize_model_number(
+        model = normalize_display_model(
             str(values.get(self._stock_device_key(dev, profile)) or ""))
-        return model if supports_stock_write(model) else ""
+        description = hardware_model(model)
+        family = getattr(device_facts(dev, cached_only=True), 'usb_family', '')
+        if description is not None and family in {'iPod Video', 'iPod Classic'} and description.family != family:
+            return ""
+        return model if description is not None else ""
 
     def _effective_device_profile(self, dev: str, profile):
         if getattr(profile, "kind", "") != "stock_ipod":
@@ -4741,12 +5330,12 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             return profile
         if not hasattr(profile, "__dataclass_fields__"):
             return profile
-        return replace(profile, model=model, stock_write=True)
+        return replace(profile, model=model)
 
     def _remember_stock_model(self, identity_key: str, model: str):
-        from soundbox.stock_ipod import normalize_model_number, supports_stock_write
-        model = normalize_model_number(model)
-        if not identity_key or not supports_stock_write(model):
+        from soundbox.stock_ipod_identity import normalize_display_model, hardware_model
+        model = normalize_display_model(model)
+        if not identity_key or hardware_model(model) is None:
             return
         raw = self.settings.get("stock_ipod_models")
         values = dict(raw) if isinstance(raw, dict) else {}
@@ -4754,11 +5343,15 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             return
         values[identity_key] = model
         self.settings["stock_ipod_models"] = values
-        self._save_state()
+        self._schedule_settings_save('stock_ipod_models')
 
-    def _device_tip(self, path: str, free, profile=None) -> str:
+    def _device_tip(self, path: str, free, profile=None, *, capacity=0, drift=0) -> str:
         fs = device_fs(path) or "unknown"
-        tip = f"{path}\nFilesystem: {fs}   ·   {human(free)} free"
+        size = human(capacity) if capacity > 0 else 'unavailable'
+        tip = f"{path}\nFilesystem: {fs} · Capacity: {size} · {human(free)} free"
+        if getattr(profile, 'kind', '') != 'generic_usb':
+            if drift is None:tip += '\nSync status pending'
+            elif drift:tip += '\n⚠ Sync needed'
         if profile is not None:
             tip += f"\nDetected layout: {profile.label}"
             if profile.model:
@@ -4771,11 +5364,10 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 else:
                     tip += "\nRockbox filesystem export rules are active."
             elif profile.stock_preview and not profile.stock_write:
-                tip += (
-                    "\nStock sync requires an MP3/WAV playlist dry-run and "
-                    "confirmed MA446 model number.")
+                tip += "\n" + (getattr(getattr(profile, 'stock_format', None), 'reason', '')
+                    or "Reading iPod database capabilities")
             elif profile.stock_write:
-                tip += "\nValidated MA446 stock-sync engine available (dry-run first)."
+                tip += "\niTunes export and Sync available."
         if fs not in ("msdos", "fat32", "unknown") and not getattr(profile,'cdj_export',False):
             tip += "\n⚠ Rockbox requires FAT32 — this device would need reformatting."
         return tip
@@ -4867,11 +5459,16 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         from soundbox.stock_ipod import inspect_stock_ipod_sync_status
         from soundbox.stock_ipod_info import read_stock_ipod_snapshot
         from soundbox.stock_ipod_capture import capture_stock_ipod_native
-        if getattr(self, "_state_maintenance", False):
-            return
         if after_finished is not None:
-            self._stock_view_callbacks.setdefault(dev, []).append(after_finished)
-        if self._shutting_down or self._device_coordinator.eject_pending:
+            owner=getattr(self,'_device_finalization_token',None)
+            identities=getattr(self,'_device_finalization_mounts',{})
+            identity=(identities.get(dev) if owner is not None else
+                      self._device_coordinator.mounts.get(dev))
+            self._stock_view_callbacks.setdefault(dev, []).append(
+                _DeviceRefreshCompletion(self,dev,identity,owner,after_finished))
+        if (getattr(self, "_state_maintenance", False) or self._shutting_down
+                or self._device_coordinator.eject_pending):
+            self._discard_stock_view_callbacks(dev,'The device refresh was stopped before admission')
             return
         if (self._stock_view_worker is not None
                 or self._dev_scan_worker is not None
@@ -4885,8 +5482,24 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         extra_playlists = tuple(self._sync_playlists())
         artist_overrides = dict(self.overrides)
         title_overrides = dict(self.titles)
+        display_rows=None
+        display_ids=set()
+        if (library is not None and getattr(self,'_ipod_drift_display_source',None)
+                ==(str(library.source),library.source_library_id)):
+            display_ids.update(getattr(self,'_ipod_drift_member_ids',{}).get(dev,()))
+        from soundbox.stock_ipod_catalog_state import StockCatalogWitness
+        prior_witness=getattr(self,'_stock_catalog_witness_cache',{}).get(dev)
+        if (library is not None and isinstance(prior_witness,StockCatalogWitness)
+                and prior_witness.source==(str(library.source),library.source_kind,library.source_library_id)):
+            display_ids.update(row.local_id for row in prior_witness.rows)
+        if display_ids:
+            from .ipod_export_capture import effective_rows
+            display_rows=effective_rows(self,display_ids)
+        witness_store = self.stock_catalog_witness_store
+        observed_witness=None
 
         def read_snapshot():
+            nonlocal observed_witness
             facts = device_facts(dev)
             composite_capture = None
             pre_composite_dual = False
@@ -4903,6 +5516,9 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             snapshot = read_stock_ipod_snapshot(
                 dev,
                 model_number=model,
+                observed_model_number=getattr(facts, "model_number", ""),
+                observed_model_source=getattr(facts, "model_source", ""),
+                identity_conflict=getattr(facts, "identity_conflict", False),
                 volume_uuid=facts.volume_uuid,
                 filesystem=facts.filesystem_name or device_fs(dev),
                 protocol=facts.protocol,
@@ -4913,11 +5529,14 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 serial_number=getattr(facts, "hardware_serial", ""),
                 serial_source=getattr(facts, "serial_source", ""),
                 usb_serial=getattr(facts, "usb_serial", ""),
+                firewire_guid=getattr(facts, "firewire_guid", ""),
                 firmware_version=getattr(facts, "firmware_version", ""),
                 firmware_source=getattr(facts, "firmware_source", ""),
                 transport_revision=getattr(facts, "transport_revision", ""),
+                usb_family=getattr(facts, "usb_family", ""),
                 native_capture=native_capture,
             )
+            observed_witness=witness_store.load(snapshot.identity_key)
             composite_data: CompositeDeviceData | None = None
             if composite_capture is not None:
                 composite_manifest = composite_capture[0]
@@ -4954,6 +5573,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 shadow_store=self.stock_ipod_shadow_store,
                 extra_playlists=extra_playlists,
                 native_capture=native_capture,
+                catalog_witness=observed_witness,
+                display_rows=display_rows,
             )
             if composite_data is not None:
                 from soundbox.dual_ipod import composite_device_drift
@@ -4964,6 +5585,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                     artist_overrides=artist_overrides,
                     title_overrides=title_overrides,
                     captured_manifest=composite_capture,
+                    display_rows=display_rows,
                 )
                 if drift is not None and drift.any():
                     count = drift.count()
@@ -4983,34 +5605,65 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 sync_committed_at=status.committed_at,
             ), composite_data
 
-        worker = OneShotTask(read_snapshot)
+        def read_with_witness():
+            snapshot, composite = read_snapshot()
+            witness = observed_witness
+            from soundbox.stock_ipod_catalog_state import StockCatalogWitness
+            if (isinstance(witness, StockCatalogWitness) and library is not None
+                    and witness.source == (str(library.source), library.source_kind, library.source_library_id)
+                    and snapshot.sync_state in {'', 'untracked'}):
+                from datetime import datetime, timezone
+                try:
+                    modified = witness_store.path_for(snapshot.identity_key).stat().st_mtime
+                    snapshot = replace(snapshot, sync_committed_at=datetime.fromtimestamp(modified, timezone.utc).isoformat())
+                except OSError:
+                    pass
+            return snapshot, composite, witness
+
+        worker = OneShotTask(read_with_witness)
+        worker._stock_view_device=dev
+        worker._stock_view_callbacks=self._stock_view_callbacks.pop(dev,[])
         self._stock_view_worker = worker
         self._stock_view_device = dev
         worker.finished.connect(
             lambda ww=worker: self._finish_stock_device_view_worker(ww))
         self._start_device_worker(worker, dev, "inspect")
 
+    def _discard_stock_view_callbacks(self, dev, message):
+        """Retire queued continuations without handing them to a later mount."""
+        callbacks=self._stock_view_callbacks.pop(dev,())
+        for completion in callbacks:
+            QTimer.singleShot(0, lambda value=completion: value.finish(RuntimeError(message)))
+
     def _finish_stock_device_view_worker(self, worker):
+        callbacks=getattr(worker,'_stock_view_callbacks',())
+        worker._stock_view_callbacks=[]
+        def completed(error=None):
+            for completion in callbacks:completion.finish(error)
         if self._stock_view_worker is not worker:
             self._finish_worker("_stock_view_worker", worker)
+            completed(RuntimeError('The original device refresh was superseded'))
             return
-        dev = self._stock_view_device
+        dev = getattr(worker,'_stock_view_device',self._stock_view_device)
         self._stock_view_device = ""
         result = getattr(worker, "result", None)
         command = getattr(worker, "device_command", None)
         current = command is None or self._device_coordinator.current(command)
         self._finish_worker("_stock_view_worker", worker)
         if not current:
-            self._stock_view_cache.pop(dev, None)
+            # Discovery owns replacement caches. An old reader may retire its
+            # own continuation, never delete a new occupant's published view.
+            completed(RuntimeError('The iPod disconnected or remounted during its refresh'))
             return
         if self._shutting_down or self._device_coordinator.eject_pending:
+            completed(RuntimeError('The device refresh was stopped'))
             return
-        if isinstance(result, Exception) and self._exporting:
+        owned_callbacks=any(completion.owner is getattr(self,'_device_finalization_token',None)
+            for completion in callbacks)
+        if isinstance(result, Exception) and self._exporting and owned_callbacks:
             self._device_finalization_error = result
         self._on_stock_device_view(dev, result)
-        callbacks = self._stock_view_callbacks.pop(dev, [])
-        for callback in callbacks:
-            callback()
+        completed(result if isinstance(result,Exception) else None)
         if self._stock_view_pending and not self._shutting_down:
             next_dev = next(iter(self._stock_view_pending))
             profile = self._stock_view_pending.pop(next_dev)
@@ -5024,36 +5677,60 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
     def _refresh_device_surfaces(
             self, dev: str, *, after_finished=None,
             surface_progress: int = 900):
-        """Refresh an open iPod snapshot, then its sidebar state, in series.
+        """Refresh a stock iPod's cached catalog, then sidebar state, in series.
 
         A post-write completion callback runs only after both reads finish, so
         a success dialog never claims the iPod is done while Eject still has to
         wait for SoundBox's own finalization worker.
         """
+        owner = getattr(self, '_device_finalization_token', None)
+        identity = (getattr(self, '_device_finalization_mounts', {}).get(dev)
+                    if owner is not None else self._device_coordinator.mounts.get(dev))
+        def finish_refresh():
+            if getattr(self, '_device_finalization_token', None) is not owner:
+                return
+            if self._shutting_down or identity is None or self._device_coordinator.mounts.get(dev) != identity:
+                if after_finished is not None:
+                    after_finished()
+                return
+            self._set_device_progress(surface_progress)
+            self._finish_device_surface_refresh(
+                after_finished, expected_dev=dev, expected_identity=identity, owner=owner)
+
+        if identity is None or self._device_coordinator.mounts.get(dev) != identity:
+            if owner is not None:
+                self._device_finalization_error = RuntimeError(
+                    f'{Path(dev).name} disconnected or remounted during finalization')
+            if after_finished is not None:
+                after_finished()
+            return
         profile = self._device_profiles.get(dev)
         if (
-            dev != self._current_device_path
-            or profile is None
+            profile is None
             or not getattr(profile, "has_stock_ipod", False)
         ):
-            self._set_device_progress(surface_progress)
-            self._finish_device_surface_refresh(
-                after_finished, expected_dev=dev)
+            finish_refresh()
             return
         self._exporting = True
-        self.stock_ipod_pages.set_loading(preserve_page=True)
-
-        def finish_refresh():
-            self._set_device_progress(surface_progress)
-            self._finish_device_surface_refresh(
-                after_finished, expected_dev=dev)
+        # The accepted export may have started from Collection or another
+        # device. Its cached native catalog must still become current before
+        # completion, without changing the page the user is viewing.
+        if dev == self._current_device_path:
+            self.stock_ipod_pages.set_loading(preserve_page=True)
 
         self._read_stock_device_view(
             dev, profile, after_finished=finish_refresh)
 
     def _finish_device_surface_refresh(
-            self, after_finished=None, *, expected_dev: str = ""):
+            self, after_finished=None, *, expected_dev: str = "",
+            expected_identity=None, owner=None):
         """Run the sidebar scan and optionally wait for its worker as well."""
+        if getattr(self, '_device_finalization_token', None) is not owner:
+            return
+        if self._shutting_down:
+            if after_finished is not None:
+                after_finished()
+            return
         self._exporting = False
         # A new completed operation supersedes any earlier hold and must always
         # run its own final sidebar/dashboard scan before success is reported.
@@ -5061,20 +5738,27 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         if after_finished is None:
             return
         worker = getattr(self, "_dev_scan_worker", None)
-        if worker is None:
-            if expected_dev and expected_dev not in self._device_profiles:
+        completed = False
+        def finish_sidebar():
+            nonlocal completed
+            if completed:
+                return
+            completed = True
+            if getattr(self, '_device_finalization_token', None) is not owner:
+                return
+            self._exporting = False
+            if expected_dev and (expected_dev not in self._device_profiles or
+                    (expected_identity is not None and
+                     self._device_coordinator.mounts.get(expected_dev) != expected_identity)):
                 self._device_finalization_error = RuntimeError(
-                    f"{Path(expected_dev).name} disconnected during finalization")
+                    f"{Path(expected_dev).name} disconnected or remounted during finalization")
             after_finished()
+
+        finish_sidebar._finalization_owner = owner
+        if worker is None:
+            finish_sidebar()
             return
         self._exporting = True
-
-        def finish_sidebar():
-            self._exporting = False
-            if expected_dev and expected_dev not in self._device_profiles:
-                self._device_finalization_error = RuntimeError(
-                    f"{Path(expected_dev).name} disconnected during finalization")
-            after_finished()
 
         # The worker may have emitted finished already while its owner slot is
         # queued. Attach to that slot's publication boundary, not a new signal
@@ -5111,12 +5795,34 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             self._flash_status("iPod load failed — retrying", 3)
         self._update_device_action_state()
 
-    def _device_completion_message(self,title,text):
-        if not getattr(self,'_export_batch',None):QMessageBox.information(self,title,text)
+    def _device_completion_message(self,title,text,*,attention=False,summary='',issues=()):
+        from .export_dialog import device_attention_text
+        issues=tuple(dict.fromkeys(str(issue).strip() for issue in issues if str(issue).strip()))
+        self._last_device_completion=dict(title=title,text=text,attention=bool(attention),summary=summary,issues=issues)
+        LOG.info('%s: %s',title,text)
+        if issues:LOG.warning('Device operation needs attention: %s','\n'.join(issues))
+        attention_text=device_attention_text(issues) if attention else ''
+        batch=getattr(self,'_export_batch',None)
+        if batch and batch.get('active'):
+            if summary:
+                target=batch['active']
+                batch.setdefault('summaries',{})[target['path']]=(target.get('name','iPod'),summary)
+            if attention and batch.get('outcome') not in {'failed','cancelled'}:
+                batch['outcome']='attention'
+            self._export_target_complete(batch['active']['path'],attention_text if attention else title+'\n'+text)
+        elif not batch:
+            if attention:QMessageBox.warning(self,'iPod needs attention',attention_text)
 
     def _finalize_ipod_operation(
             self, dev: str, on_complete, *, terminal_text: str = "Complete ✓") -> None:
         """Finish every post-write read before presenting success to the user."""
+        from .export_dialog import present_ipod_failure
+        owner = object()
+        identity = self._device_coordinator.mounts.get(dev)
+        previous = self._device_coordinator.last_result
+        self._device_finalization_token = owner
+        self._device_finalization_mounts = {dev: identity}
+        self._device_finalization_refreshing = True
         self._exporting = True
         self._device_finalization_error = None
         self._set_device_progress(max(800, self.progress.value()))
@@ -5124,11 +5830,21 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         self._start_pulse("Finalizing iPod")
 
         def finish():
+            if self._device_finalization_token is not owner:
+                return
+            if self._shutting_down:
+                self._device_finalization_token = None
+                self._device_finalization_refreshing = False
+                self._exporting = False
+                return
+            if identity is None or self._device_coordinator.mounts.get(dev) != identity:
+                self._device_finalization_error = RuntimeError(
+                    f'{Path(dev).name} disconnected or remounted during finalization')
+            self._device_finalization_refreshing = False
             self._set_device_progress(1000)
             self._stop_pulse(force=True)
             finalization_error = self._device_finalization_error
-            previous = self._device_coordinator.last_result
-            if previous is not None:
+            if previous is not None and self._device_coordinator.last_result is previous:
                 self._device_coordinator.last_result = replace(
                     previous, refresh="failed" if finalization_error else "complete")
             final_text = (
@@ -5137,7 +5853,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             # The committed dashboard/sidebar scan just finished. Freeze that
             # verified state through the success dialog. Release the hold on
             # dismissal so later curation edits and reconnects remain visible.
-            self._eject_ready_device = dev
+            self._eject_ready_device = (
+                dev if identity is not None and self._device_coordinator.mounts.get(dev) == identity else '')
             # QMessageBox runs a nested Qt event loop. Keep polling suppressed
             # through that loop or the three-second timer can launch a fresh,
             # slow device scan while the user is still reading "Eject ready".
@@ -5146,21 +5863,18 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             try:
                 if finalization_error is not None:
                     self._export_target_result(dev,finalization_error)
-                    QMessageBox.warning(
-                        self,
-                        "Device finalization failed",
-                        ("Device changes were committed. " if previous and previous.committed
-                         else "The device operation has stopped. ") +
-                        "SoundBox could not complete its dashboard/sidebar "
-                        f"refresh:\n\n{finalization_error}\n\n"
-                        "Eject is available; reconnect before another write.",
-                    )
+                    present_ipod_failure(self,dev,"Device finalization failed",finalization_error,
+                        committed=bool(previous and previous.committed),
+                        guidance="Eject is available; reconnect before another write.")
                 else:
                     on_complete()
             finally:
-                self.progress.setVisible(False)
-                self._release_eject_ready()
-                self._maybe_finish_export_target()
+                if self._device_finalization_token is owner:
+                    self._device_finalization_token = None
+                    self._device_finalization_mounts = {}
+                    self.progress.setVisible(False)
+                    self._release_eject_ready()
+                    self._maybe_finish_export_target()
 
         self._refresh_device_surfaces(dev, after_finished=finish)
 
@@ -5173,6 +5887,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         different target. The transaction is therefore not terminal until each
         touched volume has completed its own dashboard/sidebar refresh.
         """
+        from .export_dialog import present_ipod_failure
         ordered = tuple(dict.fromkeys(str(dev) for dev in devices if dev))
         if not ordered:
             self.progress.setVisible(False)
@@ -5183,6 +5898,12 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 ordered[0], on_complete, terminal_text=terminal_text)
             return
 
+        owner = object()
+        identities = {dev: self._device_coordinator.mounts.get(dev) for dev in ordered}
+        previous = self._device_coordinator.last_result
+        self._device_finalization_token = owner
+        self._device_finalization_mounts = identities
+        self._device_finalization_refreshing = True
         self._exporting = True
         self._device_finalization_error = None
         self._set_device_progress(max(800, self.progress.value()))
@@ -5190,36 +5911,56 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         self._start_pulse("Finalizing devices")
 
         def finish_all():
+            if self._device_finalization_token is not owner:
+                return
+            if self._shutting_down:
+                self._device_finalization_token = None
+                self._device_finalization_refreshing = False
+                self._exporting = False
+                return
+            for dev, identity in identities.items():
+                if identity is None or self._device_coordinator.mounts.get(dev) != identity:
+                    self._device_finalization_error = RuntimeError(
+                        f'{Path(dev).name} disconnected or remounted during finalization')
+            self._device_finalization_refreshing = False
             self._set_device_progress(1000)
             self._stop_pulse(force=True)
             finalization_error = self._device_finalization_error
+            if previous is not None and self._device_coordinator.last_result is previous:
+                self._device_coordinator.last_result = replace(
+                    previous, refresh='failed' if finalization_error else 'complete')
             final_text = (
                 "Final refresh failed" if finalization_error else terminal_text)
             self._set_status_text(final_text, force=True)
             hold = (
                 self._current_device_path
                 if self._current_device_path in ordered else ordered[-1])
-            self._eject_ready_device = hold
+            self._eject_ready_device = (
+                hold if identities[hold] is not None and
+                self._device_coordinator.mounts.get(hold) == identities[hold] else '')
             self._exporting = False
             self._update_device_action_state()
             try:
                 if finalization_error is not None:
-                    QMessageBox.warning(
-                        self,
-                        "Device finalization failed",
-                        "The device operation has stopped, but SoundBox could "
-                        "not complete every required final dashboard/sidebar "
-                        f"refresh:\n\n{finalization_error}\n\n"
-                        "Eject is available; reconnect before another write.",
-                    )
+                    batch=getattr(self,'_export_batch',None)
+                    target=batch.get('active') if batch else None
+                    failed_device=target['path'] if target and target.get('path') in ordered else ordered[0]
+                    present_ipod_failure(self,failed_device,"Device finalization failed",finalization_error,
+                        committed=bool(previous and previous.committed),
+                        guidance="Eject is available; reconnect before another write.")
                 else:
                     on_complete()
             finally:
-                self.progress.setVisible(False)
-                self._release_eject_ready()
-                self._maybe_finish_export_target()
+                if self._device_finalization_token is owner:
+                    self._device_finalization_token = None
+                    self._device_finalization_mounts = {}
+                    self.progress.setVisible(False)
+                    self._release_eject_ready()
+                    self._maybe_finish_export_target()
 
         def finalize_at(index: int):
+            if self._device_finalization_token is not owner:
+                return
             if index >= len(ordered):
                 finish_all()
                 return
@@ -5229,6 +5970,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             self._set_device_progress(max(start, self.progress.value()))
 
             def finish_one():
+                if self._device_finalization_token is not owner:
+                    return
                 self._set_device_progress(end)
                 finalize_at(index + 1)
 
@@ -5259,16 +6002,21 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                     "iPod refresh failed — showing last verified state")
             return
         composite_data = None
+        witness = None
+        witness_loaded = False
         if (
             isinstance(result, tuple)
-            and len(result) == 2
+            and len(result) in (2, 3)
             and isinstance(result[0], StockIpodSnapshot)
             and (
                 result[1] is None
                 or isinstance(result[1], CompositeDeviceData)
             )
         ):
-            result, composite_data = result
+            if len(result) == 3:
+                witness = result[2]
+                witness_loaded = True
+            result, composite_data = result[:2]
         if not isinstance(result, StockIpodSnapshot):
             self._fail_initial_ipod_preload(dev)
             if dev != self._current_device_path:
@@ -5290,26 +6038,52 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         from soundbox.device_identity import remember_identity
         raw_identity = self.settings.get("stock_ipod_identity")
         identity_records = dict(raw_identity) if isinstance(raw_identity, dict) else {}
+        inherited_model = result.model
         result = remember_identity(result, identity_records)
+        if result.identity_conflict or inherited_model and not result.model:
+            from soundbox.stock_ipod_identity import normalize_display_model
+            legacy = self.settings.get('stock_ipod_models')
+            if (isinstance(legacy, dict) and result.identity_key in legacy
+                    and (result.identity_conflict
+                         or normalize_display_model(legacy.get(result.identity_key, ''))
+                         == normalize_display_model(inherited_model))):
+                legacy = dict(legacy)
+                legacy.pop(result.identity_key, None)
+                self.settings['stock_ipod_models'] = legacy
+                self._schedule_settings_save('stock_ipod_models')
         if identity_records != raw_identity:
             self.settings["stock_ipod_identity"] = identity_records
-            self._save_state()
+            self._schedule_settings_save('stock_ipod_identity')
         self._stock_view_failures.pop(dev, None)
+        if not witness_loaded:
+            witness = self._stock_catalog_witness_cache.get(dev)
+        from soundbox.stock_ipod_catalog_state import StockCatalogWitness
+        if not isinstance(witness, StockCatalogWitness) or witness.device_key != result.identity_key:
+            witness = None
+        if (witness is not None and self.lib is not None and witness.bindings
+                and witness.source == (str(self.lib.source), self.lib.source_kind, self.lib.source_library_id)
+                and any(binding.device_playlist_id in {row.playlist_id for row in result.playlists
+                    if row.kind == 'Playlist'} for binding in witness.bindings)
+                and result.sync_state in {'', 'untracked'}):
+            result = replace(result, sync_state='catalog_linked',
+                sync_detail='Existing playlists are linked for Sync')
         self._stock_view_cache[dev] = (result, composite_data)
+        self._stock_catalog_witness_cache[dev] = witness
+        art_worker = self._stock_art_worker
+        if (art_worker is not None and result.stock_format is not None
+                and result.stock_format.supports_artwork
+                and result.stock_format.artwork_profile not in getattr(art_worker, 'profiles', ())):
+            self._stock_art_rescan = True
+        self._schedule_stock_artwork()
         self._stock_view_warming.discard(dev)
         self._finish_ipod_loading_status()
+        self._update_device_action_state()
         if dev != self._current_device_path:
             LOG.info(
                 "iPod dashboard preloaded: %s (%d tracks, %d playlists)",
                 dev, len(result.tracks), len(result.playlists))
             return
         self._stock_snapshot = result
-        if result.model:
-            self._remember_stock_model(result.identity_key, result.model)
-            profile = self._device_profiles.get(dev)
-            if profile is not None:
-                self._device_profiles[dev] = self._effective_device_profile(
-                    dev, profile)
         self._restoring_stock_view = True
         try:
             self.stock_ipod_pages.set_snapshot(result, composite_data)
@@ -5319,39 +6093,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         profile = self._device_profiles.get(dev)
         self.stock_ipod_pages.set_playlist_deletion_available(
             getattr(profile, "kind", "") in {"stock_ipod", "dual_boot"})
-
-    def _confirm_current_stock_model(self):
-        from soundbox.stock_ipod import normalize_model_number, supports_stock_write
-        dev = self._current_device_path
-        profile = self._device_profiles.get(dev)
-        if not dev or profile is None:
-            return
-        current = (
-            self._stock_snapshot.model if self._stock_snapshot is not None
-            else self._stored_stock_model(dev, profile))
-        model, ok = QInputDialog.getText(
-            self,
-            "Confirm stock iPod model",
-            "Enter the model number shown under Settings → About\n"
-            "(the current validated allowlist accepts MA446 only):",
-            text=current,
-        )
-        if not ok:
-            return
-        model = normalize_model_number(model)
-        if not supports_stock_write(model):
-            QMessageBox.warning(
-                self, "Model not validated",
-                f"{model or 'No model number'} is not in the current MA446 "
-                "stock-write allowlist. The saved confirmation was unchanged.")
-            return
-        identity_key = (
-            self._stock_snapshot.identity_key
-            if self._stock_snapshot is not None
-            else self._stock_device_key(dev, profile))
-        self._remember_stock_model(identity_key, model)
-        self.stock_ipod_pages.set_loading(preserve_page=True)
-        self._read_stock_device_view(dev, profile)
+        self._update_device_action_state()
 
     def _device_menu(self, pos):
         item = self.device_tree.itemAt(pos)
@@ -5374,6 +6116,9 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         menu.addAction("Browse", lambda: self._on_device_click(item, 0))
         busy = self._device_operation_owned()
         profile = self._device_profiles.get(dev)
+        if getattr(profile, 'kind', '') in {'stock_ipod', 'dual_boot', 'rockbox'}:
+            action = menu.addAction('Export playlists…', lambda: self._show_export_dialog(dev))
+            action.setEnabled(not busy)
         if profile is not None and profile.kind == "stock_ipod":
             action = menu.addAction(
                 "Preview stock iPod export…",
@@ -5400,16 +6145,17 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 "Erase all files from device…",
                 lambda: self._erase_device(dev))
             action.setEnabled(not busy)
-        n = self._drift_cache.get(dev, 0)  # ≤3s-fresh from the background scan
-        if n:
-            word = "change" if n == 1 else "changes"
-            sync_action = menu.addAction(
-                f"Sync — {n} {word} pending",
-                lambda: self._sync_device(dev))
-        else:
-            sync_action = menu.addAction(
-                "Sync (check again)", lambda: self._sync_device(dev))
-        sync_action.setEnabled(not busy)
+        if getattr(profile, 'kind', '') != 'stock_ipod' or self._stock_has_sync_source(dev):
+            n = self._drift_cache.get(dev, 0)  # ≤3s-fresh from the background scan
+            if n:
+                word = "change" if n == 1 else "changes"
+                sync_action = menu.addAction(
+                    f"Sync — {n} {word} pending",
+                    lambda: self._sync_device(dev))
+            else:
+                sync_action = menu.addAction(
+                    "Sync (check again)", lambda: self._sync_device(dev))
+            sync_action.setEnabled(not busy)
         eject_action = menu.addAction("Eject", lambda: self._eject(dev))
         eject_action.setEnabled(not busy)
         exec_transient_menu(menu, self.device_tree.mapToGlobal(pos))
@@ -5429,7 +6175,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             f"{suffix}: {count}"
             for suffix, count in plan["formats"].items()) or "none"
         QMessageBox.information(
-            self, "Stock iPod sync readiness",
+            self, "iTunes Sync readiness",
             f"Device: {profile.label}"
             f"{f' ({profile.model})' if profile.model else ''}\n"
             f"Tracks visible to planner: {plan['track_count']}\n"
@@ -5438,81 +6184,88 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             f"{chr(10).join(plan['blockers']) if plan['blockers'] else 'Drop a small MP3/WAV playlist onto the iPod to plan it.'}\n\n"
             "This readiness check made no changes.")
 
-    def _stock_write_model(self, dev: str, profile=None) -> str:
-        """Resolve the same fail-closed MA446 authority for every stock write."""
-        from soundbox.stock_ipod import normalize_model_number, supports_stock_write
-        model = self._stored_stock_model(dev, profile)
-        if not supports_stock_write(model):
-            cached = self._stock_view_cache.get(dev)
-            recovered = cached[0].model if cached is not None else ""
-            if supports_stock_write(recovered):
-                model = recovered
-                self._remember_stock_model(
-                    self._stock_device_key(dev, profile), model)
-        if not supports_stock_write(model):
-            model, ok = QInputDialog.getText(
-                self,
-                "Confirm stock iPod model",
-                "Enter the model number shown under Settings → About\n"
-                "(the first write allowlist accepts MA446 only):",
-                text=model,
-            )
-            if not ok:
-                return ""
-        if not supports_stock_write(model):
-            QMessageBox.warning(
-                self,
-                "Model not validated",
-                f"{model or 'No model number'} is not in the initial MA446 "
-                "stock-write allowlist. No files were changed.",
-            )
-            return ""
-        model = normalize_model_number(model)
-        self._remember_stock_model(self._stock_device_key(dev, profile), model)
-        return model
+    def _stock_write_access(self, dev: str, profile=None):
+        """Use observed catalog capabilities; a saved model never grants writes."""
+        from soundbox.device_readiness import stock_write_readiness
+        profile = profile or self._device_profiles.get(dev)
+        cached = self._stock_view_cache.get(dev)
+        snapshot = cached[0] if cached is not None else None
+        write_format = getattr(snapshot, 'stock_format', None)
+        if write_format is None:
+            write_format = getattr(profile, 'stock_format', None)
+        facts = device_facts(dev, cached_only=True)
+        readiness = stock_write_readiness(writable=facts.writable,
+            filesystem=device_fs(dev) or getattr(snapshot, 'filesystem', ''),
+            stock_format=write_format,
+            firewire_guid=getattr(facts, 'firewire_guid', ''))
+        if not readiness.ready:
+            self._export_target_result(dev,RuntimeError(readiness.reason))
+            self._flash_status(readiness.reason, 15)
+            return None
+        return write_format
 
     def _begin_stock_ipod_sync(
-            self, dev: str, playlists: list[Playlist] | None, *, reconcile: bool = False, _source_ready=False):
+            self, dev: str, playlists: list[Playlist] | None, *, reconcile: bool = False,
+            _source_ready=False, _export_capture=None):
         """Run the expensive, read-only database/media plan off the UI thread."""
         if self._shutting_down or self._state_maintenance:
             return
-        from .export_wait import defer_source_sync
-        if defer_source_sync(self,'stock',dev,playlists,_ready=_source_ready,reconcile=reconcile):
+        if _export_capture is None and playlists and getattr(self, '_stock_view_cache', {}).get(dev):
+            from .stock_catalog_sync import request_sync, source_sync_selection
+            selections = source_sync_selection(self, dev, playlists)
+            if selections:
+                request_sync(self, selections, device=dev, source_playlists=playlists)
+                return
+        if (playlists is None or not reconcile) and _export_capture is None:
+            self._request_ipod_export_capture('stock',dev,playlists,reconcile=reconcile)
             return
-        from soundbox.stock_ipod import plan_stock_ipod_sync
+        if _export_capture is not None:
+            _export_capture.require_current(self,dev)
+        from .export_wait import defer_source_sync
+        if _export_capture is None and defer_source_sync(self,'stock',dev,playlists,_ready=_source_ready,reconcile=reconcile):
+            return
+        from soundbox.stock_ipod import StockIpodSyncPlan,plan_stock_ipod_sync
         if self._device_operation_owned():
+            self._export_target_result(dev,RuntimeError('Wait for the current device operation'))
             QMessageBox.warning(
                 self, "Device busy", "Wait for the current device operation.")
             return
         if self._defer_device_operation_until_scan_finishes(
                 lambda: self._begin_stock_ipod_sync(
-                    dev, playlists, reconcile=reconcile)):
+                    dev, playlists, reconcile=reconcile,_export_capture=_export_capture)):
             return
         from .export_wait import sync_source_identity
         source_identity=sync_source_identity(self,dev,playlists)
         profile = self._device_profiles.get(dev)
-        model = self._stock_write_model(dev, profile)
-        if not model:
+        if self._stock_write_access(dev, profile) is None:
             return
+        model = str(getattr(profile, 'model', '') or '')
         if source_identity!=sync_source_identity(self,dev,playlists):
+            self._export_target_result(dev,RuntimeError('Library, playlist or connected iPod changed; choose the target again'))
             self._flash_status('Library, playlist or connected iPod changed; choose the target again',15)
             return
         from .cdj import _source_edits_pending
-        if _source_edits_pending(self):
+        if _export_capture is None and _source_edits_pending(self):
             defer_source_sync(self,'stock',dev,playlists,reconcile=reconcile)
             return
         self._release_eject_ready()
         from .workers import OneShotTask
         from soundbox.export_snapshot import capture_export
-        captured = capture_export(self.lib, playlists or (), extra=self._sync_playlists(),
-                                  titles=self.titles, artists=self.overrides, complete=True)
+        captured = (_export_capture.snapshot if _export_capture is not None else
+            capture_export(self.lib, playlists or (), extra=self._sync_playlists(),
+                           titles=self.titles, artists=self.overrides, complete=True))
         facts = device_facts(dev, cached_only=True)
         self._validate_export_target(dev,facts)
         identity_key = self._stock_device_key(dev, profile)
         # First construction stays on the GUI owner, shared with the artwork
         # warmer; cached_property does not serialize concurrent first access.
         stock_art_cache = self.stock_art_cache
+        from .export_dialog import captured_ipod_noop_result,verify_ipod_export_capture
+        art_cache=self.art_cache
+        witness_store=self.stock_catalog_witness_store
+        previous_witness = getattr(self, '_stock_catalog_witness_cache', {}).get(dev)
         def plan():
+            verify_ipod_export_capture(_export_capture,art_cache)
             inputs = captured.materialize()
             library, extra_playlists = inputs.library, inputs.extra
             facts = device_facts(dev)
@@ -5526,7 +6279,9 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                     {"playlists": shadow.playlists}, library, extra_playlists)
             managed = (shadow.playlists if shadow else {}) or {}
             sources = (shadow.sources if shadow else {}) or {}
-            return plan_stock_ipod_sync(
+            prior_witness = (previous_witness if previous_witness is not None
+                             else witness_store.load(identity_key))
+            planned=plan_stock_ipod_sync(
                 library,
                 selected,
                 dev,
@@ -5539,6 +6294,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 stock_art_cache=stock_art_cache,
                 identity_key=identity_key,
                 serial_number=getattr(facts, "hardware_serial", ""),
+                firewire_guid=getattr(facts, "firewire_guid", ""),
+                usb_family=getattr(facts, "usb_family", ""),
                 shadow_store=self.stock_ipod_shadow_store,
                 managed_playlist_names_before=tuple(
                     " / ".join([*map(str, row.get("folder_path") or []), str(row.get("name") or "")])
@@ -5547,7 +6304,14 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 managed_track_rows_before=tuple(sorted({
                     (int(row.get("dbid") or 0), str(row.get("device_path") or ""), str(row.get("sha256") or ""))
                     for row in sources.values() if isinstance(row, dict) and int(row.get("dbid") or 0) > 0})),
+                display_rows=inputs.display_rows,
+                catalog_witness=prior_witness,
+                extra_playlists=tuple(inputs.extra),
             )
+            verify_ipod_export_capture(_export_capture,art_cache)
+            if _export_capture is not None and isinstance(planned,StockIpodSyncPlan) and not planned.requires_commit:
+                return planned,captured_ipod_noop_result(planned,witness_store)
+            return planned
 
         worker = OneShotTask(plan)
         self._stock_plan_worker = worker
@@ -5558,89 +6322,80 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         worker.finished.connect(
             lambda ww=worker, d=dev: self._finish_device_result_worker(
                 "_stock_plan_worker", ww,
-                lambda result: self._on_stock_ipod_plan(d, result)))
+                lambda result: self._on_stock_ipod_plan(d, result,_export_capture=_export_capture)))
         self._start_device_worker(worker, dev, "plan")
 
-    def _on_stock_ipod_plan(self, dev: str, result):
+    def _on_stock_ipod_plan(self, dev: str, result,*,_export_capture=None):
         from soundbox.stock_ipod import StockIpodSyncPlan
+        from soundbox.operation_control import OperationCancelled
+        from .export_dialog import present_ipod_failure,stock_export_summary
+        noop_result=None
+        if isinstance(result,tuple) and len(result)==2 and isinstance(result[0],StockIpodSyncPlan):
+            result,noop_result=result
         self._exporting = False
+        self._cancelling = False
+        self.cancel_btn.setVisible(False)
         self._stop_pulse()
+        if _export_capture is not None and not isinstance(result, OperationCancelled):
+            try:_export_capture.require_current(self,dev)
+            except Exception as exc:result=exc
         if isinstance(result, Exception):
+            self._export_target_result(dev,result)
             self.progress.setVisible(False)
+            if isinstance(result, OperationCancelled):
+                from .export_wait import retain_source_cancellation
+                if not retain_source_cancellation(self):
+                    self._flash_status('iPod export cancelled — no device changes were committed',15)
+                self._update_device_action_state()
+                return
             self._set_status_text("Ready")
-            QMessageBox.warning(
-                self, "Stock iPod plan refused", f"{result}\n\nNo files were changed.")
+            present_ipod_failure(self,dev,"iTunes plan refused",result,phase='plan')
             self._refresh_devices()
             return
         if not isinstance(result, StockIpodSyncPlan):
             self.progress.setVisible(False)
-            QMessageBox.critical(self, "Stock iPod plan failed", "Unexpected plan result.")
+            self._export_target_result(dev,RuntimeError('Unexpected iPod plan result'))
+            QMessageBox.critical(self, "iTunes plan failed", "Unexpected plan result.")
             return
+        if noop_result is not None:
+            self._publish_ipod_export_witness(dev,noop_result)
+            self._export_target_result(dev,noop_result)
         self._set_device_progress(150)
-        summary = result.summary()
+        summary_suffix,omission_details=stock_export_summary(result)
         if not result.requires_commit:
             def complete():
                 self._device_completion_message(
-                    "Stock iPod is up to date",
+                    "iTunes is up to date",
                     "The read-only comparison found no media, playlist, metadata, "
-                    "artwork, or playback changes to publish.",
+                    "artwork, or playback changes to publish."
+                    + omission_details
+                    + ('\n\n'+getattr(noop_result,'catalog_notice','') if noop_result and getattr(noop_result,'catalog_notice','') else '')
+                    + ('\n\n'+noop_result.catalog_warning if noop_result and noop_result.catalog_warning else ''),
+                    attention=bool(noop_result and noop_result.catalog_warning),
+                    summary=summary_suffix,
+                    issues=(noop_result.catalog_warning,) if noop_result and noop_result.catalog_warning else (),
                 )
-                self._flash_status("iPod up to date")
+                self._flash_status(('iPod up to date — needs attention'
+                    if noop_result and noop_result.catalog_warning else 'iPod up to date')+summary_suffix)
 
             self._finalize_ipod_operation(dev, complete)
             return
-        omission_preview = ""
-        if result.omissions:
-            shown = result.omissions[:6]
-            omission_preview = (
-                "\n\nOMITTED FOR STOCK-FIRMWARE SAFETY:\n"
-                + "\n".join(
-                    f"• {item.title}: {item.reason}" for item in shown)
-            )
-            if len(result.omissions) > len(shown):
-                omission_preview += (
-                    f"\n• …and {len(result.omissions) - len(shown)} more")
-        answer = QMessageBox.question(
-            self,
-            "Commit stock iPod sync?",
-            "The read-only plan passed every structural check.\n\n"
-            f"Model: {summary['model']}\n"
-            f"Playlists: {', '.join(summary['playlists'])}\n"
-            f"Playlist entries selected: {summary['selected_tracks']}\n"
-            f"Compatible entries included: {summary['source_tracks']}\n"
-            f"Incompatible entries omitted: {summary['omitted_tracks']}\n"
-            f"Already on iPod: {summary['reused_tracks']}\n"
-            f"Existing track metadata updated: {summary['metadata_updates']}\n"
-            f"New media files: {summary['new_tracks']} "
-            f"({human(summary['bytes_to_copy'])})\n"
-            f"Unused tracks removed: {summary['removed_tracks']}\n"
-            f"Device media removed: {summary['media_files_to_delete']} "
-            f"({human(summary['bytes_to_delete'])})\n"
-            f"Artwork: {summary['artwork_tracks']} track(s), "
-            f"{summary['unique_artwork']} unique "
-            f"({human(summary['artwork_bytes_to_copy'])})\n"
-            f"Artwork pixels written: {human(summary['artwork_pixel_bytes'])}\n"
-            f"Final iPod library: {summary['final_tracks']} tracks\n"
-            f"Pending playback records merged: {summary['merged_play_count_entries']}"
-            f"{omission_preview}\n\n"
-            "Continue will copy new media, save recovery files, and atomically "
-            "replace iTunesDB last. Omissions apply only to this stock iPod; "
-            "Rockbox exports and source playlists remain unchanged.",
-            QMessageBox.Yes | QMessageBox.Cancel,
-            QMessageBox.Cancel,
-        )
-        if answer != QMessageBox.Yes:
-            self.progress.setVisible(False)
-            self._flash_status("iPod sync cancelled — nothing written")
-            self._export_target_result(dev,RuntimeError('Export cancelled'))
-            self._refresh_devices()
-            return
-        self._commit_stock_ipod_plan(dev, result)
+        self._commit_stock_ipod_plan(dev, result,_export_capture=_export_capture)
 
-    def _commit_stock_ipod_plan(self, dev: str, plan: StockIpodSyncPlan):
+    def _commit_stock_ipod_plan(self, dev: str, plan: StockIpodSyncPlan,*,_export_capture=None):
         from soundbox.stock_ipod import commit_stock_ipod_sync
         from .workers import OneShotTask
-        worker = OneShotTask(lambda: commit_stock_ipod_sync(plan))
+        from .export_dialog import persist_ipod_export_witness,verify_ipod_export_capture
+        if _export_capture is not None:
+            try:_export_capture.require_current(self,dev)
+            except Exception as exc:
+                self._on_stock_ipod_plan(dev,exc);return
+        store=self.stock_catalog_witness_store
+        art_cache=self.art_cache
+        def commit():
+            verify_ipod_export_capture(_export_capture,art_cache)
+            return persist_ipod_export_witness(commit_stock_ipod_sync(plan),store,plan.identity_key)
+        worker = OneShotTask(commit)
         self._stock_commit_worker = worker
         self._exporting = True
         self._set_device_progress(max(150, self.progress.value()))
@@ -5649,33 +6404,40 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         worker.finished.connect(
             lambda ww=worker, d=dev: self._finish_device_result_worker(
                 "_stock_commit_worker", ww,
-                lambda result: self._on_stock_ipod_commit(d, result)))
+                lambda result: self._on_stock_ipod_commit(d, result,plan=plan)))
         self._start_device_worker(worker, dev, "commit")
 
-    def _on_stock_ipod_commit(self, dev: str, result):
+    def _on_stock_ipod_commit(self, dev: str, result,*,plan=None):
+        from soundbox.operation_control import OperationCancelled
+        from .export_dialog import present_ipod_failure,device_result_warnings,stock_export_summary
         self._exporting = False
+        self._cancelling = False
+        self.cancel_btn.setVisible(False)
         self._stop_pulse()
+        if (isinstance(result, OperationCancelled) and not getattr(result,'committed',False)
+                and getattr(result,'recovery_status',None) in {None,'not needed','rolled back'}):
+            self._export_target_result(dev,result)
+            self.progress.setVisible(False)
+            from .export_wait import retain_source_cancellation
+            if not retain_source_cancellation(self):
+                self._flash_status('iPod Sync cancelled — previous library kept',15)
+            self._update_device_action_state()
+            return
         if isinstance(result, Exception):
             self.progress.setVisible(False)
             self._set_status_text("Ready")
-            QMessageBox.critical(
-                self, "Stock iPod sync failed",
-                f"{result}\n\nSoundBox attempted an exact database/media rollback.")
+            present_ipod_failure(self,dev,"iTunes Sync failed",result,phase='commit',critical=True)
         else:
+            self._publish_ipod_export_witness(dev,result)
             self._set_device_progress(800)
-            warning_parts = []
-            if result.shadow_warning:
-                warning_parts.append(result.shadow_warning)
-            if result.cleanup_failures:
-                warning_parts.append(
-                    "Some now-unindexed device files could not be removed:\n"
-                    + "\n".join(result.cleanup_failures))
+            warning_parts=device_result_warnings(result)
             warning = (
                 "\n\n" + "\n\n".join(warning_parts)
                 if warning_parts else "")
+            summary_suffix,omission_details=stock_export_summary(plan)
             def complete():
                 self._device_completion_message(
-                    "Stock iPod sync complete",
+                    "iTunes Sync complete",
                     f"Copied {result.copied_tracks} new track(s); reused "
                     f"{result.reused_tracks}.\n\n"
                     f"Updated title/artist metadata for "
@@ -5686,13 +6448,25 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                     f"from {result.unique_artwork} unique image(s); wrote "
                     f"{human(result.artwork_pixel_bytes)} of pixels.\n\n"
                     f"Recovery files:\n{result.recovery_directory}\n\n"
-                    f"Eject from SoundBox before listening.{warning}",
+                    f"Eject from SoundBox before listening.{omission_details}{warning}"
+                    + ('\n\n'+getattr(result,'catalog_notice','') if getattr(result,'catalog_notice','') else ''),
+                    attention=bool(warning_parts),
+                    summary=summary_suffix,
+                    issues=warning_parts,
                 )
-                self._flash_status("iPod synced")
+                self._flash_status(('iPod synced — needs attention' if warning_parts else 'iPod synced')+summary_suffix)
 
             self._finalize_ipod_operation(dev, complete)
         if isinstance(result, Exception):
             self._refresh_devices()
+
+    def _publish_ipod_export_witness(self,dev,result):
+        from soundbox.stock_ipod_catalog_state import StockCatalogWitness
+        stock=getattr(result,'stock',result)
+        witness=getattr(stock,'catalog_witness',None)
+        if (isinstance(witness,StockCatalogWitness)
+                and witness.device_key==self._stock_device_key(dev,self._device_profiles.get(dev))):
+            self._stock_catalog_witness_cache[dev]=witness
 
     def _begin_dual_ipod_sync(
             self,
@@ -5708,18 +6482,32 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             expected_manifest: dict | None = None,
             audit_existing: bool = False,
             _source_ready=False,
+            _export_capture=None,
     ):
         """Build the composite stock/Rockbox plan without target writes."""
         if self._shutting_down or self._state_maintenance:
             return
+        new_export=(action=='sync' and (playlists is None or not reconcile)
+                    and expected_manifest is None and expected_playlist_rows is None)
+        if (new_export or action in {'delete','order'}) and _export_capture is None:
+            self._request_ipod_export_capture('dual',dev,playlists,reconcile=reconcile,
+                respect_selected_order=respect_selected_order,preconfirmed=preconfirmed,confirmed=confirmed,
+                action=action,expected_playlist_rows=expected_playlist_rows,expected_manifest=expected_manifest,
+                audit_existing=audit_existing)
+            return
+        if _export_capture is not None:
+            _export_capture.require_current(self,dev)
+            if expected_manifest is None:
+                expected_manifest=_export_capture.expected_manifest
         from .export_wait import defer_source_sync
-        if defer_source_sync(self,'dual',dev,playlists,_ready=_source_ready,reconcile=reconcile,
+        if _export_capture is None and defer_source_sync(self,'dual',dev,playlists,_ready=_source_ready,reconcile=reconcile,
                 respect_selected_order=respect_selected_order,preconfirmed=preconfirmed,confirmed=confirmed,
                 action=action,expected_playlist_rows=expected_playlist_rows,expected_manifest=expected_manifest,
                 audit_existing=audit_existing):
             return
-        from soundbox.dual_ipod import plan_dual_ipod_sync
+        from soundbox.dual_ipod import DualIpodSyncPlan,plan_dual_ipod_sync
         if self._device_operation_owned():
+            self._export_target_result(dev,RuntimeError('Wait for the current device operation'))
             QMessageBox.warning(
                 self, "Device busy", "Wait for the current device operation.")
             return
@@ -5735,19 +6523,21 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                     expected_playlist_rows=expected_playlist_rows,
                     expected_manifest=expected_manifest,
                     audit_existing=audit_existing,
+                    _export_capture=_export_capture,
                 )):
             return
         from .export_wait import sync_source_identity
         source_identity=sync_source_identity(self,dev,playlists)
         profile = self._device_profiles.get(dev)
-        model = self._stock_write_model(dev, profile)
-        if not model:
+        if self._stock_write_access(dev, profile) is None:
             return
+        model = str(getattr(profile, 'model', '') or '')
         if source_identity!=sync_source_identity(self,dev,playlists):
+            self._export_target_result(dev,RuntimeError('Library, playlist or connected iPod changed; choose the target again'))
             self._flash_status('Library, playlist or connected iPod changed; choose the target again',15)
             return
         from .cdj import _source_edits_pending
-        if _source_edits_pending(self):
+        if _export_capture is None and _source_edits_pending(self):
             defer_source_sync(self,'dual',dev,playlists,reconcile=reconcile,
                     respect_selected_order=respect_selected_order,preconfirmed=preconfirmed,confirmed=confirmed,
                     action=action,expected_playlist_rows=expected_playlist_rows,expected_manifest=expected_manifest,
@@ -5762,12 +6552,13 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         self._dual_active_preconfirmed = preconfirmed
         self._dual_active_confirmed = confirmed
         self._dual_active_action = action
-        self._dual_active_track_total = sum(
-            len(self.lib.resolve(playlist)) for playlist in (playlists or ()))
+        self._dual_active_track_total = (_export_capture.track_total if _export_capture is not None else
+            sum(len(self.lib.resolve(playlist)) for playlist in (playlists or ())))
         from .workers import ProgressTask
         from soundbox.export_snapshot import capture_export
-        captured = capture_export(self.lib, playlists or (), extra=self._sync_playlists(),
-                                  titles=self.titles, artists=self.overrides, complete=True)
+        captured = (_export_capture.snapshot if _export_capture is not None else
+            capture_export(self.lib, playlists or (), extra=self._sync_playlists(),
+                           titles=self.titles, artists=self.overrides, complete=True))
         identity_key = self._stock_device_key(dev, profile)
         adoptable_playlist_keys = {f"cust:{name}" for name in self.custom}
         state=self.unification_controller.state()
@@ -5776,11 +6567,18 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         stock_art_cache = self.stock_art_cache
         expected_manifest = deepcopy(expected_manifest)
         expected_playlist_rows = deepcopy(expected_playlist_rows)
+        from .export_dialog import captured_ipod_noop_result,verify_ipod_export_capture
+        art_cache=self.art_cache
+        witness_store=self.stock_catalog_witness_store
+        previous_witness = getattr(self, '_stock_catalog_witness_cache', {}).get(dev)
 
         def plan(callback):
+            verify_ipod_export_capture(_export_capture,art_cache)
             inputs = captured.materialize()
             facts = device_facts(dev)
-            return plan_dual_ipod_sync(
+            prior_witness = (previous_witness if previous_witness is not None
+                             else witness_store.load(identity_key))
+            planned=plan_dual_ipod_sync(
                 inputs.library,
                 None if playlists is None else list(inputs.playlists),
                 dev,
@@ -5796,15 +6594,24 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 stock_shadow_store=self.stock_ipod_shadow_store,
                 identity_key=identity_key,
                 serial_number=getattr(facts, "hardware_serial", ""),
+                firewire_guid=getattr(facts, "firewire_guid", ""),
+                usb_family=getattr(facts, "usb_family", ""),
                 reconcile=reconcile,
                 respect_selected_order=respect_selected_order,
                 on_progress=callback,
                 expected_playlist_rows=expected_playlist_rows,
                 extra_playlists=inputs.extra,
                 expected_manifest=expected_manifest,
+                expected_manifest_absent=bool(_export_capture is not None and _export_capture.expected_manifest_absent),
                 adoptable_playlist_keys=adoptable_playlist_keys,
                 audit_existing=audit_existing,
+                display_rows=inputs.display_rows,
+                catalog_witness=prior_witness,
             )
+            verify_ipod_export_capture(_export_capture,art_cache)
+            if _export_capture is not None and isinstance(planned,DualIpodSyncPlan) and not planned.requires_commit:
+                return planned,captured_ipod_noop_result(planned,witness_store)
+            return planned
 
         worker = ProgressTask(
             plan,
@@ -5828,7 +6635,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         worker.finished.connect(
             lambda ww=worker, d=dev: self._finish_device_result_worker(
                 "_dual_plan_worker", ww,
-                lambda result: self._on_dual_ipod_plan(d, result)))
+                lambda result: self._on_dual_ipod_plan(d, result,_export_capture=_export_capture)))
         self._start_device_worker(worker, dev, "plan")
 
     def _on_dual_ipod_plan_progress(
@@ -5857,10 +6664,21 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         self._start_pulse("Planning iPod")
         self._set_status_count()
 
-    def _on_dual_ipod_plan(self, dev: str, result):
+    def _on_dual_ipod_plan(self, dev: str, result,*,_export_capture=None):
         from soundbox.dual_ipod import DualIpodSyncPlan
+        from soundbox.operation_control import OperationCancelled
+        from .export_dialog import present_ipod_failure
+        noop_result=None
+        if isinstance(result,tuple) and len(result)==2 and isinstance(result[0],DualIpodSyncPlan):
+            result,noop_result=result
+        self._cancelling = False
+        self.cancel_btn.setVisible(False)
         self._stop_pulse()
+        if _export_capture is not None and not isinstance(result, OperationCancelled):
+            try:_export_capture.require_current(self,dev)
+            except Exception as exc:result=exc
         if isinstance(result, Exception):
+            self._export_target_result(dev,result)
             was_preconfirmed = self._dual_active_preconfirmed
             self._exporting = False
             self._dual_active_device = ""
@@ -5878,16 +6696,18 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             if was_preconfirmed:
                 self._dual_sync_queue.pop(dev, None)
                 self._reset_dual_batch()
-            QMessageBox.warning(
-                self,
-                "Dual iPod plan refused",
-                f"{result}\n\nNo device files were changed."
-                + (" Remaining queued jobs were cancelled."
-                   if was_preconfirmed else ""),
-            )
+            if isinstance(result, OperationCancelled):
+                from .export_wait import retain_source_cancellation
+                if not retain_source_cancellation(self):
+                    self._flash_status('iPod export cancelled — no device changes were committed',15)
+                self._update_device_action_state()
+                return
+            present_ipod_failure(self,dev,"iTunes/Rockbox plan refused",result,phase='plan',
+                guidance="Remaining queued jobs were cancelled." if was_preconfirmed else '')
             self._refresh_devices()
             return
         if not isinstance(result, DualIpodSyncPlan):
+            self._export_target_result(dev,RuntimeError('Unexpected iTunes/Rockbox plan result'))
             was_preconfirmed = self._dual_active_preconfirmed
             self._exporting = False
             self._dual_active_device = ""
@@ -5902,8 +6722,11 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 self._dual_sync_queue.pop(dev, None)
                 self._reset_dual_batch()
             QMessageBox.critical(
-                self, "Dual iPod plan failed", "Unexpected plan result.")
+                self, "iTunes/Rockbox plan failed", "Unexpected plan result.")
             return
+        if noop_result is not None:
+            self._publish_ipod_export_witness(dev,noop_result)
+            self._export_target_result(dev,noop_result)
         self._set_device_progress(max(
             _DUAL_PLAN_PROGRESS_END, self.progress.value()))
         summary = result.summary()
@@ -5914,7 +6737,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                     self._dual_batch_done_tracks
                     + self._dual_active_track_total,
                 )
-                self._dual_batch_results.append((result, None))
+                self._dual_batch_results.append((result, noop_result))
                 self._dual_active_device = ""
                 self._dual_active_playlist_keys.clear()
                 self._dual_active_preconfirmed = False
@@ -5945,10 +6768,17 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                         if action == "delete" else
                         "The no-write plan found no stock database, media, artwork, "
                         "playlist, or ownership-manifest changes."
-                    ),
+                    ) + ('\n\n'+getattr(noop_result.stock,'catalog_notice','')
+                         if noop_result and getattr(noop_result.stock,'catalog_notice','') else '')
+                      + ('\n\n'+noop_result.stock.catalog_warning
+                         if noop_result and noop_result.stock.catalog_warning else ''),
+                    attention=bool(noop_result and noop_result.stock.catalog_warning),
+                    issues=(noop_result.stock.catalog_warning,)
+                        if noop_result and noop_result.stock.catalog_warning else (),
                 )
                 self._flash_status(
-                    "Nothing to delete" if action == "delete" else "iPod up to date")
+                    ('Nothing to delete' if action=='delete' else 'iPod up to date')
+                    + (' — needs attention' if noop_result and noop_result.stock.catalog_warning else ''))
                 queued = self._dual_sync_queue.pop(dev, [])
                 if queued:
                     worker = self._dual_plan_worker
@@ -5964,11 +6794,9 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
 
             self._finalize_ipod_operation(dev, complete)
             return
-        if self._dual_active_preconfirmed:
-            self._commit_dual_ipod_plan(dev, result)
-            return
-        if self._dual_active_confirmed:
-            self._commit_dual_ipod_plan(dev, result)
+        if (self._dual_active_preconfirmed or self._dual_active_confirmed
+                or self._dual_active_action=='sync'):
+            self._commit_dual_ipod_plan(dev, result,_export_capture=_export_capture)
             return
         omission_lines = []
         for item in list(result.missing[:3]) + list(result.unsupported[:3]):
@@ -6000,7 +6828,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             "Sync iPod?",
             "Ready to sync iPod.\n\n"
             f"{summary['stock_safe_sources'] + summary['rockbox_only_sources']} songs\n"
-            f"• {summary['stock_safe_sources']} Both\n"
+            f"• {summary['stock_safe_sources']} iTunes/Rockbox\n"
             f"• {summary['rockbox_only_sources']} Rockbox only\n\n"
             f"{summary['rockbox_playlists']} {playlist_word}\n"
             f"{recovered_line}"
@@ -6027,17 +6855,22 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             except Exception:
                 pass
             self._flash_status("iPod sync cancelled — nothing written")
-            self._export_target_result(dev,RuntimeError('Export cancelled'))
-            self._refresh_devices()
+            self._export_target_result(dev,OperationCancelled('Export cancelled'))
             return
-        self._commit_dual_ipod_plan(dev, result)
+        self._commit_dual_ipod_plan(dev, result,_export_capture=_export_capture)
 
-    def _commit_dual_ipod_plan(self, dev: str, plan: DualIpodSyncPlan):
+    def _commit_dual_ipod_plan(self, dev: str, plan: DualIpodSyncPlan,*,_export_capture=None):
         from soundbox.dual_ipod import commit_dual_ipod_sync
         from .workers import ProgressTask
+        from .export_dialog import present_ipod_failure
+        if _export_capture is not None:
+            try:_export_capture.require_current(self,dev)
+            except Exception as exc:
+                self._on_dual_ipod_plan(dev,exc);return
         try:
             self._persist_rockbox_playlist_additions(plan)
         except RuntimeError as exc:
+            self._export_target_result(dev,exc)
             self._exporting = False
             self._dual_active_device = ""
             self._dual_active_playlist_keys.clear()
@@ -6047,16 +6880,18 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             self._dual_active_track_total = 0
             self.progress.setVisible(False)
             self._set_status_count()
-            QMessageBox.critical(
-                self,
-                "Could not save playlist update",
-                f"{exc}\n\nNo device files were changed.",
-            )
+            present_ipod_failure(self,dev,"Could not save playlist update",exc,phase='plan',critical=True)
             self._refresh_devices()
             return
+        from .export_dialog import persist_ipod_export_witness,verify_ipod_export_capture
+        store=self.stock_catalog_witness_store
+        art_cache=self.art_cache
+        def commit(callback):
+            verify_ipod_export_capture(_export_capture,art_cache)
+            return persist_ipod_export_witness(commit_dual_ipod_sync(plan,on_progress=callback),
+                                              store,plan.stock.identity_key)
         worker = ProgressTask(
-            lambda callback: commit_dual_ipod_sync(
-                plan, on_progress=callback),
+            commit,
             log_label="Dual iPod commit",
         )
         self._dual_commit_worker = worker
@@ -6139,8 +6974,31 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
 
     def _on_dual_ipod_commit(
             self, dev: str, result, plan: DualIpodSyncPlan | None = None):
+        from soundbox.operation_control import OperationCancelled
         self._exporting = False
+        self._cancelling = False
+        self.cancel_btn.setVisible(False)
         self._stop_pulse()
+        if (isinstance(result, OperationCancelled) and not getattr(result,'committed',False)
+                and getattr(result,'recovery_status',None) in {None,'not needed','rolled back'}):
+            self._export_target_result(dev,result)
+            self._dual_active_device = ''
+            self._dual_active_playlist_keys.clear()
+            self._dual_active_preconfirmed = False
+            self._dual_active_confirmed = False
+            self._dual_active_action = 'sync'
+            self._dual_active_track_total = 0
+            self._dual_sync_queue.pop(dev,None)
+            self._reset_dual_batch()
+            try:self.rockbox_media_cache.clear()
+            except Exception as exc:LOG.warning('Rockbox media staging cleanup failed: %s',exc)
+            self.progress.setVisible(False)
+            from .export_wait import retain_source_cancellation
+            if not retain_source_cancellation(self):
+                self._flash_status('iPod Sync cancelled — previous library kept',15)
+            self._update_device_action_state()
+            return
+        if not isinstance(result,Exception):self._publish_ipod_export_witness(dev,result)
         try:
             self.rockbox_media_cache.clear()
         except Exception as exc:
@@ -6165,7 +7023,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             if isinstance(result, Exception):
                 self.progress.setVisible(False)
                 self._set_status_count()
-                self._show_dual_ipod_failure(result)
+                self._show_dual_ipod_failure(result,dev=dev)
                 self._dual_active_device = ""
                 self._dual_active_playlist_keys.clear()
                 self._dual_active_preconfirmed = False
@@ -6202,13 +7060,12 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         if isinstance(result, Exception):
             self.progress.setVisible(False)
             self._set_status_text("Ready")
-            self._show_dual_ipod_failure(result)
+            self._show_dual_ipod_failure(result,dev=dev)
         else:
             self._set_device_progress(800)
-            cleanup_warning = (
-                "\n\nSome now-unreferenced files could not be removed:\n"
-                + "\n".join(result.cleanup_failures)
-                if result.cleanup_failures else "")
+            from .export_dialog import device_result_warnings
+            warnings=device_result_warnings(result)
+            cleanup_warning='\n\n'+'\n'.join(warnings) if warnings else ''
             adopted_note = (
                 f"\n\nAdopted {adopted_additions} Rockbox playlist "
                 "addition(s)."
@@ -6218,7 +7075,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 self._device_completion_message(
                     "iPod deletion complete"
                     if action == "delete" else "iPod sync complete",
-                    f"Stock: copied {result.stock.copied_tracks}, sanitized "
+                    f"iTunes: copied {result.stock.copied_tracks}, sanitized "
                     f"{result.stock.rewritten_tracks}, reused "
                     f"{result.stock.reused_tracks}, recovered "
                     f"{result.stock.recovered_tracks}.\n\n"
@@ -6231,9 +7088,12 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                     f"{adopted_note}"
                     f"{cleanup_warning}\n\n"
                     f"Recovery files:\n{result.stock.recovery_directory}\n\n"
-                    "Eject is ready when you dismiss this message.",
+                    "Eject is ready."
+                    + ('\n\n'+getattr(result.stock,'catalog_notice','') if getattr(result.stock,'catalog_notice','') else ''),
+                    attention=bool(cleanup_warning),
+                    issues=warnings,
                 )
-                self._flash_status("iPod synced")
+                self._flash_status('iPod synced — needs attention' if cleanup_warning else 'iPod synced')
                 self._dual_active_device = ""
                 self._dual_active_playlist_keys.clear()
                 self._dual_active_confirmed = False
@@ -6300,25 +7160,10 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             self._reload_current_view()
         return added
 
-    def _show_dual_ipod_failure(self, result) -> None:
-        recovery = getattr(result, "recovery_status", None)
-        if getattr(result, "committed", False):
-            detail = "Device changes were committed; final cleanup did not complete."
-        elif recovery == "not needed":
-            detail = "Sync stopped before device writes. No device files were changed."
-        elif recovery == "rolled back":
-            detail = "The coordinated stock/Rockbox rollback completed."
-        elif recovery == "recovery required":
-            detail = ("The coordinated stock/Rockbox rollback was incomplete. "
-                      "Keep the device recovery files; recovery needs review before retrying.")
-        else:
-            detail = ("Device recovery status could not be established. "
-                      "Check the device status before retrying.")
-        QMessageBox.critical(
-            self,
-            "Dual iPod sync failed",
-            f"{result}\n\n{detail}",
-        )
+    def _show_dual_ipod_failure(self, result,*,dev=None) -> None:
+        from .export_dialog import present_ipod_failure
+        device=dev or getattr(self,'_dual_active_device','') or getattr(self,'_current_device_path','')
+        present_ipod_failure(self,device,"iTunes/Rockbox Sync failed",result,phase='commit',critical=True)
 
     def _reset_dual_batch(self) -> None:
         self._dual_batch_keys.clear()
@@ -6376,10 +7221,12 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             f"• {name}" for name in self._dual_batch_names)
         job_count = len(self._dual_batch_names)
         track_count = self._dual_batch_total_tracks
+        from .export_dialog import device_result_notices,device_result_warnings
+        warnings=tuple(dict.fromkeys(note for result in committed for note in device_result_warnings(result)))
+        notices=tuple(dict.fromkeys(note for result in committed for note in device_result_notices(result)))
 
         def complete():
-            QMessageBox.information(
-                self,
+            self._device_completion_message(
                 "iPod queue complete",
                 f"{job_count} playlist job"
                 f"{'s' if job_count != 1 else ''} complete\n"
@@ -6388,22 +7235,30 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 f"Media copied: {copied}\n"
                 f"Media metadata refreshed: {refreshed}\n"
                 f"Unreferenced files removed: {removed}\n\n"
-                "Eject is ready when you dismiss this message.",
+                "Eject is ready."
+                + ('\n\n'+'\n'.join(notices) if notices else '')
+                + ('\n\n'+'\n'.join(warnings) if warnings else ''),
+                attention=bool(warnings),
+                summary=f' · {track_count} song entries',
+                issues=warnings,
             )
-            self._flash_status("iPod synced")
+            self._flash_status('iPod synced — needs attention' if warnings else 'iPod synced')
             self._reset_dual_batch()
 
         self._finalize_ipod_operation(dev, complete)
 
-    def _begin_stock_playlist_delete(self, selections):
+    def _begin_stock_playlist_delete(self, selections, *, _intent=None):
         """Plan deletion of the checked user playlists from the stock iPod."""
         from soundbox.stock_ipod import plan_stock_ipod_playlist_delete
-        dev = self._current_device_path
-        if not dev or self._stock_snapshot is None:
+        if self._shutting_down or self._state_maintenance:
+            return
+        dev = _intent[0] if _intent is not None else self._current_device_path
+        cached = self._stock_view_cache.get(dev)
+        snapshot = cached[0] if cached is not None else self._stock_snapshot
+        if not dev or snapshot is None:
             return
         profile = self._device_profiles.get(dev)
         dual_boot = getattr(profile, "kind", "") == "dual_boot"
-        cached = self._stock_view_cache.get(dev)
         if dual_boot and cached is None:
             QMessageBox.warning(self, "Device changed", "Refresh the iPod before deleting.")
             return
@@ -6440,32 +7295,86 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             identities.append((numeric_id, str(raw[1] or "Untitled playlist")))
         if not identities:
             return
-        if self._stock_snapshot.target != Path(dev):
+        if snapshot.target != Path(dev):
             QMessageBox.warning(
                 self, "Device changed", "Refresh the stock iPod before deleting.")
+            return
+        identity = self._device_coordinator.mounts.get(dev)
+        intent = _intent or (dev, identity, tuple(identities), False)
+        def current_intent():
+            current = self._stock_view_cache.get(dev)
+            observed = current[0] if current is not None else snapshot
+            headers = [(row.playlist_id, row.title) for row in observed.playlists]
+            return (not self._shutting_down and not self._state_maintenance
+                and identity is not None and self._device_coordinator.mounts.get(dev) == intent[1]
+                and observed.target == Path(dev)
+                and all(headers.count(pair) == 1
+                    and sum(row[0] == pair[0] for row in headers) == 1 for pair in intent[2]))
+        if tuple(identities) != intent[2] or not current_intent():
+            self._flash_status('The selected iPod playlists changed; choose them again', 15)
             return
         if self._device_operation_owned():
             QMessageBox.warning(
                 self, "Device busy", "Wait for the current device operation.")
             return
         if self._defer_device_operation_until_scan_finishes(
-                lambda: self._begin_stock_playlist_delete(raw_selections)):
+                lambda: self._begin_stock_playlist_delete(raw_selections, _intent=intent)):
             return
         profile = self._device_profiles.get(dev)
-        model = self._stock_write_model(dev, profile)
-        if not model:
+        if self._stock_write_access(dev, profile) is None:
             return
+        if not intent[3]:
+            titles = [title for _identity, title in identities]
+            shown = [text[:117]+'…' if len(text)>120 else text for text in titles[:3]]
+            label = ', '.join(shown) + (f' and {len(titles)-3} more' if len(titles)>3 else '')
+            title = 'Delete iPod playlist?' if len(titles)==1 else 'Delete iPod playlists?'
+            answer = QMessageBox.question(self, title,
+                f'Delete {label} from {Path(dev).name}?\n\n'
+                'Songs unused by other playlists will also be removed from this iPod.',
+                QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel)
+            if answer != QMessageBox.Yes:
+                self._flash_status('iPod deletion cancelled — nothing changed')
+                return
+            intent = (*intent[:3], True)
+        if not current_intent():
+            self._flash_status('The selected iPod playlists changed; choose them again', 15)
+            return
+        profile = self._device_profiles.get(dev)
+        if self._stock_write_access(dev, profile) is None:
+            return
+        if self._defer_device_operation_until_scan_finishes(
+                lambda: self._begin_stock_playlist_delete(raw_selections, _intent=intent)):
+            return
+        if self._device_operation_owned():
+            self._flash_status('Wait for the current device operation', 15)
+            return
+        model = str(getattr(profile, 'model', '') or '')
         self._release_eject_ready()
         from .workers import OneShotTask
         stock_art_cache = self.stock_art_cache
-        worker = OneShotTask(lambda: plan_stock_ipod_playlist_delete(
-            dev,
-            [playlist_id for playlist_id, _title in identities],
-            model_number=model,
-            filesystem=device_fs(dev),
-            stock_art_cache=stock_art_cache,
-            allow_dual_boot=pre_composite_dual,
-        ))
+        prior_witness = self._stock_catalog_witness_cache.get(dev)
+        witness_store = self.stock_catalog_witness_store
+        shadow_store = self.stock_ipod_shadow_store
+        identity_key = snapshot.identity_key
+        def plan_delete():
+            witness = prior_witness if prior_witness is not None else witness_store.load(identity_key)
+            from soundbox.stock_ipod_catalog_state import StockCatalogWitness
+            facts = device_facts(dev)
+            return plan_stock_ipod_playlist_delete(
+                dev,
+                [playlist_id for playlist_id, _title in identities],
+                model_number=model,
+                filesystem=device_fs(dev),
+                stock_art_cache=stock_art_cache,
+                allow_dual_boot=pre_composite_dual,
+                firewire_guid=getattr(facts, "firewire_guid", ""),
+                usb_family=getattr(facts, "usb_family", ""),
+                identity_key=identity_key,
+                serial_number=getattr(facts, "hardware_serial", ""),
+                shadow_store=shadow_store,
+                catalog_witness=witness if isinstance(witness, StockCatalogWitness) else None,
+            )
+        worker = OneShotTask(plan_delete)
         self._stock_delete_plan_worker = worker
         self._exporting = True
         self._set_device_progress(0)
@@ -6473,10 +7382,10 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         self._start_pulse("Planning iPod")
         worker.finished.connect(
             lambda ww=worker, d=dev, expected=tuple(identities):
-            self._finish_device_result_worker(
+            self._finish_stock_delete_worker(
                 "_stock_delete_plan_worker", ww,
                 lambda result: self._on_stock_playlist_delete_plan(
-                    d, expected, result)))
+                    d, expected, result, confirmed=True, expected_mount=intent[1])))
         self._start_device_worker(worker, dev, "plan-delete")
 
     def _cached_composite_manifest(self, dev):
@@ -6488,6 +7397,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
 
     def _apply_composite_playlist_order(self, requested_keys) -> None:
         """Publish the Device-tab sequence to iTunesDB and Rockbox together."""
+        from .export_dialog import device_failure_text
         dev = self._current_device_path
         profile = self._device_profiles.get(dev)
         if (
@@ -6510,21 +7420,9 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             QMessageBox.warning(
                 self,
                 "Playlist order unavailable",
-                f"{exc}\n\nNo device files were changed.",
+                device_failure_text(exc,phase='plan'),
             )
             self._refresh_device_surfaces(dev)
-            return
-        answer = QMessageBox.question(
-            self,
-            "Apply iPod playlist order?",
-            f"Apply this order to {len(playlists)} playlists in both the stock "
-            "iPod library and Rockbox Playlist Catalogue?\n\n"
-            "SoundBox will keep the visible playlist names unchanged and will "
-            "not duplicate any songs.",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.Yes,
-        )
-        if answer != QMessageBox.Yes:
             return
         self._begin_dual_ipod_sync(
             dev,
@@ -6544,6 +7442,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             confirmed: bool = False,
     ):
         """Remove checked schema-3 playlists through the unified planner."""
+        from .export_dialog import device_failure_text
         try:
             current_manifest = self._cached_composite_manifest(dev)
             prior = current_manifest.get("playlists") or {}
@@ -6632,7 +7531,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             QMessageBox.warning(
                 self,
                 "iPod playlist deletion refused",
-                f"{exc}\n\nNo device files were changed.",
+                device_failure_text(exc,phase='plan'),
             )
             return
         self._begin_dual_ipod_sync(
@@ -6645,36 +7544,47 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         )
 
     def _on_stock_playlist_delete_plan(
-            self, dev: str, expected: tuple[tuple[int, str], ...], result):
+            self, dev: str, expected: tuple[tuple[int, str], ...], result, *,
+            confirmed=False, expected_mount=None):
         from soundbox.stock_ipod import StockIpodDeletePlan
+        from soundbox.operation_control import OperationCancelled
+        from .export_dialog import present_ipod_failure
         self._exporting = False
+        self._cancelling = False
         self._stop_pulse()
+        self.cancel_btn.setVisible(False)
+        if isinstance(result, OperationCancelled):
+            self.progress.setVisible(False)
+            self._flash_status('iPod deletion cancelled — nothing written')
+            return
         if isinstance(result, Exception):
             self.progress.setVisible(False)
             self._set_status_text("Ready")
-            QMessageBox.warning(
-                self,
-                "Stock iPod delete refused",
-                f"{result}\n\nNo playlists, database records, or media files changed.",
-            )
+            present_ipod_failure(self,dev,"iTunes delete refused",result,phase='plan')
             self._refresh_devices()
             return
         if not isinstance(result, StockIpodDeletePlan):
             self.progress.setVisible(False)
             QMessageBox.critical(
-                self, "Stock iPod delete failed", "Unexpected plan result.")
+                self, "iTunes delete failed", "Unexpected plan result.")
             return
         self._set_device_progress(150)
         summary = result.summary()
         planned_title = ", ".join(summary["playlists"])
         expected_ids = tuple(playlist_id for playlist_id, _title in expected)
-        if tuple(result.playlist_ids) != expected_ids:
+        if (len(result.playlist_ids) != len(result.playlist_names)
+                or tuple(result.playlist_ids) != expected_ids
+                or tuple(zip(result.playlist_ids,result.playlist_names,strict=True)) != expected
+                or expected_mount is not None and self._device_coordinator.mounts.get(dev) != expected_mount):
             QMessageBox.warning(
                 self,
                 "Playlists changed",
                 "The selected playlist identities changed during planning. "
                 "Nothing was modified.",
             )
+            return
+        if confirmed:
+            self._commit_stock_playlist_delete(dev, result)
             return
         multiple = len(result.playlist_names) != 1
         retained_note = (
@@ -6715,65 +7625,64 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
 
     def _commit_stock_playlist_delete(self, dev: str, plan: StockIpodDeletePlan):
         from soundbox.stock_ipod import commit_stock_ipod_playlist_delete
+        from .export_dialog import persist_ipod_export_witness
         from .workers import OneShotTask
-        worker = OneShotTask(lambda: commit_stock_ipod_playlist_delete(plan))
+        witness_store = self.stock_catalog_witness_store
+        identity_key = plan.catalog_witness.device_key if plan.catalog_witness is not None else ''
+        worker = OneShotTask(lambda: persist_ipod_export_witness(
+            commit_stock_ipod_playlist_delete(plan), witness_store, identity_key))
         self._stock_delete_commit_worker = worker
         self._exporting = True
         self._set_device_progress(max(150, self.progress.value()))
-        self.cancel_btn.setVisible(False)
+        self.cancel_btn.setVisible(True)
         self._start_pulse("Syncing iPod")
         worker.finished.connect(
-            lambda ww=worker, d=dev: self._finish_device_result_worker(
+            lambda ww=worker, d=dev: self._finish_stock_delete_worker(
                 "_stock_delete_commit_worker", ww,
                 lambda result: self._on_stock_playlist_delete_commit(d, result)))
         self._start_device_worker(worker, dev, "commit-delete")
 
     def _on_stock_playlist_delete_commit(self, dev: str, result):
+        from soundbox.operation_control import OperationCancelled
+        from .export_dialog import present_ipod_failure, device_result_notices, device_result_warnings
         self._exporting = False
+        self._cancelling = False
         self._stop_pulse()
+        self.cancel_btn.setVisible(False)
+        if (isinstance(result, OperationCancelled) and not getattr(result,'committed',False)
+                and getattr(result,'recovery_status',None) in {None,'not needed','rolled back'}):
+            self.progress.setVisible(False)
+            self._flash_status('iPod deletion cancelled — playlists unchanged')
+            return
         if isinstance(result, Exception):
             self.progress.setVisible(False)
             self._set_status_text("Ready")
-            QMessageBox.critical(
-                self,
-                "Stock iPod deletion failed",
-                f"{result}\n\nSoundBox attempted an exact database/artwork rollback.",
-            )
+            present_ipod_failure(self,dev,"iTunes deletion failed",result,phase='commit',critical=True)
         else:
+            self._publish_ipod_export_witness(dev,result)
             self._set_device_progress(800)
             multiple = len(result.playlists) != 1
+            warnings = device_result_warnings(result)
+            notices = device_result_notices(result)
             def complete():
-                if result.cleanup_failures:
-                    QMessageBox.warning(
-                        self,
-                        "Playlists deleted; media cleanup incomplete" if multiple
-                        else "Playlist deleted; media cleanup incomplete",
-                        f"Deleted {'playlists' if multiple else 'playlist'}: "
-                        f"{', '.join(result.playlists)}\n"
-                        f"Removed {result.deleted_track_records} database "
-                        f"track(s) and {result.deleted_media_files} media file(s).\n\n"
-                        "The iPod database is consistent, but these unindexed "
-                        f"files could not be removed:\n"
-                        f"{chr(10).join(result.cleanup_failures)}\n\n"
-                        f"Recovery files:\n{result.recovery_directory}\n\n"
-                        "Eject is ready when you dismiss this message.",
-                    )
-                else:
-                    QMessageBox.information(
-                        self,
-                        "Stock iPod playlists deleted" if multiple
-                        else "Stock iPod playlist deleted",
-                        f"Deleted {'playlists' if multiple else 'playlist'}: "
-                        f"{', '.join(result.playlists)}\n"
-                        f"Removed {result.deleted_track_records} unused track "
-                        f"record(s) and {result.deleted_media_files} media file(s) "
-                        f"({human(result.deleted_bytes)}).\n\n"
-                        f"Remaining: {result.remaining_playlists} user playlist(s), "
-                        f"{result.remaining_tracks} track(s).\n\n"
-                        f"Recovery files:\n{result.recovery_directory}\n\n"
-                        "Eject is ready when you dismiss this message.",
-                    )
+                self._device_completion_message(
+                    "iTunes playlists deleted" if multiple else "iTunes playlist deleted",
+                    f"Deleted {'playlists' if multiple else 'playlist'}: "
+                    f"{', '.join(result.playlists)}\n"
+                    f"Removed {result.deleted_track_records} unused track "
+                    f"record(s) and {result.deleted_media_files} media file(s) "
+                    f"({human(result.deleted_bytes)}).\n\n"
+                    f"Remaining: {result.remaining_playlists} user playlist(s), "
+                    f"{result.remaining_tracks} track(s).\n\n"
+                    f"Recovery files:\n{result.recovery_directory}\n\nEject is ready."
+                    + ('\n\n'+'\n'.join(notices) if notices else '')
+                    + ('\n\n'+'\n'.join(warnings) if warnings else ''),
+                    attention=bool(warnings), issues=warnings,
+                )
                 self._flash_status(
+                    'Playlist deleted — remaining cleanup cancelled'
+                    if getattr(result, 'cleanup_cancelled', False) else
+                    'Playlist deleted — needs attention' if warnings else
                     "iPod playlists deleted" if multiple
                     else "iPod playlist deleted")
 
@@ -6849,6 +7758,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 f"{integrity}{extra}")
 
     def _confirm_ipod_sync(self, dev: str, *, audit_existing: bool = False) -> bool:
+        if not audit_existing:return True
         answer = QMessageBox.question(
             self,
             "Repair managed library?" if audit_existing else "Sync iPod?",
@@ -6859,7 +7769,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                "SoundBox will trust its committed inventory and read playlist "
                "edits made on the iPod. Use Verify for a full file check.\n\n") +
             "SoundBox will compare the current playlists and metadata, then "
-            "apply only the required stock/Rockbox changes. Planning and "
+            "apply only the required iTunes/Rockbox changes. Planning and "
             "writing will appear as one continuous operation. Source files "
             "remain unchanged.",
             QMessageBox.Yes | QMessageBox.No,
@@ -6875,7 +7785,11 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             self._show_export_dialog(dev)
             return
         if profile is not None and profile.kind == "stock_ipod":
-            self._begin_stock_ipod_sync(dev, None, reconcile=True)
+            if self._stock_has_sync_source(dev):
+                from .stock_catalog_sync import request_device_sync
+                request_device_sync(self, dev)
+                return
+            self._show_export_dialog(dev)
             return
         if profile is not None and profile.kind == "dual_boot":
             if not self._confirm_ipod_sync(dev, audit_existing=audit_existing):
@@ -6889,6 +7803,9 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 action="sync",
                 audit_existing=audit_existing,
             )
+            return
+        if profile is not None and profile.kind=='rockbox':
+            self._begin_rockbox_ipod_sync(dev,None,resync=True)
             return
         if self._defer_device_operation_until_scan_finishes(
                 lambda: self._sync_device(dev, audit_existing=audit_existing)):
@@ -6918,7 +7835,29 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
 
     def _on_resync_done(self, dev: str, rep):
         self._exporting = False
+        self._cancelling = False
         self._stop_pulse()
+        self.cancel_btn.setVisible(False)
+        issues=[f'{playlist.name}: {error}' for playlist in getattr(rep,'playlists',())
+                for error in playlist.errors]
+        issues.extend(f'{playlist.name}: {playlist.missing} missing song(s), {playlist.conflicts} conflicting file(s)'
+                      for playlist in getattr(rep,'playlists',()) if playlist.missing or playlist.conflicts)
+        if issues:
+            self._export_target_result(dev,RuntimeError('; '.join(issues)))
+            self.progress.setVisible(False);self._eject_ready_device=dev
+            self._set_status_text('Sync needs attention')
+            self._update_device_action_state()
+            copied=sum(playlist.copied for playlist in rep.playlists)
+            QMessageBox.warning(self,'Sync needs attention',
+                f'{copied} file(s) copied. Completed files were kept; retry Sync after fixing these issues.\n\n'
+                +'\n'.join(issues[:20]))
+            return
+        if getattr(rep, 'cancelled', False):
+            self.progress.setVisible(False)
+            self._eject_ready_device = dev
+            self._flash_status('Sync cancelled — completed files kept')
+            self._update_device_action_state()
+            return
         self._set_device_progress(800)
 
         def complete():
@@ -7074,14 +8013,17 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         ids = [row['id'] for row in selected_rows if row.get('id')]
         key = COLUMNS[idx.column()][0]
         menu = QMenu(self)
+        binding = capture_tracks(self, ids)
+        clicked = capture_tracks(self, (tid,))
         if key in ("title", "artist"):
-            menu.addAction("Edit", lambda: self._table_edit_at(idx))
+            menu.addAction("Edit", self._table_menu_edit(idx))
         if key == "artist":
             cur_artist = self.model._rows[idx.row()].get("artist") or ""
             if cur_artist and cur_artist != "Unknown Artist":
                 menu.addAction(f"Merge “{cur_artist}” into…",
-                               lambda a=cur_artist: self._merge_artist(a))
-        self._add_track_file_actions(menu, ids)
+                               self._track_menu_action(clicked, lambda a=cur_artist: self._merge_artist(a)))
+        self._add_track_file_actions(menu, ids, binding=binding)
+        add_recovery_actions(self, menu)
         # Imported files the user moved on disk: offer to find them again.
         # Shown from any imported row — a move usually breaks a batch at once,
         # so the action heals ALL missing links, not just the clicked row.
@@ -7094,45 +8036,48 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                     locating.setEnabled(False)
                 else:
                     menu.addAction(f"Fix Missing Links… ({len(lost)})",
-                                   self._fix_links)
-        self._add_track_reanalysis_action(menu, ids)
+                                   self._track_menu_action(binding, self._fix_links))
+        self._add_track_reanalysis_action(menu, ids, binding=binding)
         menu.addSeparator()
-        menu.addAction("Choose cover art…", lambda: self._art_pick(tid))
+        menu.addAction("Choose cover art…", self._track_menu_action(clicked, lambda: self._art_pick(tid)))
         if self.providers.allows("artwork.search"):
-            menu.addAction("Fetch cover art now", lambda: self._art_fetch_one(tid))
+            menu.addAction("Fetch cover art now", self._track_menu_action(clicked, lambda: self._art_fetch_one(tid)))
         if (self.providers.allows('artwork.search')
                 and callable(getattr(self.providers.artwork,'fetch_profile_art',None))):
-            menu.addAction('Set cover art to artist profile',lambda:self._art_artist_profile(tid))
+            menu.addAction('Set cover art to artist profile',
+                           self._track_menu_action(clicked,lambda:self._art_artist_profile(tid)))
         # A managed default is not a per-track cover and cannot be removed from
         # this menu: blocked tracks intentionally receive defaults too. Only a
         # real cover/avatar exposes the per-track Remove action.
         if self.art_cache.canonical_image_path(tid):
-            menu.addAction("Remove cover art", lambda: self._art_remove(tid))
+            menu.addAction("Remove cover art", self._track_menu_action(clicked, lambda: self._art_remove(tid)))
         menu.addSeparator()
         # Playlist views expose both scopes: remove only from the current
         # playlist, or remove globally from SoundBox's Collection. Collection
         # and other derived all-track views expose only the global action.
-        self._add_track_removal_actions(menu, ids, selected_rows=selected_rows)
+        self._add_track_removal_actions(menu, ids, selected_rows=selected_rows, binding=binding)
         exec_transient_menu(menu, self.table.viewport().mapToGlobal(pos))
 
-    def _add_track_reanalysis_action(self, menu: QMenu, ids: list[str]):
+    def _add_track_reanalysis_action(self, menu: QMenu, ids: list[str], *, binding=None):
         n = len(ids)
+        binding = capture_tracks(self, ids) if binding is None else binding
         menu.addAction(
             "Analyze Track" if n == 1 else f"Analyze {n} Tracks",
-            lambda selected=tuple(ids): self._analyze_tracks(selected),
+            self._track_menu_action(binding, lambda selected=tuple(ids): self._analyze_tracks(selected)),
         )
 
     def _add_track_file_actions(
-            self, menu: QMenu, ids: list[str], *, reveal: bool = True):
+            self, menu: QMenu, ids: list[str], *, reveal: bool = True, binding=None):
         """Add source-file utilities in their stable menu order."""
         selected = tuple(ids)
+        binding = capture_tracks(self, ids) if binding is None else binding
         if reveal:
             menu.addAction(
                 "Open in Finder",
-                lambda: self._open_in_finder(selected),
+                self._track_menu_action(binding, lambda: self._open_in_finder(selected)),
             )
 
-    def _add_track_removal_actions(self, menu: QMenu, ids: list[str], *, selected_rows=None):
+    def _add_track_removal_actions(self, menu: QMenu, ids: list[str], *, selected_rows=None, binding=None):
         """Add the scope-explicit reversible removal actions for this view.
 
         Native ordinary playlists capture exact source occurrences; custom
@@ -7140,6 +8085,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         SoundBox view/export but never writes rekordbox or touches source audio.
         """
         n = len(ids)
+        binding = capture_tracks(self, ids) if binding is None else binding
         key = getattr(self, '_view_key', '') or ''
         rb_path = key[3:] if key.startswith('rb:') else None
         cust_name = key[3:] if key.startswith('sb:') and key[3:] in self.custom else None
@@ -7152,15 +8098,16 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 captured = None;error = str(exc)
             action = menu.addAction("Remove from Playlist" if n == 1 else f"Remove {n} tracks from Playlist")
             action.setEnabled(captured is not None)
-            if captured is not None:action.triggered.connect(lambda: self._native_submit_remove(captured))
+            if captured is not None:
+                action.triggered.connect(self._track_menu_action(binding, lambda: self._native_submit_remove(captured)))
             else:action.setToolTip(error)
         elif cust_name:
             menu.addAction("Remove from Playlist" if n == 1
                            else f"Remove {n} tracks from Playlist",
-                           lambda: self._remove_from_custom(cust_name, ids))
+                           self._playlist_menu_action(binding, cust_name, lambda: self._remove_from_custom(cust_name, ids)))
         menu.addAction("Remove from Collection" if n == 1
                        else f"Remove {n} tracks from Collection",
-                       lambda: self._delete_tracks(ids))
+                       self._track_menu_action(binding, lambda: self._delete_tracks(ids)))
 
     def _remove_from_rb_playlist(self, display_path: str, ids: list[str]):
         """A native playlist gesture must publish to rekordbox, never a local veto."""
@@ -7173,15 +8120,15 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         self._refresh_custom()
         self._after_track_edit(f"Removed {len(ids)} ✓")
 
-    def _after_track_edit(self, msg: str):
+    def _after_track_edit(self, msg: str, *, persist=True,refresh_devices=True):
         """Persist + re-render after a delete/remove/restore: counts, current
         view, and device drift badges all reflect the new effective library."""
-        self._save_state()
+        if persist:self._save_state()
         self._apply_settings_to_lib()
         if self.lib is not None:
             self._populate_tree(engine.summary(self.lib))
             self._reload_current_view()
-        self._refresh_devices()
+        if refresh_devices:self._refresh_devices()
         self._refresh_graveyard()  # ALWAYS current — not just on gear-open
         self._flash_status(msg, 6)
 
@@ -7316,6 +8263,11 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         """Remove from SOUNDBOX ONLY — never rekordbox or the file on disk.
         The track stops appearing in every view/export and remains restorable
         from Settings, so a library cleanup pass is always reversible."""
+        from .track_menu import capture_tracks
+        ids = list(dict.fromkeys(ids))
+        binding = capture_tracks(self, ids)
+        if not binding.matches(self):
+            return False
         n = len(ids)
         if QMessageBox.question(
                 self, "Remove from Collection",
@@ -7323,13 +8275,24 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 "This hides them from every SoundBox view and export. rekordbox "
                 "and the files on disk are NOT touched. Restore anytime in Settings."
         ) != QMessageBox.Yes:
-            return
+            return False
+        if (getattr(self, '_shutting_down', False)
+                or getattr(self, '_state_maintenance', False) or not binding.matches(self)):
+            self._flash_status('The selected tracks changed; review them and try again.', 8)
+            return False
         stamp = time.strftime("%Y-%m-%d %H:%M")  # minute precision — same-day deletes sort truthfully
-        self.hidden.update(ids)
+        previous_hidden, previous_dates = self.hidden, self.hidden_dates
+        self.hidden = self.hidden | set(ids)
+        self.hidden_dates = dict(self.hidden_dates)
         for i in ids:
             self.hidden_dates.setdefault(i, stamp)
-        self._after_track_edit(f"Removed {n} from Collection ✓")
+        if not self._save_state():
+            self.hidden, self.hidden_dates = previous_hidden, previous_dates
+            self._flash_status('Tracks were not removed; the library could not be saved. Try again.', 12)
+            return False
+        self._after_track_edit(f"Removed {n} from Collection ✓", persist=False)
         self._discard_graveyard_analysis(ids)
+        return True
 
     def _discard_graveyard_analysis(self, track_ids) -> tuple[int, int]:
         """Drop global-Graveyard analysis without touching source audio."""
@@ -7864,8 +8827,18 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             if rescan_if_running or self._stock_art_worker._stop:
                 self._stock_art_rescan = True
             return
+        profiles = set()
+        for dev, profile in self._device_profiles.items():
+            if not getattr(profile, 'has_stock_ipod', False):
+                continue
+            cached = self._stock_view_cache.get(dev)
+            observed = getattr(cached[0], 'stock_format', None) if cached else getattr(profile, 'stock_format', None)
+            if observed is not None and observed.supports_artwork:
+                profiles.add(observed.artwork_profile)
+        if not profiles:
+            return
         worker = StockArtworkPrepWorker(
-            self.lib, self.art_cache, self.stock_art_cache, images)
+            self.lib, self.art_cache, self.stock_art_cache, images, profiles=tuple(sorted(profiles)))
         self._stock_art_worker = worker
         worker.set_playback_active(self.player_bar.is_playing())
         worker.finished.connect(
@@ -8107,18 +9080,44 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         """Persist the complete user-sized shell.
 
         This runs at shutdown after the user's final resize, so the next launch
-        restores the outer window first and the three sidebar panes second.
+        restores the outer window first and the sidebar panes second.
         """
         hh = self.table.horizontalHeader()
         self.settings["columns_state"] = bytes(hh.saveState().toBase64()).decode("ascii")
         self.settings['columns_keys'] = [key for key,_label,_hidden in COLUMNS]
         self.settings["sidebar_split"] = list(self._sidebar_split.sizes())
+        self.settings['sidebar_width'] = self._browser_split.sizes()[0]
         self.settings["window_geometry"] = bytes(
             self.saveGeometry().toBase64()).decode("ascii")
         normal = self.normalGeometry() if self.isMaximized() else self.geometry()
         self.settings["window_rect"] = [
             normal.x(), normal.y(), normal.width(), normal.height()]
-        self._save_state()
+        self._schedule_settings_save('columns_state','columns_keys','sidebar_split','sidebar_width',
+                                     'window_geometry','window_rect')
+
+    def _save_sidebar_width(self, *_args):
+        if not hasattr(self, 'settings'):
+            return
+        self.settings['sidebar_width'] = self._browser_split.sizes()[0]
+        self._schedule_settings_save('sidebar_width')
+
+    def _restore_sidebar_width(self):
+        # Hidden startup layouts must know the restored window size before
+        # QSplitter clamps its child sizes, just as the vertical panes do.
+        for widget in (self, self.centralWidget(), self.body_stack):
+            if widget.layout() is not None:
+                widget.layout().activate()
+        split = self._browser_split
+        width = self.settings.get('sidebar_width', 272)
+        if type(width) is not int or width < 160:
+            width = 272
+        available = max(0, split.width() - split.handleWidth())
+        width = min(width, max(160, available - 320))
+        blocked = split.blockSignals(True)
+        try:
+            split.setSizes([width, max(1, available - width)])
+        finally:
+            split.blockSignals(blocked)
 
     def _restore_window_geometry(self):
         """Restore exact size/position, clamping only if its screen disappeared."""
@@ -8162,6 +9161,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         """Bring back the user's saved column layout + sidebar section heights
         (after settings load). Sort is deliberately NOT restored — a playlist
         opening pre-sorted would read as the wrong (non-rekordbox) order."""
+        self._restore_sidebar_width()
         sizes = self.settings.get("sidebar_split")
         if (isinstance(sizes, list) and len(sizes) in (2,3)
                 and all(isinstance(x, int) and x >= 0 for x in sizes) and sum(sizes)):
@@ -8287,20 +9287,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
 
     def _confirm_dual_ipod_drop(
             self, dev: str, playlist: Playlist) -> bool:
-        tracks = len(self.lib.resolve(playlist))
-        answer = QMessageBox.question(
-            self,
-            "Add playlist to iPod?",
-            f"Add “{playlist.display_path}” to {Path(dev).name}?\n\n"
-            f"{tracks} track{'s' if tracks != 1 else ''}\n\n"
-            "Yes queues this playlist for a guarded stock/Rockbox plan and "
-            "sync. Updating an existing playlist also removes tracks that it "
-            "no longer references unless another managed playlist still uses "
-            "them. Source files remain unchanged.",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.Yes,
-        )
-        return answer == QMessageBox.Yes
+        # The explicit drop/export action is the ordinary sync intent.
+        return True
 
     def _start_confirmed_dual_jobs(
             self, dev: str, playlists: list[Playlist]) -> None:
@@ -8320,6 +9308,61 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         self._dual_sync_queue[dev] = []
         self._begin_dual_ipod_sync(
             dev, jobs, preconfirmed=True)
+
+    def _begin_rockbox_ipod_sync(self,dev,playlists,*,_export_capture=None,resync=False):
+        """Export Rockbox from the same durable iPod snapshot as stock/dual."""
+        if self._shutting_down or self._state_maintenance:return
+        if _export_capture is None:
+            self._request_ipod_export_capture('rockbox',dev,playlists,resync=resync)
+            return
+        _export_capture.require_current(self,dev)
+        profile=self._device_profiles.get(dev)
+        facts=device_facts(dev,cached_only=True)
+        self._validate_export_target(dev,facts)
+        if (getattr(profile,'kind','')!='rockbox' or not profile.rockbox_export
+                or not facts.writable):
+            raise ValueError('Rockbox export needs a connected writable FAT32 iPod')
+        from .export_dialog import verify_ipod_export_capture
+        art_cache=self.art_cache
+        validate=lambda:verify_ipod_export_capture(_export_capture,art_cache)
+        validate_artwork=lambda tid:_export_capture.validate_artwork(art_cache,tid)
+        manifest_guard=dict(expected_manifest_payload=_export_capture.expected_manifest_payload,
+                            expected_manifest_absent=_export_capture.expected_manifest_absent)
+        if not resync and self._exporting and self.export_worker is not None:
+            self.export_worker.add(dev,playlists,
+                mount_token=self._device_mount_tokens.get(dev,0),
+                snapshot=_export_capture.snapshot,estimate=_export_capture.track_total,
+                validate_inputs=validate,validate_artwork=validate_artwork,**manifest_guard)
+            return
+        if self._defer_device_operation_until_scan_finishes(
+                lambda:self._begin_rockbox_ipod_sync(dev,playlists,_export_capture=_export_capture,resync=resync)):
+            return
+        if self._device_operation_owned():
+            raise ValueError('Wait for the current device operation before exporting to this iPod')
+        self._release_eject_ready()
+        if resync:
+            worker=ResyncWorker(self.lib,dev,self.overrides,self.titles,art_cache,
+                self.rockbox_media_cache,self.rockbox_art_cache,
+                snapshot=_export_capture.snapshot,validate_inputs=validate,validate_artwork=validate_artwork,**manifest_guard)
+            self._resync_worker=worker;self._exporting=True
+            worker.progress.connect(self._on_resync_progress)
+            worker.finished.connect(lambda ww=worker:self._finish_device_result_worker(
+                '_resync_worker',ww,lambda result:self._on_resync_done(dev,result)))
+            self._set_device_progress(0);self._start_pulse('Syncing')
+            self.cancel_btn.setVisible(True);self._start_device_worker(worker,dev,'sync')
+            return
+        worker=ExportWorker(self.lib,self.overrides,self.titles,self.art_cache,
+            self.rockbox_media_cache,self.rockbox_art_cache)
+        self.export_worker=worker;self._exporting=True
+        worker.progress.connect(self._on_progress)
+        worker.finished.connect(lambda ww=worker:self._finish_device_result_worker(
+            'export_worker',ww,self._on_export_done))
+        self._set_device_progress(0);self._start_pulse('Exporting')
+        self.progress.setVisible(True);self.cancel_btn.setVisible(True)
+        worker.add(dev,playlists,mount_token=self._device_mount_tokens.get(dev,0),
+                   snapshot=_export_capture.snapshot,estimate=_export_capture.track_total,
+                   validate_inputs=validate,validate_artwork=validate_artwork,**manifest_guard)
+        self._start_device_worker(worker,dev,'export')
 
     def _on_device_drop(self, dev: str, items: list[tuple[str, str]], *, _from_export=False):
         if getattr(self,'_export_batch',None) and not _from_export:return
@@ -8356,6 +9399,9 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             queued = self._dual_sync_queue.pop(dev, [])
             self._start_confirmed_dual_jobs(
                 dev, self._merge_device_playlists(queued, confirmed))
+            return
+        if profile is not None and profile.kind == 'rockbox':
+            self._begin_rockbox_ipod_sync(dev,pls)
             return
         if profile is not None and not profile.rockbox_export:
             QMessageBox.warning(
@@ -8408,6 +9454,12 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         command = DeviceCommand(target, intent)
         state = coordinator.begin(command, worker, phase)
         worker.device_command = command
+        batch = getattr(self, '_export_batch', None)
+        batch_target = batch.get('active') if batch else None
+        worker.export_batch_context = (
+            (batch, batch_target) if batch_target is not None
+            and batch_target.get('path') == dev and phase != Phase.DISCOVERING
+            else None)
         if hasattr(worker, "cancellation"):
             worker.cancellation = state.cancellation
         worker.cancel_after_result = phase == Phase.PLANNING
@@ -8426,41 +9478,115 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 or active.cancellation.is_set() or self._shutting_down):
             return
         active.progress = (done, total, label)
+        stock_progress = None
+        if active.command.intent in {'plan-delete', 'commit-delete'} and not self._cancelling:
+            self._start_pulse(stage)
+            if total:
+                self._set_status_count(done, total)
+                base, span = (0, 150) if active.command.intent == 'plan-delete' else (150, 650)
+                self._set_device_progress(base + round(span * min(max(done, 0), total) / total))
+        elif (not self._cancelling and any(worker is getattr(self, name, None)
+                for name in ('_stock_plan_worker', '_stock_commit_worker'))):
+            stock_progress = stock_phase_progress(stage, done, total)
+            if stock_progress is not None:
+                self._start_pulse(stock_progress.message)
+                self._set_status_count()
+                if stock_progress.value is not None:
+                    self._set_device_progress(max(self.progress.value(), stock_progress.value))
         # The operation's main progress callback owns the visible phase/count.
         # Small media/artwork writes can emit several phases in one UI frame;
         # replacing the primary label here resets its dots and makes the entire
         # row jump between track counts and byte totals. Keep details on hover.
         detail = f"{stage}\n{label}"
         if total:
-            detail += f"\n{human(done)} / {human(total)}"
+            if stock_progress is not None and stock_progress.unit == 'work_bytes':
+                detail += f"\nTransfer + verification work: {human(done)} / {human(total)}"
+            elif stock_progress is not None and stock_progress.unit != 'bytes':
+                detail += f"\n{done} / {total} {stock_progress.unit}"
+            else:
+                detail += f"\n{human(done)} / {human(total)}"
         self.status_label.setToolTip(detail)
 
     def _cancel_export(self):
         from .export_wait import cancel_source_syncs
-        cancelled_wait=cancel_source_syncs(self)
-        if cancelled_wait and not self._device_operation_owned():
-            self._stop_pulse();self.cancel_btn.setVisible(False)
-            self._flash_status('iPod request cancelled — nothing written')
+        from .stock_catalog_sync import cancel_deferred_sync
+        if cancel_deferred_sync(self):
             return
         batch=getattr(self,'_export_batch',None)
         if batch:
             batch['cancelled']=True
             batch['pending'].clear()
+        cancelled_wait=cancel_source_syncs(self)
+        active = self._device_coordinator.active
+        physical_owner = bool(active is not None and active.phase != Phase.DISCOVERING
+            or any(getattr(self,name,None) is not None for name in self._EJECT_BLOCKING_WORKERS
+                   if name != '_dev_scan_worker'))
+        if getattr(self,'_cancelled_source_syncs',None) and not physical_owner:
+            self._cancelling = True
+            self._start_pulse('Cancelling')
+            return
+        if cancelled_wait and not self._device_operation_owned():
+            self._cancelling = False
+            self._stop_pulse();self.cancel_btn.setVisible(False);self.progress.setVisible(False)
+            self._flash_status('iPod request cancelled — nothing written')
+            self._update_device_action_state()
+            return
         if self._cdj_waiting is not None:
             self._cdj_waiting = None
-            self._stop_pulse()
-            self.cancel_btn.setVisible(False)
-            self._flash_status('CDJ request cancelled — nothing written')
+            active = self._device_coordinator.active
+            workers = (name for name in self._EJECT_BLOCKING_WORKERS
+                       if name != '_dev_scan_worker')
+            other_owner = bool(
+                active is not None and active.phase != Phase.DISCOVERING
+                or any(getattr(self, name, None) is not None for name in workers)
+                or getattr(self, '_eject_verify_worker', None) is not None
+                or self._device_coordinator.eject_pending or self._device_coordinator.stopping
+                or self._stock_view_warming or self._stock_view_pending
+                or self._pending_device_operation is not None
+                or getattr(self, '_device_finalization_token', None) is not None)
+            if not other_owner:
+                self._exporting = False
+                self._cancelling = False
+                if not getattr(self, '_usb_format_device', ''):
+                    self._stop_pulse()
+                    self.progress.setVisible(False)
+                    self.cancel_btn.setVisible(False)
+                    self._flash_status('CDJ request cancelled — nothing written')
+                self._update_device_action_state()
             self._maybe_finish_export_target()
             return
         self._cdj_waiting = None
-        self._device_coordinator.cancel()
+        active = self._device_coordinator.active
+        waiting = self._pending_device_operation is not None
         self._pending_device_operation = None
         self._dual_sync_queue.clear()
+        workers = []
         for attr in self._EJECT_BLOCKING_WORKERS:
+            if attr == '_dev_scan_worker':
+                continue  # Cancelling an unstarted command does not cancel an unrelated poll.
             worker = getattr(self, attr, None)
             if worker is not None and hasattr(worker, "cancel"):
+                workers.append(worker)
                 worker.cancel()
+        if active is not None and active.phase != Phase.DISCOVERING:
+            self._device_coordinator.cancel()
+        if not workers and (active is None or active.phase == Phase.DISCOVERING):
+            if getattr(self, '_usb_format_device', ''):
+                self._exporting = False
+                self._deleting = False
+                self._cancelling = False
+                return  # An unstarted wait cannot take the format owner's status.
+            self._exporting = False
+            self._deleting = False
+            self._cancelling = False
+            self._stop_pulse(force=True)
+            self.progress.setVisible(False)
+            self.cancel_btn.setVisible(False)
+            self._flash_status('Device request cancelled — nothing written' if waiting else 'Cancelled')
+            self._maybe_finish_export_target()
+            if batch and batch.get('active') is None:
+                self._start_next_export_target()
+            return
         self._cancelling = True
         self._start_pulse("Cancelling")
 
@@ -8468,6 +9594,9 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         """Drop our reference to a finished worker on the MAIN thread (after run()
         has fully returned) and schedule its C++ deletion. This is the crux fix for
         'QThread destroyed while running' — never let the last ref drop mid-run."""
+        callbacks = tuple(getattr(w, '_eject_resume_callbacks', ()))
+        if isinstance(w, QThread) and w.isFinished():
+            w.wait()  # finished precedes thread-local cleanup; all owners wait for both.
         self._device_coordinator.finished(w)
         if getattr(self, attr, None) is w:
             setattr(self, attr, None)
@@ -8476,6 +9605,9 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         except RuntimeError:
             pass  # already gone
         self._update_device_action_state()
+        w._eject_resume_callbacks = []
+        for callback in callbacks:
+            QTimer.singleShot(0, callback)
         if (getattr(self, "_device_mount_refresh_pending", False)
                 and not self._shutting_down):
             # A mount event held behind an owner need not wait for the next
@@ -8485,20 +9617,80 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
     def _finish_device_result_worker(self, attr: str, worker, callback) -> None:
         """Clear QThread ownership before exposing a device result to the UI."""
         current = getattr(self, attr, None) is worker
+        owned = current
         result = getattr(worker, "result", None)
         command = getattr(worker, "device_command", None)
+        batch_context = getattr(worker, 'export_batch_context', None)
+        batch_owned = (batch_context is not None
+                       and getattr(self, '_export_batch', None) is batch_context[0]
+                       and batch_context[0].get('active') is batch_context[1])
         if command is not None:
             current = current and self._device_coordinator.current(command)
             outcome=adapter_result(command,result)
             self._device_coordinator.publish(worker,outcome)
-            if current and outcome.failure:self._export_target_result(command.target.path,RuntimeError(outcome.failure))
+            if current and batch_owned and outcome.failure:
+                self._export_target_result(command.target.path, RuntimeError(outcome.failure))
+            elif current and batch_owned and outcome.cancelled:
+                self._export_target_result(command.target.path, RuntimeError('Cancelled'))
         self._finish_worker(attr, worker)
-        if isinstance(result, Exception):
+        if current and isinstance(result, Exception):
             self._dual_sync_queue.clear()
+        if owned and not current:
+            from soundbox.cdj_transaction import CdjPlan
+            if isinstance(result, CdjPlan):
+                result.close()
+            if batch_owned:
+                batch, target = batch_context
+                batch['error'] = 'Device disconnected or changed — export result unavailable'
+            active = self._device_coordinator.active
+            if (getattr(self, attr, None) is None
+                    and (batch_owned or getattr(self, '_export_batch', None) is None)
+                    and (active is None or active.phase == Phase.DISCOVERING)):
+                self._exporting = False
+                self._cancelling = False
+                if attr == '_delete_worker':
+                    self._deleting = False
+                if command is not None:
+                    self._dual_sync_queue.pop(command.target.path, None)
+                if not getattr(self, '_usb_format_device', ''):
+                    self._stop_pulse(force=True)
+                    self.progress.setVisible(False)
+                    self.cancel_btn.setVisible(False)
+                self._update_device_action_state()
+            if batch_owned:
+                self._maybe_finish_export_target()
         if current and not self._shutting_down:
-            if command is not None:self._export_target_result(command.target.path,result)
+            if command is not None and batch_owned:
+                self._export_target_result(command.target.path, result)
+            generation = getattr(self, '_status_generation', 0)
             callback(result)
             self._maybe_finish_export_target()
+            restore = getattr(self, '_restore_edit_status', None)
+            if restore is not None and getattr(self, '_status_generation', 0) == generation:
+                restore()
+
+    def _finish_stock_delete_worker(self, attr, worker, callback):
+        """Retire only this Delete owner even when its obsolete result is suppressed."""
+        owned = getattr(self, attr, None) is worker
+        delivered = False
+
+        def deliver(result):
+            nonlocal delivered
+            delivered = True
+            callback(result)
+
+        self._finish_device_result_worker(attr, worker, deliver)
+        active = self._device_coordinator.active
+        if (owned and not delivered and getattr(self, attr, None) is None
+                and (active is None or active.phase == Phase.DISCOVERING)):
+            self._exporting = False
+            self._cancelling = False
+            self._stop_pulse(force=True)
+            self.progress.setVisible(False)
+            self.cancel_btn.setVisible(False)
+            self._update_device_action_state()
+            if not self._shutting_down:
+                self._restore_edit_status()
 
     def shutdown(self):
         """Stop background work BEFORE Qt tears down — prevents the crash where
@@ -8551,6 +9743,13 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         self._refresh_pending = False
         self._libcache_pending = None
         self._stock_view_pending.clear()
+        for completions in getattr(self, '_stock_view_callbacks', {}).values():
+            for completion in completions:
+                completion.finish(RuntimeError('SoundBox is shutting down'))
+        getattr(self, '_stock_view_callbacks', {}).clear()
+        self._device_finalization_token = None
+        self._device_finalization_mounts = {}
+        self._device_finalization_refreshing = False
         self._waveform_rechecks_enabled = False
         for t in (getattr(self, "_dev_timer", None), getattr(self, "_pulse_timer", None),
                   getattr(self, "_warm_timer", None),
@@ -8577,6 +9776,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         self._dual_sync_queue.clear()
         # Session cue edits are already visible/usable. Finish their accepted
         # FIFO before the generic owner stop closes replacement admission.
+        prep=getattr(self,'prep_controller',None)
+        if prep is not None:prep.drain_admissions()
         self.grid_controller.shutdown()
         self.tag_controller.shutdown()
         # Child dialogs/player own threads outside the window's attributes.
@@ -8612,6 +9813,13 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             timer.stop()
         for owner in task_owners:
             owner.drain()
+        MainWindow._close_library_processes(self)
+        MainWindow._flush_settings_preferences(self)
+        committer=getattr(self,'_state_committer',None)
+        if committer is not None and not committer.flush_preferences():
+            LOG.error('Preferences remain unsaved during shutdown: %s',committer.preferences_error)
+        if committer is not None and committer.deferred_save and self._save_state():
+            committer.deferred_save=False
         pb = getattr(self, "player_bar", None)
         if pb is not None:
             pb.stop()
@@ -8628,6 +9836,17 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         """Quit admission only: ordinary editing and source pumps stay open."""
         if getattr(self, '_shutting_down', False):
             return ''
+        if getattr(getattr(self,'prep_controller',None),'admission_pending',False):
+            return 'Finishing cue/grid saves — SoundBox remains open'
+        prep_error=getattr(getattr(self,'prep_controller',None),'admission_error','')
+        if prep_error:return 'Cue/grid save needs attention — '+prep_error
+        preference_error=getattr(getattr(self,'_state_committer',None),'preferences_error',None)
+        if preference_error:
+            return 'Preferences save needs attention — '+str(preference_error)
+        if (getattr(self,'_state_publication',False)
+                or getattr(getattr(self,'tag_controller',None),'state_commit_owned',False)
+                or getattr(getattr(self,'_state_committer',None),'pending',False)):
+            return 'Finishing saves — SoundBox remains open'
         settings = getattr(self, 'settings', {})
         metadata_controller=getattr(self,'metadata_controller',None)
         unadmitted_metadata=bool(metadata_controller and getattr(metadata_controller,
@@ -8694,6 +9913,10 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         return ''
 
     def _defer_quit_for_saves(self):
+        MainWindow._flush_settings_preferences(self)
+        committer=getattr(self,'_state_committer',None)
+        if committer is not None and committer.preferences_error is not None:
+            committer.retry_preferences()
         reason = self._pending_save_reason()
         if not reason:
             return False
@@ -8764,6 +9987,17 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         controller=getattr(self,'tag_controller',None)
         playlist_status=(getattr(controller,'playlist_update_status','')
                          or getattr(controller,'registration_update_status',''))
+        if text == 'Ready' and not self._edit_status_deferred():
+            notice = getattr(self, '_deferred_background_notice', None)
+            if notice is not None:
+                self._deferred_background_notice = None
+                self._deferred_edit_status = ''
+                self._flash_status(*notice)
+                return True
+            playlist_status = _edit_footer_text(controller) or playlist_status
+            if playlist_status:
+                self._deferred_edit_status = ''
+                self._prep_update_message = playlist_status
         if text=='Ready' and playlist_status:
             text=playlist_status
         if (text == "Ready" and self._preparing_library
@@ -8826,7 +10060,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         )
 
     def _on_export_done(self, reports: list):
-        cancelled = self._cancelling
+        cancelled = any(getattr(report, 'cancelled', False) for _device, report in reports)
+        cancelled = cancelled or bool(self._cancelling and not reports)
         self._cancelling = False
         self._exporting = False
         self._stop_pulse()
@@ -8839,24 +10074,34 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 continue
             for pr in rep.playlists:
                 if pr.missing or pr.conflicts or pr.errors:
-                    issues.append(f"{pr.name}: {pr.missing} missing · {pr.conflicts} conflicts")
+                    if pr.missing or pr.conflicts:
+                        issues.append(f"{pr.name}: {pr.missing} missing · {pr.conflicts} conflicts")
+                    issues.extend(f'{pr.name}: {error}' for error in pr.errors)
         LOG.info("Export finished: %d job report(s), %d issue(s)", len(reports), len(issues))
         devices = [dev for dev, _rep in reports if dev and dev != "(worker)"]
 
         def complete():
-            if cancelled:
+            if issues:
+                self._set_status_text('Export needs attention')
+            elif cancelled:
                 self._flash_status("Cancelled")
             else:
                 self._set_status_text("Complete ✓")
-            if self.stack.currentIndex() == 1:
+            if not cancelled and not issues and self.stack.currentIndex() == 1:
                 self.fs_view.setRootIndex(
                     self.fs_model.setRootPath(self.fs_model.rootPath()))
             if issues:
                 QMessageBox.information(
-                    self, "Export finished — with notes",
-                    "Done, but note:\n\n" + "\n".join(issues[:20]))
+                    self, "Export needs attention",
+                    "Completed files were kept. Retry after fixing these issues:\n\n" + "\n".join(issues[:20]))
 
-        self._finalize_device_operations(devices, complete)
+        if cancelled:
+            self.progress.setVisible(False)
+            self._eject_ready_device = devices[0] if devices else ''
+            complete()
+            self._update_device_action_state()
+        else:
+            self._finalize_device_operations(devices, complete)
 
 
 def make_app() -> QApplication:
@@ -8895,7 +10140,7 @@ def main():
             win.show()
             def finish_check():
                 from soundbox import mac_process
-                from .startup_check import runtime_sql_check
+                from .startup_check import runtime_crypto_check, runtime_sql_check
                 win.grab().save(str(report_dir / "window.png"))
                 report = {"profile": win.providers.profile,
                           "modules": list(win.providers.modules),
@@ -8904,6 +10149,7 @@ def main():
                           "native_process_guard": mac_process._native_function() is not None,
                           "native_process_query": type(mac_process.rekordbox_running()) is bool,
                           "private_sql_orm": runtime_sql_check(),
+                          "private_aes": runtime_crypto_check(),
                           "devices": win.device_tree.topLevelItemCount(),
                           "library_loaded": win.lib is not None,
                           "art_worker": win._art_worker is not None}

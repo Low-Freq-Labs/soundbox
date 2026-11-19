@@ -1,4 +1,49 @@
-# Performance audit — November 2–16, 2026
+# Performance audit — November 2–18, 2026
+
+## Connected iTunes export — November18 observation
+
+The installed personal172 build completed a user-operated large export while
+Collection remained visible. Sonny confirmed that the selected song survived
+completion too. The last stock plan copied587new files, writing and verifying
+15,560,911,583bytes each. Its750-second interval from planning completion to
+commit completion includes recovery setup and artwork, about20.75MB/s of new
+audio. Commit-time local source capture took14.375seconds with no retries.
+Passive one-second OS disk samples showed roughly19–22MiB/s of combined IO.
+Root introduced no competing device-file reader or benchmark transfer.
+
+These observations suggest device IO is the main cost; they do not establish
+the hardware's maximum throughput or a before/after speedup. Stock-only copies
+have no fixed per-file pause; the150ms pacing applies to dual iTunes/Rockbox
+copies. A short process sample spent substantial time in file timestamp
+preservation, which can wait for queued writes that the subsequent fsync would
+otherwise drain. Removing that call has no measured gain yet. The source
+preflight also hashes new sources before their later stable acquisition; any
+change must preserve source-change/refusal and rollback semantics.
+
+No runtime optimization was made from this observation. An eventual scoped
+timing comparison must include copy, metadata, flush, publication and readback,
+with identical data/durability checks. Ordinary Eject subsequently completed
+in1.106seconds. Repeat Export/Sync and firmware playback remain separate checks.
+Compact physical metrics and the code audit are in the private current gate's
+`connected-ipod-workflow/` area; [HANDOFF](HANDOFF.md) records acceptance status.
+
+## Repeated iTunes omissions — November18 source
+
+Full export and incremental additions previously acquired an entire unsupported
+WAV before rejecting its format. Omission-bearing playlists must reevaluate
+eligibility on explicit Sync, so repeating this work can reread large collections
+without exporting another song. Definite unsupported PCM/float WAVs now use a
+bounded no-follow RIFF header rejection before acquisition: at most128chunk
+headers and40format bytes, with stable canonical/descriptor/path identity.
+Compatible, unknown, malformed or unstable headers retain ordinary complete
+acquisition and hashing. The helper cannot admit a source or certify content.
+
+The generated512MiB sparse-WAV control reads only the small header and no audio;
+actual full/incremental planners acquire zero deliberately omitted payloads.
+Repeat Sync retains unchanged supported sources, while a same-path PCM24→16
+replacement receives a fresh full capture and is added. This is isolated source
+evidence, not a physical USB throughput or firmware-playback measurement. Exact
+release/check/install and connected-device acceptance status is in [HANDOFF](HANDOFF.md).
 
 ## Tag save readback — November16 source
 
@@ -24,8 +69,9 @@ all780 frozen inputs exact. No installed or end-to-end speedup is claimed.
 ## Shared-library completion constraints — November13
 
 Correctness fixes must preserve the smaller-save, fair-worker and selected-export
-work below. The current completion work remains uninstalled; [handoff](HANDOFF.md)
-records the exact source gate and remaining native-profile gaps.
+work below. At this November13 checkpoint, the completion work remained uninstalled;
+[handoff](HANDOFF.md) records the current source/install state and remaining
+native-profile gaps.
 
 Playlist-removal overlay capture groups selected logical aliases by native
 ID/UUID and processes each playlist/native target once. Generated32/128/512/2048
@@ -424,7 +470,7 @@ art indexes/white icon remained exact. Precise dated identities/times stay in
 | Interrupted adoption trusted FAT timestamps and edge fingerprints | Freshly hash only the affected candidate with descriptor/path epochs and cancellation; middle edits cannot reuse old proof JSON, and no new per-file proof JSON is written |
 | Explicit Rockbox Sync missed same-membership title/artist/source changes | Compare managed desired paths/display/profile and unique source metadata on explicit Sync, export affected playlists only, then prune only unreferenced owned paths. Unchanged explicit Sync uses source stats, zero payload reads and zero writes; idle badge remains a playlist-change hint |
 | GUI admission read removable manifests, recovery and hardware facts | Use cached view/facts only for presentation; existing owned plan/read workers perform actual reads. Cached reorder/delete selection becomes a precondition compared against the planner's own single fresh manifest capture |
-| A fast final scan could report success before queued retirement, or miss a newly connected finished handler | The already-connected scan owner publishes rows and retires before consuming finalization callbacks. Newly attached unrelated iPods queue their dashboard until the completion dialog releases |
+| A fast final scan could report success before queued retirement, or miss a newly connected finished handler | The already-connected scan owner publishes rows and retires before consuming finalization callbacks. At this dated checkpoint, unrelated iPods waited for the completion dialog; current routine completion is quiet and releases after owned finalization (HANDOFF) |
 | The Info button on an iPod page could edit a stale desktop song | Keep the action within the displayed device context; iPod details remain in its device view |
 | Parent aliases could redirect small metadata reads into reserved/foreign trees | Guard native/manifest/playlist paths before payload reads, use bounded pinned captures, reject aliases and preserve the PIONEER exclusion |
 
@@ -1205,11 +1251,11 @@ findings and verification limits.
 - Avoid an entire-library computation in paint, wheel, cue or transport handlers.
   A thread is insufficient if one giant C JSON call holds the GIL; use bounded
   serialization for derived snapshots and retain completion ownership.
-- Three-second iPod/Rockbox polling reuses its synthetic playlist inventory. A save
-  currently invalidates that inventory; the next rebuild can still prepare the
-  Collection and Artists ordering on the main thread. Bind that cache to actual
-  inventory/metadata generations rather than every incidental state save in a
-  future measured change. Do not suppress mount discovery or ordinary eject.
+- iPod/Rockbox polling reuses prepared playlist inventory and projects current
+  metadata only for managed members. Full membership/display changes may rebuild
+  export-view ordering; ordinary UI preferences and selected canonical checkpoints
+  do not need that work. Keep invalidation bound to actual inputs and preserve
+  mount discovery and ordinary eject. Generic USB has no idle comparison.
 - Normal device planning trusts the unchanged committed ownership inventory.
   New/changed sources, explicit repair and recovery keep their existing exact
   byte/path/volume checks. A speedup must not introduce retained-media hashing

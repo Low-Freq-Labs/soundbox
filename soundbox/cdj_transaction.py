@@ -21,9 +21,29 @@ import uuid
 from .cdj_usb import DATABASE_FILES, PROFILE_FILES, CdjReadSession, assert_no_database_journals, _identity
 from .sync import DeviceSession
 from .device_staging import staged_output
+from .operation_control import (CommittedOperationError, OperationCancelled,
+                                cancellation_disabled, checkpoint)
 
 MANIFEST = '.soundbox-cdj/manifest.json'
 JOURNAL = '.soundbox-cdj/pending.json'
+
+
+class CommittedCleanupPending(CommittedOperationError):
+    """The new generation is durable; only its owned retirement remains."""
+
+    recovery_status = 'committed'
+
+    def __init__(self, manifest: dict, error: Exception):
+        self.manifest = manifest
+        self.cleanup_cancelled = isinstance(error, OperationCancelled)
+        super().__init__(f'Export saved, but space cleanup did not finish: {error}. '
+                         'Choose Export again to finish cleanup.', result=manifest)
+
+
+def _check_cancel(should_cancel=lambda:False, message='CDJ operation cancelled'):
+    checkpoint()
+    if should_cancel():
+        raise OperationCancelled(message)
 
 
 def _key(path):
@@ -95,9 +115,10 @@ class CdjSession(DeviceSession):
         copied=hashlib.sha256() if expected_sha256 else None
         with staged_output(destination, self.parent_fd, self.revalidate,
                            after_publish=self._flush_directory, mode=0o600) as output:
-            while block := stream.read(1024*1024):
-                if should_cancel():
-                    raise RuntimeError('CDJ publication cancelled')
+            while True:
+                _check_cancel(should_cancel, 'CDJ publication cancelled')
+                block = stream.read(1024*1024)
+                if not block:break
                 output.write(block)
                 if copied is not None:
                     copied.update(block)
@@ -105,7 +126,8 @@ class CdjSession(DeviceSession):
                 raise ValueError('Candidate changed while copying')
 
     def atomic_write(self, destination, data):
-        self._publish(io.BytesIO(data), destination)
+        with cancellation_disabled():
+            self._publish(io.BytesIO(data), destination)
 
     def atomic_copy(self, source, destination, *, should_cancel=lambda:False, expected_sha256=None):
         with Path(source).open('rb') as stream:
@@ -208,10 +230,12 @@ class CdjPlan:
 def _hash_file(path, cancel=lambda: False):
     import hashlib
     digest_value = hashlib.sha256()
+    _check_cancel(cancel)
     with path.open('rb') as stream:
-        while block := stream.read(1024*1024):
-            if cancel():
-                raise RuntimeError('CDJ operation cancelled')
+        while True:
+            _check_cancel(cancel)
+            block = stream.read(1024*1024)
+            if not block:break
             digest_value.update(block)
     return digest_value.hexdigest()
 
@@ -265,8 +289,7 @@ def make_plan(session, candidate, *, selection, db_id, view, workspace=None, sho
     if not settings_only and any(not (candidate/p).is_file() for p in DATABASE_FILES):
         raise ValueError('Both native library formats are required')
     for local in sorted(candidate.rglob('*')):
-        if should_cancel():
-            raise RuntimeError('CDJ preparation cancelled')
+        _check_cancel(should_cancel, 'CDJ preparation cancelled')
         if local.is_symlink():
             raise ValueError('Candidate contains a linked path')
         if not local.is_file():
@@ -362,6 +385,7 @@ def _check_baseline(session, change, should_cancel=lambda:False):
 
 def commit(plan, *, should_cancel=lambda:False, on_progress=lambda *_:None):
     """Publish a prepared plan in its owned lane, authorized by a drop or review."""
+    _check_cancel(should_cancel, 'CDJ export cancelled before publication')
     session = CdjSession(plan.target, [], token=plan.mount_identity[0], volume_uuid=plan.volume_uuid)
     if session.mount_identity != plan.mount_identity:
         raise ValueError('USB identity changed after approval')
@@ -372,8 +396,7 @@ def commit(plan, *, should_cancel=lambda:False, on_progress=lambda *_:None):
     assert_no_database_journals(session.target,session.mount_identity[0])
     # Entire target/candidate contract is checked before the first write.
     for change in plan.changes:
-        if should_cancel():
-            raise RuntimeError('CDJ export cancelled before publication')
+        _check_cancel(should_cancel, 'CDJ export cancelled before publication')
         _check_baseline(session, change,should_cancel)
         # Small metadata is checked before publication; new audio is hashed in
         # its one copy pass, rather than read twice locally and again from USB.
@@ -404,6 +427,7 @@ def commit(plan, *, should_cancel=lambda:False, on_progress=lambda *_:None):
         os.fsync(directory_fd)
     finally:
         os.close(directory_fd)
+    _check_cancel(should_cancel, 'CDJ export cancelled before publication')
     session.atomic_write(session.target/JOURNAL, _json(journal))
     total=len(plan.changes)+sum(c.retire for c in plan.changes)
     try:
@@ -411,8 +435,7 @@ def commit(plan, *, should_cancel=lambda:False, on_progress=lambda *_:None):
         # intent covers the whole set: original bytes remain live or in recovery
         # at every interruption boundary.
         for index, change in enumerate(plan.changes):
-            if should_cancel():
-                raise RuntimeError('CDJ export cancelled; restoring previous generation')
+            _check_cancel(should_cancel, 'CDJ export cancelled; restoring previous generation')
             if change.path in DATABASE_FILES:
                 assert_no_database_journals(session.target,session.mount_identity[0])
             _check_baseline(session, change,should_cancel)
@@ -423,17 +446,21 @@ def commit(plan, *, should_cancel=lambda:False, on_progress=lambda *_:None):
             if change.new_sha256:
                 session.atomic_copy(plan.candidate/change.path, path, should_cancel=should_cancel,expected_sha256=change.new_sha256)
             on_progress(index+1, total, change.path)
+        _check_cancel(should_cancel, 'CDJ export cancelled; restoring previous generation')
         session.atomic_write(session.target/MANIFEST, _json(plan.manifest))
         journal['state'] = 'committed'
         session.atomic_write(session.target/JOURNAL, _json(journal))
-    except Exception:
+    except Exception as error:
         recover(session, plan.recovery_root, retain_new=True)
+        if isinstance(error, OperationCancelled):setattr(error, 'recovery_status', 'rolled back')
         raise
     try:
-        _retire_removed(session,journal,on_progress=lambda done,path:on_progress(len(plan.changes)+done,total,path))
+        _retire_removed(session,journal,should_cancel=should_cancel,
+                        on_progress=lambda done,path:on_progress(len(plan.changes)+done,total,path))
+        _check_cancel(should_cancel, 'CDJ cleanup cancelled after saving the export')
+        session.unlink(session.target/JOURNAL)
     except Exception as exc:
-        raise RuntimeError(f'Export saved, but space cleanup did not finish: {exc}. Choose Export again to finish cleanup.') from exc
-    session.unlink(session.target/JOURNAL)
+        raise CommittedCleanupPending(plan.manifest, exc) from exc
     return plan.manifest
 
 
@@ -448,12 +475,14 @@ def _receipt_path(root, volume_uuid, generation):
     return root/volume_uuid/(generation+'.json')
 
 
-def _retire_removed(session, journal, *, on_progress=lambda *_:None):
+def _retire_removed(session, journal, *, should_cancel=lambda:False, on_progress=lambda *_:None):
     """Resume exact selected-member cleanup only after manifest-last commit."""
+    _check_cancel(should_cancel, 'CDJ cleanup cancelled after saving the export')
     if journal['state']!='committed' or session.read_optional(MANIFEST,limit=8*1024*1024)!=_json(journal['new_manifest']):
         raise ValueError('Media retirement requires the committed manifest')
     paths=[]
     for change in journal['changes']:
+        _check_cancel(should_cancel, 'CDJ cleanup cancelled after saving the export')
         if not change.get('retire'):continue
         relative=_relative(change['path'])
         if change['new'] is not None or relative in DATABASE_FILES or relative in ('PIONEER/'+n for n in PROFILE_FILES):
@@ -461,15 +490,22 @@ def _retire_removed(session, journal, *, on_progress=lambda *_:None):
         if (session.target/relative).exists():raise ValueError('Removed media reappeared; preserve recovery')
         backup=session.guard(session.target/journal['transaction']/relative)
         if backup.exists():
-            if not backup.is_file() or _hash_file(backup)!=change['old']:
+            if not backup.is_file() or _hash_file(backup,should_cancel)!=change['old']:
                 raise ValueError('Removed media recovery changed; preserve it')
             paths.append(backup)
     for index,backup in enumerate(paths):
+        _check_cancel(should_cancel, 'CDJ cleanup cancelled after saving the export')
         session.unlink(backup)
         on_progress(index+1,backup.name)
 
 
 def recover(session, recovery_root, *, dry_run=False, retain_new=False):
+    """Finish approved recovery even when its caller's operation was cancelled."""
+    with cancellation_disabled():
+        return _recover(session,recovery_root,dry_run=dry_run,retain_new=retain_new)
+
+
+def _recover(session, recovery_root, *, dry_run=False, retain_new=False):
     assert_no_database_journals(session.target,session.mount_identity[0])
     raw = session.read_optional(JOURNAL, limit=8*1024*1024)
     if raw is None:

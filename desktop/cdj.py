@@ -22,7 +22,8 @@ def _source_edits_pending(host):
     metadata=getattr(host,'metadata_controller',None)
     return bool(host.tag_controller.owned or controller and
                 (controller.pending or controller.queue_error()) or imports and
-                (imports.pending or imports.queue_error()) or analysis and analysis.pending or prep and prep.pending
+                (imports.pending or imports.queue_error()) or analysis and analysis.pending or prep and
+                (prep.pending or getattr(prep,'admission_pending',False) or getattr(prep,'admission_error',''))
                 or media and (media.scan_again or media.tasks.pending or any(not j['error'] for j in media.pending))
                 or definitions and (definitions.pending or definitions.queue_error())
                 or metadata and (metadata.pending or metadata.queue_error() or getattr(metadata,'migration_pending',False))
@@ -47,8 +48,11 @@ def _source_edits_error(host):
             if isinstance(error,str) and error:return error
     metadata=getattr(host,'metadata_controller',None)
     if metadata and (metadata.pending or getattr(metadata,'migration_pending',False)):
+        if getattr(metadata,'background_paused',False):
+            return 'Background song updates are paused; resume them before exporting'
         reason=getattr(metadata,'reason',lambda:'')()
-        if reason=='Native metadata editing requires separate acceptance for this library':
+        from .metadata_controller import EDITING_DISABLED_REASON
+        if reason==EDITING_DISABLED_REASON:
             return 'Title and artist updates cannot be saved to this library yet'
         if isinstance(reason,str) and reason.startswith('Switch to the original library'):
             return reason
@@ -206,12 +210,13 @@ class CdjDeviceMixin:
 
     def _review_cdj_plan(self, dev, result, cancelled=False, *, from_drop=False):
         from soundbox import cdj_transaction
+        from soundbox.operation_control import OperationCancelled
         if isinstance(result, Exception):
             self._finish_cdj(dev, result)
             return
         if cancelled:
             result.close()
-            self._finish_cdj(dev, RuntimeError('CDJ preparation cancelled; no USB files were changed'))
+            self._finish_cdj(dev, OperationCancelled('CDJ preparation cancelled'))
             return
         plan = result
         if not getattr(plan,'requires_commit',bool(plan.changes)):
@@ -233,6 +238,11 @@ class CdjDeviceMixin:
         self._start_device_worker(worker, dev, 'commit-cdj')
 
     def _finish_cdj(self, dev, result, *, cancelled=False, unchanged=False):
+        from soundbox.cdj_transaction import CommittedCleanupPending
+        from soundbox.operation_control import OperationCancelled
+        saved_warning = isinstance(result, CommittedCleanupPending)
+        cancelled = cancelled or isinstance(result, OperationCancelled)
+        cleanup_cancelled = saved_warning and result.cleanup_cancelled
         self._exporting = False
         self._cancelling = False
         self._stop_pulse()
@@ -240,20 +250,29 @@ class CdjDeviceMixin:
         self.progress.setVisible(False)
         self._sync_cue_editing()
         if getattr(self,'_export_batch',None):self._export_target_result(dev,result)
-        if isinstance(result, Exception):
+        if saved_warning:
+            if not cleanup_cancelled and not getattr(self,'_export_batch',None):
+                QMessageBox.warning(self, 'CDJ export saved — cleanup pending', str(result))
+            self._flash_status('Playlist export saved — space cleanup pending', 15)
+        elif cancelled:
+            from .export_wait import retain_source_cancellation
+            if not retain_source_cancellation(self):
+                self._flash_status('CDJ export cancelled — previous library kept', 15)
+        elif isinstance(result, Exception):
             if not getattr(self,'_export_batch',None):QMessageBox.warning(self, 'CDJ USB operation stopped', str(result))
             self._flash_status('CDJ USB operation stopped', 15)
         else:
-            self._flash_status('CDJ export cancelled — nothing written' if cancelled else
-                               'Selected playlists already exported' if unchanged else 'Playlist export complete ✓', 15)
+            self._flash_status('Selected playlists already exported' if unchanged else 'Playlist export complete ✓', 15)
         # The committed export is the result. Invalidate displayed catalog
         # rows without a final USB read, retaining the user's settings drafts.
-        # Failures/unchanged exports keep their previous presentation intact.
-        if not isinstance(result, Exception) and not cancelled and not unchanged:
+        # A post-commit cleanup warning still changed the USB catalogs.
+        # Pre-commit failures/unchanged exports keep their previous presentation.
+        if (saved_warning or not isinstance(result, Exception)) and not cancelled and not unchanged:
             from dataclasses import replace
             from .usb_device_view import UsbSnapshot
             previous = self._usb_view_cache.get(dev)
-            notice = 'USB updated. Select a tab to browse its contents.'
+            notice = ('USB updated. Space cleanup is pending; export again to finish.' if saved_warning else
+                      'USB updated. Select a tab to browse its contents.')
             snapshot = (replace(previous, playlists=(), error='', notice=notice)
                         if isinstance(previous, UsbSnapshot) else
                         UsbSnapshot(Path(dev), self._device_mount_tokens.get(dev, 0),
@@ -549,7 +568,7 @@ class CdjDeviceMixin:
         saved['usb'] = deepcopy(self.usb_device_pages._states)
         self.settings['device_views'] = saved
         if not self._shutting_down:
-            self._schedule_settings_save()
+            self._schedule_settings_save('device_views')
 
     def _remember_stock_device_view(self, *_):
         if getattr(self,'_restoring_stock_view',False):
@@ -591,7 +610,7 @@ class CdjDeviceMixin:
         saved['stock'] = stock
         self.settings['device_views'] = saved
         if not self._shutting_down:
-            self._schedule_settings_save()
+            self._schedule_settings_save('device_views')
 
     def _restore_stock_device_view(self):
         snapshot = self._stock_snapshot

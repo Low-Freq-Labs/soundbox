@@ -1,5 +1,6 @@
 """Immutable export admission keeps selected data and the full overlap boundary."""
 from dataclasses import FrozenInstanceError
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -11,6 +12,9 @@ from soundbox.export_snapshot import capture_export
 from soundbox.library import Library, Playlist, Track
 from soundbox.metadata import ArtistRegistry
 from soundbox.stock_ipod import commit_stock_ipod_sync, plan_stock_ipod_sync
+from soundbox.stock_ipod_playlist_binding import (
+    DevicePlaylist, compare_playlist_bindings, source_playlist_identity,
+)
 from soundbox.dual_ipod import commit_dual_ipod_sync, plan_dual_ipod_sync
 
 
@@ -80,11 +84,147 @@ class ExportSnapshotTests(unittest.TestCase):
         self.assertEqual(inputs.library.tracks_by_id['a'].source_cue_revision, 'cue-revision')
         self.assertEqual(inputs.library.source_playlist_catalog, {})
 
+    def test_catalog_identity_opt_in_preserves_adopted_native_binding(self):
+        self.selected.name = 'FAVORITES'
+        self.selected.export_key = 'cust:FAVORITES'
+        node = dict(ID='native', UUID='selected-uuid', rb_local_deleted=0,
+                    ParentID=object(), unrelated=object())
+        self.library.source_playlist_catalog = {
+            'nodes': [node, dict(ID='other', UUID=object())],
+            'members': object(), 'revision': object(),
+        }
+        live = source_playlist_identity(self.library, self.selected)
+        captured = capture_export(self.library, [self.selected], playlist_identities=True)
+        node['UUID'] = 'later-uuid'
+        inputs = captured.materialize()
+        worker = source_playlist_identity(inputs.library, inputs.playlists[0])
+        self.assertEqual(worker, live)
+        self.assertEqual(worker.key, 'cust:FAVORITES')
+        self.assertEqual(worker.native_id, 'native')
+        self.assertEqual(worker.uuid, 'selected-uuid')
+        self.assertEqual(inputs.library.source_playlist_catalog, {'nodes': [
+            dict(ID='native', UUID='selected-uuid', rb_local_deleted=0)]})
+        compared = compare_playlist_bindings((worker,), (DevicePlaylist(901, 'Favorites', (11, 12, 11)),),
+                                             track_links={'a': 11, 'b': 12})
+        self.assertTrue(compared[0].recognized)
+        self.assertTrue(compared[0].membership_safe)
+        self.assertTrue(compared[0].renamed)
+        self.assertFalse(compared[0].added or compared[0].removed or compared[0].reordered)
+        default = capture_export(self.library, [self.selected]).materialize()
+        self.assertEqual(default.library.source_playlist_catalog, {})
+        self.assertTrue(source_playlist_identity(default.library, default.playlists[0]).identity_error)
+
+    def test_catalog_identity_opt_in_preserves_missing_duplicate_deleted_and_malformed_refusals(self):
+        valid = dict(ID='native', UUID='selected-uuid', rb_local_deleted=0)
+        for nodes in ([], [valid, dict(valid)], [{**valid, 'rb_local_deleted': 1}],
+                      [{**valid, 'UUID': ''}], [{**valid, 'UUID': 42}],
+                      [dict(ID=None, UUID='selected-uuid')]):
+            with self.subTest(nodes=nodes):
+                self.library.source_playlist_catalog = {'nodes': nodes}
+                live = source_playlist_identity(self.library, self.selected)
+                inputs = capture_export(self.library, [self.selected], playlist_identities=True).materialize()
+                worker = source_playlist_identity(inputs.library, inputs.playlists[0])
+                self.assertTrue(live.identity_error)
+                self.assertEqual(worker, live)
+        self.library.source_playlist_catalog = {'nodes': [valid, {**valid, 'rb_local_deleted': 1}]}
+        inputs = capture_export(self.library, [self.selected], playlist_identities=True).materialize()
+        self.assertFalse(source_playlist_identity(inputs.library, inputs.playlists[0]).identity_error)
+
+    def test_catalog_identity_opt_in_rejects_non_scalar_selected_nodes(self):
+        for nodes in ([dict(ID='native', UUID={'not': 'a UUID'})],
+                      [dict(ID='native', UUID='uuid', rb_local_deleted=[])],
+                      [dict(ID='native', UUID='uuid', rb_local_deleted=float('nan'))],
+                      [object()]):
+            with self.subTest(nodes=nodes):
+                self.library.source_playlist_catalog = {'nodes': nodes}
+                with self.assertRaisesRegex(ValueError, 'invalid native'):
+                    capture_export(self.library, [self.selected], playlist_identities=True)
+
+    def test_complete_identity_capture_retains_only_bounded_valid_unselected_headers(self):
+        selected = dict(ID='native', UUID='selected-uuid', rb_local_deleted=0)
+        other = dict(ID='other', UUID='other-uuid', rb_local_deleted=0,
+                     ParentID=object(), members=object())
+        self.library.source_playlist_catalog = {'nodes': [selected, other], 'members': object()}
+        captured = capture_export(self.library, [self.selected], complete=True, playlist_identities=True)
+        other['UUID'] = 'later-replacement'
+        inputs = captured.materialize()
+        self.assertEqual(inputs.library.source_playlist_catalog, {'nodes': [selected,
+            dict(ID='other', UUID='other-uuid', rb_local_deleted=0)]})
+        identity = source_playlist_identity(inputs.library, inputs.library.playlists[1])
+        self.assertEqual(identity.uuid, 'other-uuid')
+        self.assertFalse(identity.identity_error)
+
+    def test_invalid_or_ambiguous_unselected_headers_do_not_block_complete_export(self):
+        selected = dict(ID='native', UUID='selected-uuid', rb_local_deleted=0)
+        valid_other = dict(ID='other', UUID='other-uuid', rb_local_deleted=0)
+        for unwanted in ([dict(ID='other', UUID=object())],
+                         [valid_other, dict(valid_other)],
+                         [dict(ID='other', UUID='', rb_local_deleted=0)], [object()]):
+            with self.subTest(unwanted=unwanted):
+                self.library.source_playlist_catalog = {'nodes': [selected, *unwanted]}
+                inputs = capture_export(self.library, [self.selected], complete=True,
+                                        playlist_identities=True).materialize()
+                self.assertEqual(inputs.library.source_playlist_catalog, {'nodes': [selected]})
+                self.assertTrue(source_playlist_identity(inputs.library,
+                    inputs.library.playlists[1]).identity_error)
+        self.library.source_playlist_catalog = {'nodes': [
+            dict(ID='native', UUID=object()), valid_other]}
+        with self.assertRaisesRegex(ValueError, 'invalid native'):
+            capture_export(self.library, [self.selected], complete=True, playlist_identities=True)
+
     def test_empty_pid_playlist_filters_are_preserved(self):
         playlist = Playlist('Local', [], ['a', 'b'])
         self.library.removed_by_playlist = {'': ['b']}
         inputs = capture_export(self.library, [playlist]).materialize()
         self.assertEqual([t.track_id for t in inputs.library.resolve(inputs.playlists[0])], ['a'])
+
+    def test_nonempty_exclusion_sets_round_trip_for_selected_and_complete_inventory(self):
+        for complete in (False, True):
+            with self.subTest(complete=complete):
+                selected_mask={'b'};unrelated_mask={'other', 'missing'}
+                self.library.removed_by_playlist={'native': selected_mask, '4016338146': unrelated_mask}
+                captured=capture_export(self.library, [self.selected], complete=complete)
+                raw=json.loads(captured.payload)['removed_by_playlist']
+                self.assertEqual(raw['native'], ['b'])
+                if complete:self.assertEqual(raw['4016338146'], ['missing', 'other'])
+                else:self.assertNotIn('4016338146', raw)
+                self.assertEqual(self.selected.keys, ['a', 'b', 'a'])
+                self.assertEqual(selected_mask, {'b'});self.assertEqual(unrelated_mask, {'other', 'missing'})
+                selected_mask.add('a');unrelated_mask.clear()
+                inputs=captured.materialize();worker_mask=inputs.library.removed_by_playlist['native']
+                self.assertIs(type(worker_mask), set);self.assertEqual(worker_mask, {'b'})
+                self.assertIsNot(worker_mask, selected_mask)
+                self.assertEqual([track.track_id for track in inputs.library.resolve(inputs.playlists[0])], ['a', 'a'])
+                self.assertEqual(inputs.playlists[0].keys, ['a', 'b', 'a'])
+                worker_mask.clear()
+                self.assertEqual(captured.materialize().library.removed_by_playlist['native'], {'b'})
+                self.assertIn(Path('/other/source.wav'), captured.sources)
+                self.assertIn(Path('/other/ANLZ0000.DAT'), captured.sources)
+                self.assertEqual(tuple(inputs.library.export_source_paths), captured.sources)
+
+    def test_exclusion_lists_and_sets_have_one_deterministic_payload(self):
+        self.library.removed_by_playlist={'native': ['b', 'missing', 'b']}
+        before=capture_export(self.library, [self.selected])
+        self.library.removed_by_playlist={'native': {'missing', 'b'}}
+        after=capture_export(self.library, [self.selected])
+        self.assertEqual(before.payload, after.payload)
+        self.assertEqual(before.materialize().library.removed_by_playlist, {'native': {'b', 'missing'}})
+
+    def test_exclusion_conversion_is_typed_and_does_not_coerce_other_musical_values(self):
+        for invalid in ('b', {'b': True}, {'b', 7}, [True], None):
+            with self.subTest(invalid=invalid):
+                self.library.removed_by_playlist={'native': invalid}
+                with self.assertRaisesRegex(ValueError, 'membership identities'):
+                    capture_export(self.library, [self.selected])
+        self.library.removed_by_playlist={'native': {'b'}, 'unrelated': object()}
+        self.assertEqual(capture_export(self.library, [self.selected]).materialize().library.removed_by_playlist,
+            {'native': {'b'}})
+        self.library.removed_by_playlist={};self.a.info={'label': {'invalid musical set'}}
+        source_uri=self.a.location_uri;keys=list(self.selected.keys)
+        with self.assertRaises(TypeError):capture_export(self.library, [self.selected])
+        self.assertEqual(self.library.removed_by_playlist, {})
+        self.assertEqual(self.a.info, {'label': {'invalid musical set'}})
+        self.assertEqual(self.a.location_uri, source_uri);self.assertEqual(self.selected.keys, keys)
 
     def test_complete_firmware_inventory_retains_unselected_historical_identities(self):
         extra = Playlist('Custom', [], ['other'], 'custom')

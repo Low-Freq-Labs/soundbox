@@ -12,6 +12,10 @@ from desktop import devices
 
 
 class ClassicIpodFacts(unittest.TestCase):
+    def setUp(self):
+        self.identity = self.enterContext(mock.patch.object(devices,'_stock_identity_for_volume',return_value=None))
+        self.enterContext(mock.patch.object(devices,'_usb_identity_for_volume',return_value=None))
+
     def test_same_name_remount_forgets_every_path_keyed_fact(self):
         path = "/Volumes/IPOD-REMOUNT"
         caches = (
@@ -20,6 +24,9 @@ class ClassicIpodFacts(unittest.TestCase):
             devices._PROFILE_CACHE,
             devices._INFO_CACHE,
             devices._IPOD_FACTS_CACHE,
+            devices._USB_IDENTITY_CACHE,
+            devices._USB_IDENTITY_RETRY,
+            devices._IPOD_FACTS_OWNERS,
         )
         saved = [cache.get(path) for cache in caches]
         present = [path in cache for cache in caches]
@@ -85,15 +92,21 @@ class ClassicIpodFacts(unittest.TestCase):
     def test_usb_transport_revision_stays_separate_from_firmware(self):
         devices._IPOD_FACTS_CACHE.clear()
         usb = [{
+            "IOObjectClass": "IOUSBHostDevice",
+            "USB Product Name": "iPod",
             "idVendor": 1452,
+            "idProduct": 0x1209,
             "USB Serial Number": "000A270015F42B87",
+            "IORegistryEntryChildren": [{
+                "Vendor Identification": "Apple",
+                "Product Identification": "iPod",
+                "Product Revision Level": "1.62",
+                "IORegistryEntryChildren": [{"BSD Name": "disk9s1"}],
+            }],
         }]
-        scsi = [{
-            "Vendor Identification": "Apple",
-            "Product Identification": "iPod",
-            "Product Revision Level": "1.62",
-        }]
-        with mock.patch.object(devices, "_ioreg_records", side_effect=[usb, scsi]), \
+        with mock.patch.dict(devices._INFO_CACHE, {'/Volumes/IPOD': {
+                'DeviceIdentifier': 'disk9s1', 'VolumeUUID': 'fixture-volume'}}, clear=True), \
+                mock.patch.object(devices, "_ioreg_records", return_value=usb), \
                 mock.patch.object(
                     devices, "_classic_ipod_preferences",
                     return_value={

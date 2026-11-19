@@ -1,12 +1,18 @@
 # SoundBox player
 
+Sonny's November17 requirement protects the current fast local-song load and
+first complete waveform above other player work. Measure native source readiness
+and full waveform visibility separately; partial first paint does not count.
+Unpinned/cloud sets have a separate acquisition wait. Cue/background-save changes
+must retain the accepted local load path and bounded selected-track work.
+
 Sonny accepted the current visuals on November9,2026 and will reopen visual work
 if needed. No further waveform appearance tuning is queued. This acceptance does
 not close the separate device/firmware or native source-format gates below.
 
 ## Cleanup delivery — November8
 
-Personal build169 is installed and accepted. Eager readiness shifts work to
+At the November8 cleanup checkpoint, personal build169 was installed and accepted. Eager readiness shifts work to
 startup: matched 3,740-row signed snapshot proxies measured 3.37s median versus
 build167's 1.90s. These synthetic measurements do not establish fresh-source or
 compositor latency; [HANDOFF](HANDOFF.md) records provenance and remaining costs.
@@ -263,12 +269,18 @@ session overlays. Device track IDs cannot use desktop source cue/grid editing.
 The dashboard remembers its per-device tab, expanded playlists, selected row and
 scroll position across visits and launches.
 
-Accepted edits use the existing bottom-left footer label, with its normal font,
+Accepted foreground prep/tag edits use the existing bottom-left footer label, with its normal font,
 color and spacing: `Updating beatgrid…`, `Updating BPM…`, `Updating hot cue…`,
 `Updating memory cue…` or `Updating My Tags…`. Verified completion shows `Done`
 for two seconds, then returns to `Ready` (or ongoing preparation). Queued edits
 retain progress until the last verified save; failures show the operation and
 error instead. Focus-return saved-grid checks are silent and never report a save.
+
+Routine title/artist enrichment and its canonical save checkpoints stay out of
+the footer, including while the backlog is paused. The PLAYLISTS header menu
+shows prepared progress counts, Pause/Resume and retry controls. Lifecycle busy
+state and durable acknowledgement remain unchanged; actual failures still retain
+their attention notice without replacing an active device operation's status.
 
 My Tags remains open for multiple checkbox changes. Clicking back into a song
 browser dismisses that modeless panel and delivers the same pointer gesture;
@@ -312,10 +324,18 @@ BPM Value is excluded. Paused bar-start edits use the visible cursor; playing
 edits capture the native playhead. Q never snaps a grid-edit target.
 Captured imports use a durable per-song prep journal for cue/grid intentions,
 even while registration, initial native analysis, playlist/export work or refresh
-is busy. State saves before immediate RAM feedback; actual save/binding errors
-block that song and keep its intentions for retry. Initial analysis publishes
+is busy. Accepted cue gestures update the loaded markers and preview immediately;
+ordered canonical admission and native saves continue in the background. Pending
+views survive song switches and an older acknowledgement cannot erase newer cues.
+Actual save/binding errors retain the original intentions and usable, correctly
+bound cues with an explicit retry; they never imply native save success. Grid
+intentions retain their existing admission rules. Initial analysis publishes
 only its captured grid IDs; newer clicks remain queued. Cues publish separately
-through the accepted cue API. Tested source also supports DB-only cues on a
+through the accepted cue API after durable admission. A finished detector waits behind queued cue admission
+or an active canonical ACK, retaining its joined Python result and exact job/
+source/repository ownership rather than failing or repeating detection. Its cue
+refresh uses the current per-track view, including a newer pending gesture.
+Tested source also supports DB-only cues on a
 verified registered bare track without a DAT; an already queued initial-analysis
 intent goes first because its accepted profile requires zero existing cues.
 Cue and Grid saves require only their own accepted write authority. Fresh
@@ -491,8 +511,12 @@ Cue panel:
   Successful saves publish only the target's verified Track/Library metadata;
   they neither reload audio nor reparse/prepare the whole library. Immutable
   publication keeps background/cache readers on their original snapshot. Ordinary
-  native/import prep persists intentions before presentation and exact prepared
-  requests before publication. Failure retains those intentions and reconciles
+  native/import cue placement publishes an exact pending per-track session view
+  immediately, while ordered canonical admission and native saving continue.
+  A newly placed cue is usable before either save finishes, and switching songs
+  retains each song's pending edits. This is pending presentation, not a claim
+  of durable/native success. Grid edits and exact prepared native requests keep
+  their separate durable boundaries. Failure retains those intentions and reconciles
   source/receipts before retry; unknown recovery blocks writes. Normal Quit keeps
   the window and source pumps usable until captured saves finish. Teardown then
   closes admission and drains the owners. RAM presentation
@@ -740,6 +764,11 @@ Main-waveform scrubbing is relative and precise:
   decoder.
 - Release performs one authoritative seek and resumes only if playback was
   active before the drag.
+- A newer Stop, Pause, CUE, manual move, load or error cancels the held gesture;
+  its old mouse-up cannot seek or resume the newer state. Space/Pause observes
+  the held playback intent rather than the temporarily paused decoder. Manual
+  seeks, jumps and new grabs invalidate an earlier deferred end-of-track advance;
+  an ordinary fresh terminal event still advances once.
 - The main lane never walks or beat-snaps from a stationary grab. The
   whole-track overview remains an absolute click/drag navigation lane.
 
@@ -1359,13 +1388,27 @@ not current implementation instructions or pending work.
 ## Grid editing and deferred prep work
 
 The [prep protocol](rekordbox-prep.md) has accepted My Tag, Hot/Memory Cue and grid
-source APIs. Ordinary native tracks and captured imports now use durable per-song
-intentions before presentation, so unrelated registration, detection, conversion,
+source APIs. Sonny's November17 cue feedback requires visible, usable cue placement
+before background save completion, including while playing and across track changes.
+Ordinary native tracks and captured imports retain exact per-song pending cue
+views while durable admission continues. Grid edits retain their existing durable
+presentation boundary. Unrelated registration, detection, conversion,
 export or refresh does not veto local cue/grid capture. Actual source publication
 still requires exact identity, the domain's accepted authority, a valid grid when
 needed, Analysis Lock off, closed rekordbox/agent and a verified shared recovery
 state. A real error can block the affected action; it retains durable intentions
 for exact reconciliation/retry rather than discarding them.
+
+Cue-only native capture uses ordered asynchronous canonical admissions; it does
+not clone or upload an unrelated beat grid, and it does not synchronously save
+the library on the gesture thread. Staged cue positions allocate rapid successive
+slots immediately in the loaded panel and waveform/native markers; playback can
+use them while saves are pending. Canonical acknowledgement still precedes
+native DB pumping and a saved-success claim. Failed admission retains the pending
+cue view and an explicit error/retry; it cannot silently erase the user's gesture.
+Failure/retry retains accepted intentions and exact source ownership. Track
+selection changes cannot discard an admitted cue; actual source/restore changes
+fence publication. Shutdown drains accepted admissions before worker teardown.
 
 Grid controls set a bar start, nudge by the zoom-scaled50/25/10/5/3/2/1-ms step
 (Shift triples it), double/halve constant BPM, or enter manual constant BPM under

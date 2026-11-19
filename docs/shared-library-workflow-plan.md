@@ -1,6 +1,6 @@
 # Shared library, analysis and player corrections
 
-Current-status review November8,2026 against accepted personal build169; exact
+Dated status review November8,2026 against accepted personal build169; exact
 installed provenance and validation are recorded in HANDOFF. Responsiveness
 build167/runtime `3fb0ff60…`, whole-app build165/runtime `7ffde716…`, build163,
 source release `4a3d29a` and build160/runtime `7bbe8577…` are prior delivery evidence.
@@ -10,6 +10,14 @@ the requested player/Graveyard controls are now installed. The full shared-prima
 broader codec/replacement/gain/metadata gates. [HANDOFF](HANDOFF.md) records the
 current binary and newest user state; dated research checkpoints below describe
 their original boundaries, not current production availability.
+
+Later exact-library v5 Title/Artist saves and preserved backfill were independently
+accepted; scheduling pause does not revoke that authority. Other native Track Info
+fields, artwork, broader analysis/replacement and gain remain separate work.
+Current source also has selected durable iPod export checkpoints independent of
+bulk metadata pause, with selected physical/structural fences. Generic USB retains
+its native CDJ source-save barrier. HANDOFF distinguishes tested source, full-gate
+outcome and actual installation; these additions do not restamp an older binary.
 
 The November2 delivery completes the one-time native Collection/custom merge,
 accepted native sibling reorder and virtual-only Artists correction. The complete
@@ -505,7 +513,8 @@ alone do not establish native acceptance, latency or visual quality.
 | Pending playlist feedback | [desktop/rekordbox_playlists.py](../desktop/rekordbox_playlists.py): enqueue, completed, _native_apply_catalog, _native_refresh_view; existing request/store APIs stay authoritative |
 | Native Collection / identities | [reader](../soundbox/rekordbox_db.py): load_live and all active supported local audio IDs, independently of playlist membership; [library](../soundbox/library.py), [libcache](../soundbox/libcache.py), imports/metadata/state_repository modules |
 | Accepted shared writer/recovery | [tag controller](../desktop/tag_controller.py), [playlist store](../soundbox/rekordbox_playlist_store.py), rekordbox_cue_store/grid_store/tags, [source primitives](../soundbox/rekordbox_write.py) |
-| Export barrier | [desktop/cdj.py](../desktop/cdj.py): _source_edits_pending and deferred stable-ID rebinding; soundbox/cdj_source.py for the source capture contract |
+| Generic USB export barrier | [desktop/cdj.py](../desktop/cdj.py): _source_edits_pending and deferred stable-ID rebinding; soundbox/cdj_source.py for the source capture contract |
+| iPod selected capture | [desktop/ipod_export_capture.py](../desktop/ipod_export_capture.py), [selected physical fences](../desktop/ipod_export_fences.py), [ordered canonical checkpoint](../desktop/state_commit.py): frozen effective metadata, raw Rockbox manifest and source/repository/mount ownership; no unrelated backlog drain |
 | RGB | [native/WaveformShader.h](../native/WaveformShader.h): LOD, interval resolve, RGB coverage/color branches; [native/SoundboxDeck.mm](../native/SoundboxDeck.mm): eager pipeline construction and draw ownership; [desktop/player.py](../desktop/player.py): actual zoom ladder |
 | Regression suites | tests/test_analysis.py, test_ui_source_playlists.py, test_source_playlists.py, test_prep_grid.py, test_rekordbox_grid_store.py, test_native_deck.py, test_waveform_gpu_math.py, test_cdj_desktop.py |
 

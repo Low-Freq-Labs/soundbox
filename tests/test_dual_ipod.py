@@ -340,6 +340,7 @@ class DualIpodSyncTests(unittest.TestCase):
             stock_shadow_store=self.stock_shadow_store,
             identity_key="fixture-device",
             **kwargs,
+            usb_family='iPod Video',
         )
 
     def test_small_playlist_capture_is_reused_only_within_plan(self):
@@ -377,7 +378,7 @@ class DualIpodSyncTests(unittest.TestCase):
                 art_cache=self.art_cache, stock_art_cache=self.stock_art_cache,
                 stock_shadow_store=self.stock_shadow_store, identity_key="fixture-device",
                 reconcile=True, extra_playlists=(custom,), expected_manifest=expected,
-                audit_existing=False)
+                audit_existing=False, usb_family='iPod Video')
         self.assertEqual(capture.call_count, 1)
         self.assertFalse(plan.requires_commit)
         self.assertEqual(set(json.loads(plan.manifest_payload)["playlists"]),
@@ -390,7 +391,7 @@ class DualIpodSyncTests(unittest.TestCase):
                 plan_dual_ipod_sync(
                     self.library, None, self.ipod, model_number="MA446", filesystem="msdos",
                     rockbox_media_cache=self.media_cache, rockbox_art_cache=self.rockbox_art_cache,
-                    reconcile=reconcile)
+                    reconcile=reconcile, usb_family='iPod Video')
 
     def test_stale_manifest_precondition_refuses_before_media_work(self):
         commit_dual_ipod_sync(self._plan())
@@ -407,7 +408,7 @@ class DualIpodSyncTests(unittest.TestCase):
                 plan_dual_ipod_sync(
                     self.library, None, self.ipod, model_number="MA446", filesystem="msdos",
                     rockbox_media_cache=self.media_cache, rockbox_art_cache=self.rockbox_art_cache,
-                    reconcile=True, expected_manifest=expected)
+                    reconcile=True, expected_manifest=expected, usb_family='iPod Video')
         self.assertEqual(path.read_bytes(), before)
 
     def test_overlapping_playlist_metadata_scales_with_tracks_and_preserves_order(self):
@@ -1539,6 +1540,7 @@ class DualIpodSyncTests(unittest.TestCase):
                     "unsafe": "Unsafe renamed",
                 },
                 reconcile=True,
+                usb_family='iPod Video',
             )
 
         self.assertEqual(len(plan.stock.rewrites), 1)
@@ -1859,6 +1861,7 @@ class DualIpodSyncTests(unittest.TestCase):
             stock_shadow_store=self.stock_shadow_store,
             identity_key="fixture-device",
             reconcile=True,
+            usb_family='iPod Video',
         )
         self.assertEqual(len(plan.file_deletes), 1)
         old_playlist = self.ipod / plan.file_deletes[0].relative_path
@@ -2058,6 +2061,7 @@ class DualIpodSyncTests(unittest.TestCase):
             stock_shadow_store=self.stock_shadow_store,
             identity_key="fixture-device",
             reconcile=True,
+            usb_family='iPod Video',
         )
         self.assertEqual(len(plan.file_deletes), 1)
         self.assertTrue(any(
@@ -2132,6 +2136,7 @@ class DualIpodSyncTests(unittest.TestCase):
             stock_shadow_store=self.stock_shadow_store,
             identity_key="fixture-device",
             reconcile=True,
+            usb_family='iPod Video',
         )
 
         self.assertEqual(plan.stock.removed_track_count, 1)
@@ -2187,6 +2192,7 @@ class DualIpodSyncTests(unittest.TestCase):
             stock_shadow_store=self.stock_shadow_store,
             identity_key="fixture-device",
             reconcile=True,
+            usb_family='iPod Video',
         )
 
         self.assertTrue(any(
@@ -2421,6 +2427,7 @@ class DualIpodSyncTests(unittest.TestCase):
             stock_shadow_store=self.stock_shadow_store,
             identity_key="fixture-device",
             reconcile=True,
+            usb_family='iPod Video',
         )
 
         self.assertFalse(any(
@@ -2461,6 +2468,7 @@ class DualIpodSyncTests(unittest.TestCase):
             stock_shadow_store=self.stock_shadow_store,
             identity_key="fixture-device",
             reconcile=True,
+            usb_family='iPod Video',
         )
         real_write = DeviceSession.atomic_write
 
@@ -2505,6 +2513,7 @@ class DualIpodSyncTests(unittest.TestCase):
             stock_shadow_store=self.stock_shadow_store,
             identity_key="fixture-device",
             reconcile=True,
+            usb_family='iPod Video',
         )
         real_replace = os.replace
 
@@ -2543,6 +2552,7 @@ class DualIpodSyncTests(unittest.TestCase):
             stock_shadow_store=self.stock_shadow_store,
             identity_key="fixture-device",
             reconcile=True,
+            usb_family='iPod Video',
         )
         new_playlist = self.ipod / plan.playlists[0].relative_path
         real_write = DeviceSession.atomic_write

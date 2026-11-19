@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 from PySide6.QtCore import QObject, QThread, Signal, QEventLoop, QTimer
 
-from soundbox import rekordbox_db
+from soundbox import rekordbox_db, smart_playlist_order
 from soundbox.native_paths import validate_track_path
 from soundbox.rekordbox_cue_store import PilotCueStore, load_cue_authority
 from soundbox.rekordbox_cues import CueEdit
@@ -21,7 +21,7 @@ from soundbox.rekordbox_tags import (
 from .task_owner import TaskOwner
 from .cue_session import display, intent_for, native_key, overlay
 from .native_timing import CommandTiming, now, phase
-from .tag_assignment_intents import TagAssignmentIntents, verified_readback
+from .tag_assignment_intents import TagAssignmentIntents, _VerifiedTagReadback, verified_readback
 
 
 class _TagTask(QThread):
@@ -90,19 +90,44 @@ class TagEditController(TagAssignmentIntents, QObject):
         self.definition_update_status = ''
         self.metadata_update_status = ''
         self.admission_paused = False
+        self._state_commit_token = None
         self.foreground_waiting = False
         self._init_tag_intents(intent_owner if intent_owner is not None else
             parent if parent is not None and hasattr(parent, 'settings') and hasattr(parent, '_save_state') else None)
 
     @property
     def status_text(self):
-        if not self.busy:
+        if not self.busy and not self.state_commit_owned:
             return ''
         return self.update_status_text or ('Updating song…' if self._busy_kind=='analysis' else 'Checking saved grid…')
 
     @property
+    def state_commit_owned(self):return getattr(self,'_state_commit_token',None) is not None
+
+    def reserve_state_commit(self,token):
+        if self._state_commit_token is not None or self.busy or self.checking:return False
+        self._state_commit_token=token;self.changed.emit();return True
+
+    def release_state_commit(self,token):
+        if self._state_commit_token is not token:return False
+        self._state_commit_token=None;self.changed.emit()
+        if not self.busy:
+            self.idle.emit()
+            if not self._closing and not self.owner.stopping:self._start_next_cue()
+        return True
+
+    @property
     def update_status_text(self):
         """Accepted edit intents only; a worker owning the lane is not a save."""
+        return self._update_status_text(include_metadata=True)
+
+    @property
+    def footer_status_text(self):
+        """Routine metadata and canonical checkpoints stay in background controls."""
+        return self._update_status_text(include_metadata=False)
+
+    def _update_status_text(self, *, include_metadata):
+        if include_metadata and self.state_commit_owned:return 'Saving song details…'
         if self.busy and self._busy_kind == 'analysis':
             return 'Updating song…'
         if self.busy and self._busy_kind == 'playlists':
@@ -111,7 +136,7 @@ class TagEditController(TagAssignmentIntents, QObject):
             return 'Updating library…'
         if self.busy and self._busy_kind == 'media':
             return 'Converting audio…'
-        if self.busy and self._busy_kind == 'metadata':
+        if include_metadata and self.busy and self._busy_kind == 'metadata':
             return 'Updating song details…'
         if self.busy and self._busy_kind == 'tags':
             return 'Updating My Tags…'
@@ -133,12 +158,13 @@ class TagEditController(TagAssignmentIntents, QObject):
             page = self._cue_queue[0].page
             return 'Updating hot cue…' if page == 'hot' else 'Updating memory cue…'
         return (self.prep_update_status or self.playlist_update_status or self.definition_update_status
-                or self.metadata_update_status or self.registration_update_status or self.analysis_update_status)
+                or (self.metadata_update_status if include_metadata else '')
+                or self.registration_update_status or self.analysis_update_status)
 
     @property
     def owned(self):
         return (self.busy or self.checking or bool(self._cue_queue) or self.grid_waiting
-                or self.admission_paused or self.assignment_reserved)
+                or self.admission_paused or self.state_commit_owned or self.assignment_reserved or self.tag_ack_pending)
 
     @property
     def source_job_owned(self):
@@ -148,7 +174,7 @@ class TagEditController(TagAssignmentIntents, QObject):
         source controller's turn may pass deferred cue/grid logical holds;
         active work, recovery/prepared reservations and fresh guards remain.
         """
-        return (self.busy or self.checking or self.admission_paused or self.assignment_reserved
+        return (self.busy or self.checking or self.admission_paused or self.state_commit_owned or self.assignment_reserved or self.tag_ack_pending
                 or (bool(self._cue_queue) or self.grid_waiting) and not self._fair_source_turn())
 
     def _fair_source_turn(self, kind=None):
@@ -185,6 +211,19 @@ class TagEditController(TagAssignmentIntents, QObject):
                                    if lib and verified and lib.source_kind == 'rekordbox-db' else None)
         self.changed.emit()
         self._schedule_tag_intent()
+
+    def readback_library(self, previous):
+        """Fresh native musical state without repeating media resolution.
+
+        Injected readers retain their source-path interface for isolated tests.
+        Production callers share the complete metadata/tag/cue/smart reader.
+        """
+        if self._loader is not None:return self._loader(Path(previous.source))
+        reader=getattr(self._tag_intent_owner,'native_reader',None)
+        if reader is not None:return reader.read_metadata(previous)
+        if self._requires_authority:
+            raise RuntimeError('The background native reader is unavailable; restart SoundBox before retrying the saved edit')
+        return rekordbox_db.load_metadata_readback(previous)
 
     def _write_root(self, lib):
         key = hashlib.sha256((str(lib.source) + '\0' + lib.source_library_id).encode()).hexdigest()[:24]
@@ -347,10 +386,10 @@ class TagEditController(TagAssignmentIntents, QObject):
 
     def reason(self, selected_ids) -> str:
         if self.queue_error():return self.queue_error()
-        if self.pending:return self.pending[0]['error'] or 'Updating My Tags…'
+        if self.pending:return self.pending[0]['error'] or (self._probe_error if self._tag_ack_conflict else '') or 'Updating My Tags…'
         if self._analysis_blocks_source():return 'Analyzing audio before database updates…'
         if self.prep_priority:return 'Confirming cue/grid saves…'
-        if self.admission_paused:return 'Confirming a library operation…'
+        if self.admission_paused or self.state_commit_owned:return 'Finishing a library save…'
         if self.owner.stopping or self._closing:
             return 'Finishing tag work…'
         if self.busy:
@@ -375,7 +414,7 @@ class TagEditController(TagAssignmentIntents, QObject):
 
     def probe(self):
         if self._analysis_blocks_source():return
-        if (self.assignment_reserved or self.owner.stopping or self._closing or self.busy or self.checking or self.admission_paused or self.lib is None
+        if (self.assignment_reserved or self.owner.stopping or self._closing or self.busy or self.checking or self.admission_paused or self.state_commit_owned or self.lib is None
                 or not self.verified or self.lib.source_kind != 'rekordbox-db'
                 or (self._requires_authority and self._authority is None)):
             return
@@ -445,7 +484,8 @@ class TagEditController(TagAssignmentIntents, QObject):
         request = TagWriteRequest(lib.source_library_id, tuple(targets.values()), tag_id, tag.source_uuid,
                                   bool(present), tag.name, self.new_operation_id() if self._tag_intent_owner else '')
         if self._tag_intent_owner is not None:
-            return self._queue_tag_request(request)
+            assignment = smart_playlist_order.capture(lib, list(ids), tag_id, present)
+            return self._queue_tag_request(request, assignment)
         self._pending = request
         return self._start_tag_request(lib, request, self._finish)
 
@@ -455,6 +495,9 @@ class TagEditController(TagAssignmentIntents, QObject):
         self._busy_kind = 'tags'
         self._pending = request
         self.changed.emit()
+        captured = self._tag_recency_assignment
+        assignment = captured[1] if captured is not None and captured[0] == request.operation_id else None
+        durable_ack = self.durable_assignment_ack
 
         def save():
             with phase('recovery'):
@@ -473,10 +516,12 @@ class TagEditController(TagAssignmentIntents, QObject):
                         return dict(waiting=True)
                     raise
             with phase('refresh_library'):
-                library = (self._loader(Path(lib.source)) if self._loader is not None
-                           else rekordbox_db.load_metadata_readback(lib))
+                library = self.readback_library(lib)
                 if not verified_readback(library, str(lib.source), request):
                     raise WriteProofError('My Tag source readback differs from the saved intention; retry to reconcile')
+                if durable_ack:
+                    return _VerifiedTagReadback(library, str(lib.source), request,
+                                                smart_playlist_order.prepare(assignment, library))
                 return library
 
         # The direct API has no preceding durable FIFO. A restored intention's
@@ -490,7 +535,7 @@ class TagEditController(TagAssignmentIntents, QObject):
     def cue_reason(self, track_id) -> str:
         if self.prep_priority or self.busy and self._busy_kind == 'prep':
             return 'Confirming cue/grid saves…'
-        if self.admission_paused:return 'Confirming a library operation…'
+        if self.admission_paused or self.state_commit_owned:return 'Finishing a library save…'
         if self.owner.stopping or self._closing:
             return 'Finishing library edits…'
         lib = self.lib
@@ -566,7 +611,7 @@ class TagEditController(TagAssignmentIntents, QObject):
         if self.assignment_reserved:return False
         if (kind not in ('registration', 'registration-cancel', 'analysis')
                 and self._analysis_blocks_source()):return False
-        if self.busy or self.checking or self.admission_paused or self.owner.stopping or self._closing:
+        if self.busy or self.checking or self.admission_paused or self.state_commit_owned or self.owner.stopping or self._closing:
             return False
         self._source_admitted()
         admitted_at=now();self.busy = True
@@ -577,10 +622,10 @@ class TagEditController(TagAssignmentIntents, QObject):
             self.busy = False
             self._busy_kind = ''
             finished(worker)
-            if self._cue_queue and not self.busy and not self.prep_priority:
+            if self._cue_queue and not self.busy and not self.state_commit_owned and not self.prep_priority:
                 self._start_next_cue()
             self.changed.emit()
-            if not self.busy:
+            if not self.busy and not self.state_commit_owned:
                 self.idle.emit()
 
         worker = _TagTask(callback, operation=kind,admitted_at=admitted_at)
@@ -590,7 +635,7 @@ class TagEditController(TagAssignmentIntents, QObject):
 
     def _start_next_cue(self):
         if self.assignment_reserved:return
-        if self.busy or self.checking or self.admission_paused or self.prep_priority or self.owner.stopping:return
+        if self.busy or self.checking or self.admission_paused or self.state_commit_owned or self.prep_priority or self.owner.stopping:return
         if self._analysis_blocks_source():
             QTimer.singleShot(500, self, self._start_next_cue)
             return
@@ -715,7 +760,7 @@ class TagEditController(TagAssignmentIntents, QObject):
         loop = QEventLoop()
         self.idle.connect(loop.quit)
         try:
-            while self.busy or self.checking:
+            while self.busy or self.checking or self.tag_ack_pending:
                 loop.exec(QEventLoop.ExcludeUserInputEvents)
         finally:
             self.idle.disconnect(loop.quit)

@@ -1,5 +1,6 @@
 """Analysis controls and cancellable captured-audio jobs with owned lifetime."""
 from copy import deepcopy
+from dataclasses import dataclass
 import threading
 
 from PySide6.QtCore import QThread, QTimer, Signal, Qt
@@ -130,6 +131,18 @@ class AnalysisWorker(QThread):
             self.result = exc
 
 
+@dataclass(frozen=True)
+class _CompletedAnalysis:
+    """Joined Python payload retained after its QThread has been retired."""
+    library: object
+    tracks: tuple
+    preferences: dict
+    result: object
+    job_id: str
+    stop: threading.Event
+    epoch: tuple
+
+
 class AnalysisMixin:
     def _analysis_settings_page(self):
         scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setFrameShape(QScrollArea.NoFrame)
@@ -140,7 +153,7 @@ class AnalysisMixin:
 
     def _save_analysis_preferences(self):
         self.settings['analysis'] = self._analysis_controls.preferences()
-        self._schedule_settings_save()
+        self._schedule_settings_save('analysis')
 
     def _analysis_result(self, track):
         return analysis.saved_result(self.settings.get('analysis_results', {}), track)
@@ -317,6 +330,30 @@ class AnalysisMixin:
             timer.start(delay)
 
     def _analysis_retired(self, worker):
+        if isinstance(worker, _CompletedAnalysis):
+            if self._analysis_worker is not worker:
+                return
+            repository = self._state_repository
+            if worker.epoch != (repository, repository.generation, repository.area.generation):
+                self._analysis_worker = None
+                if not self._shutting_down and not self._state_maintenance:
+                    self._resume_analysis_jobs()
+                return
+        if not self._shutting_down and not self._analysis_owner.stopping:
+            prep = getattr(self, 'prep_controller', None)
+            if self._state_publication or getattr(prep, 'admission_pending', False):
+                if not isinstance(worker, _CompletedAnalysis):
+                    repository = self._state_repository
+                    worker = _CompletedAnalysis(
+                        worker.library, tuple(worker.tracks), dict(worker.preferences),
+                        worker.result, worker.job_id, worker.stop,
+                        (repository, repository.generation, repository.area.generation))
+                    self._analysis_worker = worker
+                # A busy canonical lane is neither storage failure nor a reason
+                # to discard a finished detector. Keep its ownership until the
+                # cue intention and its real ACK have landed; no QThread is held.
+                QTimer.singleShot(25, self, lambda result=worker: self._analysis_retired(result))
+                return
         self._analysis_worker = None
         if self._shutting_down or self._analysis_owner.stopping:
             return
@@ -381,7 +418,9 @@ class AnalysisMixin:
                     # Analysis completion changes musical metadata only. Do not
                     # restart waveform preparation or leave a fallback on deck.
                     self._local_grid_saved(track.track_id)
-                    self.player_bar.refresh_live_cues(track.track_id, current.path, local_cues.cues(record))
+                    cues = (prep.cue_rows(track.track_id) if prep and prep.handles(track.track_id)
+                            else local_cues.cues(record))
+                    self.player_bar.refresh_live_cues(track.track_id, current.path, cues)
                     if analysis.identity(current.path.stat()) == record['epoch']:
                         self.player_bar._analysis_parts.update(
                             _detected_sha256=record['sha256'], _detected_epoch=record['epoch'])

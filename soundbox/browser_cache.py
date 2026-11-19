@@ -14,11 +14,22 @@ from .track_info import FIELDS as INFO_FIELDS
 _FIELDS.update(key for key,_label in INFO_FIELDS)
 
 
-def fingerprint(inputs: tuple) -> str:
+def fingerprint(inputs: tuple, *, bounded: bool = False) -> str:
     # Algorithm version is explicit: metadata-policy changes must bump SCHEMA.
-    raw = json.dumps([SCHEMA, sorted(inputs[0]), *inputs[1:]],
-                     ensure_ascii=True, allow_nan=False, separators=(',', ':')).encode()
-    return hashlib.sha256(raw).hexdigest()
+    data=[SCHEMA,sorted(inputs[0]),*inputs[1:]]
+    if not bounded:
+        raw=json.dumps(data,ensure_ascii=True,allow_nan=False,separators=(',', ':')).encode()
+        return hashlib.sha256(raw).hexdigest()
+    # Preserve those exact JSON bytes without one C-encoder hold across the
+    # entire inventory. The cache worker yields between bounded JSON pieces.
+    encoder=json.JSONEncoder(ensure_ascii=True,allow_nan=False,separators=(',', ':'))
+    digest=hashlib.sha256();parts=[];size=0
+    for part in encoder.iterencode(data):
+        parts.append(part);size+=len(part)
+        if size>=32*1024:
+            digest.update(''.join(parts).encode());parts=[];size=0
+    if parts:digest.update(''.join(parts).encode())
+    return digest.hexdigest()
 
 
 def _digest(rows: dict) -> str:

@@ -17,6 +17,10 @@ class DeviceScanCapture(unittest.TestCase):
             ('USB', self.path, 1000)]))
         self.enterContext(mock.patch('desktop.workers.device_profile', return_value=self.profile))
         self.enterContext(mock.patch('desktop.devices.discovery_needs_retry', return_value=False))
+        self.manifest = object()
+        self.capture_manifest = self.enterContext(mock.patch(
+            'desktop.workers.engine.capture_device_drift_manifest',
+            return_value=self.manifest))
         self.enterContext(mock.patch('desktop.usb_device_view.read_usb_snapshot',
                                      return_value=SimpleNamespace(mount_token=0)))
 
@@ -52,13 +56,16 @@ class DeviceScanCapture(unittest.TestCase):
             self.assertEqual(path, self.path)
             self.assertEqual(extras, [extra])
             self.assertEqual(kwargs, {'artist_overrides': {'one': 'Artist'},
-                                      'title_overrides': {'one': 'Title'}})
+                                      'title_overrides': {'one': 'Title'},
+                                      'display_rows': None,
+                                      'captured_manifest': self.manifest})
             return SimpleNamespace(count=lambda: 2)
 
         worker.playlists_requested.connect(provide, Qt.DirectConnection)
         with mock.patch('desktop.workers.engine.device_drift', side_effect=drift) as check:
             worker.run()
         check.assert_called_once()
+        self.capture_manifest.assert_called_once_with(self.path)
         self.assertEqual(worker.results[0][3], 2)
         self.assertFalse(worker.stock_detected)
 
@@ -81,6 +88,7 @@ class DeviceScanCapture(unittest.TestCase):
         ):
             worker.run()
         self.assertIs(worker.stock_shadow_store, shadow)
+        self.capture_manifest.assert_called_once_with(self.path)
         self.assertEqual(worker.results[0][3], 2)
 
     def test_capture_failure_keeps_pending_status_and_snapshot(self):
@@ -93,6 +101,37 @@ class DeviceScanCapture(unittest.TestCase):
         drift.assert_not_called()
         self.assertIsNone(worker.results[0][3])
         self.assertIn(self.path, worker.usb_snapshots)
+
+    def test_classic_sync_observation_uses_current_shadow_without_granting_write_capability(self):
+        profile = SimpleNamespace(kind='stock_ipod', has_stock_ipod=True,
+                                  model='MC297', library_persistent_id=123,
+                                  stock_write=False)
+        facts = SimpleNamespace(volume_uuid='generated-volume', hardware_serial='generated-serial')
+        shadow = object()
+        for state, changes, expected in (
+                ('local_changes', 2, 2), ('up_to_date', 0, 0),
+                ('reconcile_required', 0, 1)):
+            with self.subTest(state=state):
+                worker = DeviceScanWorker(None, defer_playlists=True)
+                worker.playlists_requested.connect(
+                    lambda request: self._provide(request, stock_shadow_store=shadow),
+                    Qt.DirectConnection)
+                with (
+                    mock.patch('desktop.workers.device_profile', return_value=profile),
+                    mock.patch('desktop.workers.device_facts', return_value=facts),
+                    mock.patch('desktop.workers.engine.device_drift', return_value=None),
+                    mock.patch('soundbox.stock_ipod.DeviceSession',
+                               side_effect=AssertionError('A status read opened a writer')),
+                    mock.patch('soundbox.stock_ipod.inspect_stock_ipod_sync_status',
+                               return_value=SimpleNamespace(state=state, local_changes=changes)) as inspect,
+                ):
+                    worker.run()
+                inspect.assert_called_once()
+                self.assertEqual(inspect.call_args.kwargs['model_number'], 'MC297')
+                self.assertIs(inspect.call_args.kwargs['shadow_store'], shadow)
+                self.assertEqual(worker.results[0][3], expected)
+                self.assertIs(worker.results[0][4], profile)
+                self.assertFalse(worker.results[0][4].stock_write)
 
     def _waiting_worker(self):
         worker = DeviceScanWorker(None, defer_playlists=True)

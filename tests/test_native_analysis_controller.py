@@ -313,6 +313,92 @@ class NativeAnalysisQueue(unittest.TestCase):
             self.controller.pump();self.assertEqual(checked.call_count,1)
         self.assertEqual(self.calls,[])
 
+    def test_status_and_busy_churn_do_not_rescan_a_current_library_or_saved_results(self):
+        self.window.tag_controller.busy=True;self.controller.discover();self.app.processEvents()
+        class ReadyTracks(dict):
+            def items(self):raise AssertionError('Status event traversed the library')
+            def values(self):raise AssertionError('Status event traversed the library')
+        self.window.lib.tracks_by_id=ReadyTracks(self.window.lib.tracks_by_id)
+        with mock.patch.object(native.analysis,'saved_result',side_effect=AssertionError('Status event read saved analysis')):
+            for count in range(5):
+                self.window.tag_controller.metadata_update_status=f'Metadata phase {count}'
+                self.window.tag_controller.changed.emit();self.app.processEvents()
+        self.assertEqual(len(self.controller.pending),1)
+        self.assertEqual(self.calls,[])
+
+    def test_metadata_snapshot_and_unrelated_settings_replacement_reuse_discovery_observation(self):
+        self.window.tag_controller.busy=True;self.controller.discover();self.app.processEvents()
+        self.window.lib=replace(self.window.lib,tracks_by_id={tid:replace(track,name='Saved name',artist='Saved artist')
+            for tid,track in self.window.lib.tracks_by_id.items()})
+        self.window.settings={**self.window.settings,'metadata_receipt_acks':[{'unrelated':'status'}]}
+        with mock.patch.object(native.analysis,'saved_result',side_effect=AssertionError('Metadata re-ran analysis discovery')):
+            self.window.tag_controller.configure(self.window.lib,True);self.app.processEvents()
+        self.assertEqual(len(self.controller.pending),1)
+        self.assertEqual(self.calls,[])
+
+    def test_new_result_owner_and_in_place_result_addition_both_wake_discovery(self):
+        for replace_owner in (False,True):
+            with self.subTest(replace_owner=replace_owner):
+                self.window.tag_controller.busy=True
+                self.window.settings.pop(KEY,None)
+                self.window.settings['analysis_results']={};self.controller.discover();self.app.processEvents()
+                self.assertEqual(self.controller.pending,[])
+                if replace_owner:
+                    self.window.settings['analysis_results']={result_key('/synthetic/one.wav'):deepcopy(self.record)}
+                else:
+                    self.window.settings['analysis_results'][result_key('/synthetic/one.wav')]=deepcopy(self.record)
+                self.window.tag_controller.changed.emit();self.app.processEvents()
+                self.assertEqual(len(self.controller.pending),1)
+        self.assertEqual(self.calls,[])
+
+    def test_detection_and_prep_retirement_wake_candidate_discovery(self):
+        w=self.window;w.tag_controller.busy=True;track=w.lib.tracks_by_id['sb-one']
+        w.settings[native.analysis_jobs.KEY]=native.analysis_jobs.admit([],w.lib,[track],{})
+        self.controller.discover();self.app.processEvents();self.assertEqual(self.controller.pending,[])
+        w.settings[native.analysis_jobs.KEY]=[]
+        w.settings['pending_prep_edits']=[{'track_id':'sb-one','error':'Prep needs attention'}]
+        w.prep_controller=SimpleNamespace(job=lambda tid:next((job for job in
+            w.settings['pending_prep_edits'] if job['track_id']==tid),None))
+        w.tag_controller.changed.emit();self.app.processEvents();self.assertEqual(self.controller.pending,[])
+        w.settings['pending_prep_edits']=[]
+        w.tag_controller.changed.emit();self.app.processEvents();self.assertEqual(len(self.controller.pending),1)
+        self.assertEqual(self.calls,[])
+
+    def test_explicit_discovery_still_observes_in_place_result_and_media_changes(self):
+        self.window.tag_controller.busy=True
+        record=self.window.settings['analysis_results'][result_key('/synthetic/one.wav')]
+        record['key']=None;self.controller.discover();self.app.processEvents();self.assertEqual(self.controller.pending,[])
+        record['key']='8B'
+        self.add_second();self.controller.discover()
+        self.assertEqual({job['local_id'] for job in self.controller.pending},{'sb-one','sb-two'})
+        self.assertEqual(self.calls,[])
+
+    def test_failed_scheduled_discovery_save_can_retry_without_another_input_mutation(self):
+        w=self.window;w.tag_controller.busy=True
+        w.settings['analysis_results']={};self.controller.discover();self.app.processEvents()
+        w.settings['analysis_results']={result_key('/synthetic/one.wav'):deepcopy(self.record)}
+        self.save_ok=False;w.tag_controller.changed.emit();self.app.processEvents()
+        self.assertEqual(self.controller.pending,[])
+        self.save_ok=True;w.tag_controller.changed.emit();self.app.processEvents()
+        self.assertEqual(len(self.controller.pending),1)
+        self.assertEqual(self.calls,[])
+
+    def test_changed_authority_file_wakes_discovery_but_does_not_cache_write_permission(self):
+        w=self.window;w.tag_controller.busy=True;self.controller.factory=None
+        authority=w.tag_controller.data_root/'rekordbox-analysis-authority.json'
+        with mock.patch.object(native,'load_authority',return_value=None), \
+                mock.patch.object(native.cbr,'load_authority',return_value=None):
+            self.controller.discover();self.app.processEvents();self.assertEqual(self.controller.pending,[])
+        authority.write_bytes(b'isolated scheduling marker')
+        with mock.patch.object(native,'load_authority',return_value=object()), \
+                mock.patch.object(native.cbr,'load_authority',return_value=None):
+            w.tag_controller.changed.emit();self.app.processEvents();self.assertEqual(len(self.controller.pending),1)
+        with mock.patch.object(native,'load_authority',return_value=None), \
+                mock.patch.object(native.cbr,'load_authority',return_value=None):
+            w.tag_controller.busy=False;self.controller.pump()
+        self.assertIn('acceptance',self.controller.pending[0]['error'])
+        self.assertEqual(self.calls,[])
+
     def test_discovery_failure_and_retry_reuse_unmodified_pending_analysis_record(self):
         class ImmutableRecord(dict):
             def __deepcopy__(self,_memo):raise AssertionError('Unrelated analysis payload was copied')

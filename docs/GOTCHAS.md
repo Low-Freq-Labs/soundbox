@@ -1,7 +1,117 @@
 # SoundBox gotchas & niche facts
 
+## Independent iPod policy and terminal cancellation — November18
+
+- A failed CDJ compatibility conversion is not an unfinished iPod export.
+  Inspect actual selected staging/recovery under pinned no-follow descriptors
+  on the worker, not policy error text or the presence of a queued intention.
+  Keep source-lane/device ownership, active replacement/locator and fresh
+  source-byte guards. XML/non-native sources have no native conversion domain.
+- iTunes new-copy suffix rejection precedes full capture/hydration; otherwise
+  an M4A-only set playlist reads gigabytes merely to omit them. The current
+  MP3/PCM16-WAV profile is narrower than Classic AAC/ALAC/AIFF hardware support.
+  Rockbox/dual policies remain separate, and PCM24 never becomes stock-safe.
+  Definite unsupported PCM/float WAVs also use a bounded stable no-follow header
+  read before acquisition. This rejects only: compatible, unknown, malformed or
+  unstable headers fall through to full acquisition and content verification.
+  Explicit Sync reevaluates omitted songs, including a same-path PCM24→16 change.
+- Device-only dual Delete/Order retains its exact confirmed manifest and saved
+  selected checkpoint without waiting for unrelated CDJ/native metadata jobs.
+  Missing-source retained rows must equal the confirmed device row exactly.
+- Successful Cancel produces no completion popup. Keep cancellation controls
+  until their actual worker/checkpoint joins, then retire only those controls;
+  a newer operation keeps ownership. Real failure/recovery warnings remain.
+- Normal Export/Sync/Apply Order already supplies the action's intent: do not add
+  another plan-review or success dialog. Destructive Delete/Erase/Repair consent
+  and actual failure/recovery warnings retain their own boundaries.
+- Copy progress must include work inside a large file. Report real transfer and
+  readback bytes, with verified endpoints only after matching content. New iTunes
+  files use one exclusive publication plus an actual same-descriptor readback;
+  an epoch-only receipt cannot catch same-size FAT corruption. Existing rewrites
+  and generic USB publication do not borrow that new-file-only path.
+
+## Ordered metadata state commits — November17
+
+- A worker alone does not prevent stutters: whole-result JSON encoding and GC
+  can hold the GIL. Current readback streams the exact existing catalog digest
+  bytes and fetches ordinary memberships as bounded scalars, retaining complete
+  raw row clocks/order/duplicates/deletion checks. Native writer hashes/SQL stay
+  unchanged. Global GC disabling/tuning is not a fix for avoidable allocations.
+- Moving encoding to a QThread still lets Python model paint callbacks wait on
+  its GIL. The cache and read-only native helpers use dedicated inherited pipe
+  descriptors, not standard streams: windowed packaged executables may have no
+  usable stdin/stdout. Internal dispatch must precede desktop/macOS preference
+  setup. Prewarm ordinary services before interaction, preserve source-writer
+  ownership, and join the actual helper off the GUI while Qt keeps dispatching.
+  A failed read never falls back to parsing the whole source on the GUI process.
+- PyInstaller6.21's PySide runtime hook imports QtCore before the application
+  entrypoint. The custom-first packaged worker hook skips only its embedded Qt
+  configuration for the exact engine flag, while preserving the other bootstrap
+  hooks and normal desktop behavior. Never weaken the engine's Qt-free guard or
+  remove already-imported Qt modules to conceal a bootstrap error. Verify both
+  actual frozen worker roles, exact code/order and graceful exit before install.
+- `dataChanged` may reseed a live delegate editor even without a model reset.
+  Preserve genuinely typed text and exact source/song/field/occurrence, not just
+  browser selection. Setting an unchanged QLineEdit maximum length can clear its
+  modified flag; do that only when the limit changes. Publication must not steal
+  focus from newer input, another window or a modal dialog.
+- A local recursive helper captures its own closure cell. If it also captures
+  Qt item wrappers, it may keep a borrowed invisible-root wrapper after the tree's
+  C++ destruction. Release synchronous tree helper cells in `finally`; do not
+  blanket-clear asynchronous continuations. This avoids stale wrapper/native
+  pointer aliasing without changing drag events or forcing application GC.
+- Observed dict/list proof requires both nested revision detection and an exact
+  saved-canonical baseline; a valid unsaved target cannot authorize a sparse
+  queue patch. Known durable progress recipes transfer only their tiny progress
+  proof. Restore/version drift and arbitrary cursor mutation invalidate admission.
+- Canonical equality witnesses skip only a previously successful comparison of
+  the exact immutable expected owner and private saved leaf; every filesystem,
+  record and final ownership guard still runs. Static plan proof also binds the
+  exact frozen roots, typed scalars and repository/source generation, and is
+  certified only after canonical verification. Cursor/active checks run on every
+  phase; public `source_truth.validate` remains complete. Mutable data, mere
+  object IDs, hashes or a source counter alone cannot borrow either proof.
+- Small patch admission is not a successful save. Advance the request/ACK/cursor
+  only from the joined worker's durable continuation. Keep the source lane
+  reserved through that continuation, even after the SQL worker has finished.
+- An open device retains the desktop `_view_key` for the eventual return. That
+  key cannot authorize navigation during source readback: skip hidden desktop
+  rendering/default selection while the device page is active. Pending desktop
+  playlist deletion and terminal local adoption update that remembered fallback
+  without clearing the selected device. Actual disconnect selects fresh Collection;
+  a delayed initial read preserves a newer device choice.
+- Canonical patches use detached dictionary leaves and repository version fences;
+  never deepcopy the full GUI document before dispatch. Merge only committed
+  leaves back into current GUI owners. Restore/source selection and shutdown
+  retain ownership; flush deferred preferences after shutdown owners drain.
+- Pause automatic metadata work with the source-scoped scheduler choice, not by
+  removing its accepted authority. Already admitted work drains; permissions and
+  frozen intentions survive, and a pause must not masquerade as new acceptance.
+
 ## Shared metadata completion — November13 source
 
+- Metadata text is not necessarily ASCII. V3 preserves Unicode codepoints rather
+  than normalizing combining marks, and a title-only save leaves AlbumID and
+  artist rows intact. Reusing a synced artist does not require modifying it.
+  Keep legacy profile/receipt scopes and numeric-string reconstruction unchanged.
+  Bare NULL revisions start at0 only in separately marked v3: Main's integer
+  conversion/increment trace and generated content/revision sequences support
+  this. A normalized field update alone does not prove that composition.
+  Low-level artist deletion has different local/synced counter behavior and
+  cannot substitute for the complete Main retirement sequence.
+  Main cleanup allocates one counter for its selected batch and applies local
+  DELETE/synced tombstone SQL. V4 captures its separate retirement clock and
+  preserves unrelated orphans. The Agent model's `nowString()` emitted12-hour
+  text in the failed harness; Main uses gmtime's24-hour hour field. Keep the
+  rejected reference/negative regression and independently corrected UTC matrix.
+- Existing-album artist changes have a native Album bookkeeping step even when
+  the album name/roles stay the same. V5 captures that separate clock/counter,
+  requires unique active name/UUID/role lookup and preserves opaque fields.
+  A deleted same-name artist is history, not a second active lookup match.
+  Do not erase it or let an active duplicate silently choose an identity.
+  Cloud status257 updates preserve flags and remote USNs exactly. Node JSON can
+  round large INTEGERs: the generated reference retains independent SQL TEXT
+  casts for exact Python reconstruction; never compare remote to local USNs.
 - Tag saves need complete fresh native smart/tag/cue/metadata readback, but not
   another media/share resolution walk. Use the shared metadata-only reader;
   injecting general `load_live` into the app's Tag controller defeats that path.
@@ -245,6 +355,13 @@ test, after unchanged source-identity and native/manual provenance guards.
 
 ## Native playlist writer — accepted October30
 
+- A confirmation dialog runs the event loop. Playlist/tag-definition Discard
+  captures only its reviewed queue, source and repository restore epoch; after
+  Yes it rechecks complete source ownership, maintenance/publication/refresh and
+  the exact queue. A newly admitted head or unreviewed tail must survive. Hold no
+  source/state lock during human confirmation. Canceling an unstarted intention
+  does not prove its older local membership masks should be retired; committed
+  but unacknowledged failures require their receipt-bound reconciliation.
 - A local membership veto is not a rekordbox save. The writer replaces the
   removal gesture with a durable, identity-bound source intent and leaves the
   verified native membership intact until publication. A durable matching-identity
@@ -354,12 +471,14 @@ test, after unchanged source-identity and native/manual provenance guards.
   `dist/`, `build/`, `.venv/` are ignored.
 - **`AGENTS.md` and `CLAUDE.md` are synchronized runtime equivalents.** A shared
   rule changed in one must change in the other in the same edit. Shipped
-  behavior/status belongs in the relevant docs; committed work goes in
-  `ROADMAP.md`; exploratory UX belongs in `docs/IDEAS.md`.
-- **Installation must preserve rollback and AppData.** Back up/hash
-  `library.json`, wait for Sonny to quit normally, move the old app bundle into a temporary
-  rollback directory, install with `ditto`, verify/relaunch/log-check, and
-  compare curated state. Never use `rm -rf /Applications/Soundbox.app`; never
+  behavior/status belongs in the relevant docs; active implementation sequence
+  belongs in `ROADMAP.md`, dated completion evidence in audit/archive records,
+  and exploratory UX in `docs/IDEAS.md`.
+- **Installation must preserve rollback and AppData.** Materialize a complete
+  canonical snapshot, retaining `library.json` and all referenced `.state-records/`.
+  Wait for Sonny to quit normally, retain one temporary prior app, install with
+  `ditto`, and follow current verification/relaunch authorization while comparing
+  curated state. Never use `rm -rf /Applications/Soundbox.app`; never
   replace or clear SoundBox AppData as part of an app install.
 
 ## Historical offline native playlist references
@@ -527,7 +646,7 @@ test, after unchanged source-identity and native/manual provenance guards.
   its UI ownership still exist. Device workers store their result, consume it
   only from the built-in `finished` signal, clear the owning attribute first,
   and then enter UI result/finalization handling. Newly connected rows, Eject,
-  Sync, success dialogs, and 100% progress must all follow that same boundary.
+  Sync, nonmodal completion, and 100% progress must all follow that same boundary.
 - Accessing a `deleteLater()`'d worker raises `RuntimeError: Internal C++ object
   already deleted`. Guard with the `_running(w)` helper.
 - `shutdown()` (from `closeEvent` + `app.aboutToQuit`) must stop every
@@ -608,12 +727,25 @@ test, after unchanged source-identity and native/manual provenance guards.
   Fit against the full browser viewport on Resize/Show, including after resizing in Settings. Do not fit against a hidden Artists viewport's stale geometry.
   TrackModel's fixed role constants belong outside its hot data() callback;
   unsupported paint roles need no row/key work or Qt enum lookup.
+- **The shared sidebar has two independent resize directions.** The horizontal
+  boundary changes the whole Playlists/Devices column; the existing Devices
+  header changes section heights. Neither pane collapses. Preserve the default
+  272-point width for old settings and save only the changed `sidebar_width`
+  preference during a drag. Restore window geometry before both splitters.
+  Tree columns fit their viewport and elide long labels instead of adding a
+  horizontal scrollbar or changing the underlying names.
 - **Worker ownership does not mean an edit is saving.** Focus return rechecks
   the saved grid through the shared lane. Show footer progress only for accepted
-  edit intents, using the existing status label/style; never show `Saving grid…`
+  foreground prep/tag intents, using the existing status label/style; never show `Saving grid…`
   for that check. Only verified save callbacks may show `Done`. Idle/changed
   notifications also occur on failure, so they cannot establish success. Retain
   the existing status-generation guard so an old timeout cannot clear a new edit.
+- **Metadata enrichment is routine background work.** Keep lifecycle
+  `update_status_text` for readiness/ownership, but use `footer_status_text` for
+  presentation. Normal metadata writes, paused/pending progress and canonical
+  checkpoints never occupy or return over the footer. Prepared scalar progress
+  belongs in the PLAYLISTS header controls; opening that menu must not scan or
+  revalidate the backlog. Actual errors retain their separate attention notice.
 - **The elapsed/total clock reuses transport updates.** Publish only changed
   whole-second text, preserve the mouse-owned drag preview against late backend
   polls, and format BOTH sides with hours for tracks at least one hour long.
@@ -1127,24 +1259,52 @@ test, after unchanged source-identity and native/manual provenance guards.
   in shared column Resize/Show fitting. Its keyboard scope admits deck/load
   actions, not edits of a stale Mac browser selection. Stock/dual iPod routing
   and guards remain separate.
-- **Confirmation belongs before exact iPod planning.** Sync, composite export,
-  and composite playlist deletion must read as one action: immediate Yes/No,
-  visible background planning, guarded commit, one completion. Never compute a
-  full plan (or retained-playlist metadata signatures) merely to populate the
-  approval dialog. Planning and commit use different work units, so map them to
+- **One gesture owns ordinary iPod planning and commit.** Export/Sync/Apply Order
+  start visible background planning directly, then guarded commit and quiet
+  completion. Destructive playlist Delete retains its initial consent before
+  planning; never compute a full plan or retained metadata signatures merely to
+  populate that consent. Planning and commit use different work units, so map them to
   monotonic segments of one bar rather than resetting the range at the phase
   boundary.
+- **iPod metadata capture must not wait for the whole native backlog.** Use the
+  ordered selected canonical checkpoint while background updates are paused or
+  running. Freeze effective fields, membership and exact source/repository/mount
+  bindings once; later ordinary edits belong to the next Sync. Fence selected
+  physical conversions/locator/import/structural/local-grid admissions separately.
+  Do not serialize entire cue queues or beat arrays to prove selected values.
+  Effective rows also rely on the existing save-or-restore-before-publication
+  rule for global artist registries; selected leaves cannot certify arbitrary
+  unsaved mutations of unselected registry inputs.
+  Each waiting command owns its FIFO poll and cancellation through delivery;
+  legacy and checkpoint requests cannot consume or strand one another. Generic
+  USB keeps its CDJ save barrier and never gains automatic Sync comparisons.
+  A no-op must verify native readback before persisting an optional association;
+  plan intent alone is not a witness. Partial/error reports never show Complete.
+- **Library removal masks are sets, not musical sequences.** Freeze only
+  `removed_by_playlist` memberships as sorted unique JSON lists, then restore
+  independent private sets on worker materialization. Do not hand raw sets to
+  JSON or add a generic coercion for arbitrary musical fields. Complete firmware
+  snapshots retain unrelated masks; selected USB snapshots keep their narrow
+  projection. Preserve playlist order and repeated songs independently.
+- **Deleted iPod playlists cannot keep the UI in Sync.** A saved binding needs
+  its live unique regular device ID and exact current source identity. Do not
+  rebind a stale key by name. Empty/system-only catalogs offer Export from the
+  header and footer, and every iPod menu retains an explicit Export action.
+  A name hint whose actual comparison fails opens the chooser; a queued batch
+  reports its own target failure. Videos is deletable, never a Sync selection.
 - **Do not sustain full-file hash reads across a classic iPod during a UI plan.**
   The real MA446 dropped off USB twice while the composite planner streamed its
   managed audio baseline, even after device polling was serialized. Schema-3
   planning uses manifest ownership/path/size plus exact Mac-side desired
   derivatives. Commit replaces one managed audio file at a time using a
   same-volume rollback rename, verifies the newly landed bytes, and briefly
-  yields between tracks. Keep polling paused through plan, confirmation, and
-  commit; never run a second CLI/device reader beside the app.
+  yields between tracks. Keep polling paused through accepted planning, commit
+  and finalization; never run a second CLI/device reader beside the app.
 - **Post-commit iPod refreshes are one serialized device operation.** Refresh
-  the already-open Device/Songs/Playlists snapshot first, then start the sidebar
-  free-space/drift scan from that worker's `finished` signal. Starting both
+  the completed target's cached Device/Songs/Playlists snapshot first, even when
+  Collection or another device is visible, then start the sidebar free-space/
+  drift scan from that worker's `finished` signal. Do not navigate to the target.
+  Starting both
   readers together adds avoidable USB contention and leaves the visible
   snapshot stale until the user navigates away and back.
 - **Connection visibility must not wait for dashboard integrity.**
@@ -1261,14 +1421,13 @@ test, after unchanged source-identity and native/manual provenance guards.
   sharing one source path. Collection counts use unsorted visible membership;
   Artists counts reuse its prepared grouping without repeating title/art work
   for an unchanged sidebar refresh.
-- **Restoring a tree selection with signals BLOCKED re-renders NOTHING.** The
-  two row-rebuild paths in the unified sidebar are asymmetric: `_populate_tree` re-selects a native playlist with
-  signals LIVE (fires `_on_rb_select` → fresh rows), but `_refresh_custom`
-  re-seats Collection/Artists/custom inside `blockSignals(True)` — the table
-  keeps its old rows. So any path that swaps `self.lib` under a live SoundBox
-  view (refresh-done, instant paint) must re-render by hand;
-  `_apply_loaded_library` does. (Real bug: new rekordbox adds stayed invisible
-  in Collection until you clicked away and back.)
+- **Restoring a tree selection with signals blocked does not render rows.**
+  Native/local sidebar reconciliation suppresses selection signals to preserve
+  navigation and editors. Source publication separately refreshes the active
+  desktop data/view through its current prepared or full route. While a device
+  page is active, retain that page and prepare desktop data for return; never
+  force a selection signal to repaint it. The earlier missing-refresh bug left
+  new rekordbox additions invisible until another playlist was selected.
 - **`_restore_view` re-seats ONLY on a view SWITCH** (same `_view_key` → early
   return), and `model.set_rows` is a full model reset (selection + scroll
   gone). Use `_reload_current_view` for in-place updates: it captures current and
@@ -1324,6 +1483,15 @@ their accepted selected export/recovery contract is below and in the CDJ guide.
   `owned: false` but is never claimed or deleted. Every target write goes
   through a pinned `DeviceSession`, same-filesystem temp, and atomic replace.
   FAT identity is Unicode-NFD + casefold, not Python path equality.
+- A fresh session at a later manifest/prune/cleanup phase cannot replace the
+  original operation's root authority. Pass that session through manifest
+  reads/publication and nested Rockbox exports; prune through its pinned parent
+  descriptors. Deferred cleanup compares the original report's dev/inode before
+  traversal. Conflicting/unproven batch identities or no written directories
+  skip cleanup; never turn an empty touched set into a recursive device walk.
+  Explicit manual/CLI full cleanup retains its own requested scope. Include
+  catalog, hidden/unselected media, analysis and native paths in source overlap
+  admission even when the library did not come from an `ExportSnapshot`.
 
 ## Type-checking + test-honesty
 - Waveform arithmetic must run production helpers against an independent oracle,
@@ -1840,7 +2008,7 @@ none of those optional modules.
   baseline JPEG, backed up recursively, and then enter the ordinary MA446
   RGB565 and per-track Rockbox BMP derivative pipelines. Never make a default
   row `status=ok`, or it will suppress real discovery and masquerade as curation.
-- yt-dlp = gray area → PUBLIC fork must NOT bundle it.
+- `yt_dlp` is personal-provider-only; the public profile must not bundle it.
 - **⚠ Rockbox can't render progressive/multi-scan JPEG, RLE BMP, or PNG.**
   HANDLED: `soundbox/artencode.py` normalizes ALL cached art to baseline JPEG;
   `store_ok` enforces at the cache boundary. Any NEW art path (manual picker!)
@@ -1868,8 +2036,8 @@ none of those optional modules.
   scrambled `iPod_Control/Music/Fxx/ABCD.*` filename, album, year, or comment
   even while iTunesDB is correct. Both
   transformations happen only in verified disposable copies. Never retag the
-  canonical source. Do not keep a full playlist's normalized copies through the
-  confirmation dialog: a large Collection can exceed available Mac space even
+  canonical source. Do not keep a full playlist's normalized copies between
+  planning and commit: a large Collection can exceed available Mac space even
   when it easily fits the iPod. Planning must verify one derivative, retain its
   exact canonical-source and output size/hash contract, and discard it; commit
   rematerializes and verifies one track at a time. Managed Rockbox covers are uncompressed 8-bit paletted BMPs:
@@ -1900,17 +2068,37 @@ none of those optional modules.
   when that read succeeds; on a transient read failure, retain the snapshot and
   label it as the last verified state. A successful commit is not user-complete
   until that snapshot refresh and the following sidebar free-space/drift scan
-  both finish. Show `Finalizing iPod...` during those reads and delay the success
-  dialog until Eject is actually available; never make dismissing an alleged
-  completion dialog start another blocking device worker. `QMessageBox` runs a
-  nested event loop, so install the explicit eject-ready latch before releasing
-  `_exporting` and opening the modal; that latch pauses recurring polling through
-  the dialog and releases on dismissal, while leaving Eject genuinely enabled.
+  both finish. Show `Finalizing iPod...` during those reads and publish quiet
+  completion only when Eject is available. No completion callback may start
+  another blocking device worker. Real attention dialogs run a nested event
+  loop: install the owned eject-ready hold before releasing `_exporting`, retain
+  it through that attention only, then release it. Routine success has no modal.
   Do not make Eject cancel, adopt, or finish dashboard work: no such work
   may remain at the success boundary. Queue Eject behind a finishing background
   read; writers, planners and imports must reach their safe boundary first. Suppress new polling through the normal
   unmount outcome, without starting verification. A no-write/up-to-date plan is
-  still a completed Sync or Delete and must pass through the same final scan/latch before its OK.
+  still a completed Sync or Delete and passes the same final scan/ownership
+  boundary before quiet completion.
+- **Source publication owns data, not navigation.** Sparse/full title readback,
+  playlist deletion completion and local-playlist adoption must not select
+  Collection over an active iPod/USB page. Keep the current device/tab/selection/
+  scroll and any newer Settings gesture. Prepare desktop state behind it and
+  render on the user's return. Fall back only for an actually deleted current
+  playlist, actual disconnect or a deliberate source switch; first-load completion
+  is not a deliberate switch. Never restore a captured older device page over
+  the user's newer selection.
+- **Playlist recognition is separate from media ownership.** Unique normalized
+  name/count recognizes a manually transferred stock playlist; source/native UUID
+  and device playlist ID preserve the link after count/order/name changes. Map
+  cached song links independently of order; never assign by ordinal or read
+  retained audio to refresh metadata. Preserve/report ambiguous entries and keep
+  partial metadata/art Sync available. Only verified new supported songs need
+  audio acquisition. Preserve master/foreign/other playlist/history identities.
+  The optional catalog witness grants no foreign file ownership/content proof.
+  Model permission never substitutes for observed writable mount/database/art
+  capabilities. The dual catalog wrapper preserves manifest bytes/absence and
+  does not offer incremental membership. Recheck admission after menus/modals,
+  fence cancelled finished plans, and keep committed outcomes honest.
 - **iPod progress is a transaction meter, not a copy meter.** Planning owns
   0–30% for composite sync, guarded device work owns 30–80%, and final
   dashboard/sidebar/drift reads
@@ -1961,7 +2149,7 @@ none of those optional modules.
   canonical M3U8 regeneration. Expected playlist drift must not erase the
   separately valid read-only device identity/database dashboard: show the
   affected playlist as Sync needed, but never present its changed entries as
-  trusted before confirmed planning.
+  trusted before guarded planning.
 - **Rockbox payload metadata has one authority.** Some purchased MP3s store
   `Purchased at Beatport.com` in `TXXX:COMMENT`/`COMM`; WAVs may have several
   INFO/ID3/BWF containers containing receipts, years, albums, or stale titles.
@@ -2033,7 +2221,8 @@ none of those optional modules.
   rename the live file into same-volume transaction recovery, restore that
   exact file on failure, and discard it only after manifest-last success.
 - **A dual device view is not an iTunesDB view.** Build Songs/Playlists from the
-  schema-3 manifest and parsed iTunesDB together, label rows Both/Stock/Rockbox,
+  schema-3 manifest and parsed iTunesDB together, label rows iTunes/Rockbox,
+  iTunes, or Rockbox,
   and read only verified small M3U8 payloads for order. Reporting the iTunesDB
   count or Apple smart indexes as the whole device library is misleading.
 - **The curated baseline JPEG is canonical for both firmware paths.** Never
@@ -2041,12 +2230,22 @@ none of those optional modules.
   AppData is disposable content-addressed RGB565: MA446 format 1028 is
   100×100×2 bytes and 1029 is 200×200×2 bytes. Background preparation
   pauses during playback; sync still verifies every payload hash.
-- **Stock artwork is four coupled layers:** MHIT (`mhiiLink`/count/size), one
-  per-track ArtworkDB MHII with a matching song dbid, MHNI format offsets, and
+- **Stock artwork is four coupled layers:** MHIT (`mhiiLink`/count/size), an
+  ArtworkDB MHII, MHNI format offsets, and
   the two ithmb pixel files. Never update only one layer. Full replacement and
   compaction preserve ArtworkDB/ithmb bytes first; incremental sync follows the
   unreferenced-slot rule below. Validate all bounds, then publish the linking
   iTunesDB last. Missing/incomplete old pixels fail closed.
+  Music may share one explicit MHII ID across several tracks; its physical song
+  ID stays the original owner even after that owner stops using the image.
+  Preserve captured `(track dbid, image ID, physical song ID)` witnesses, native
+  record order and untouched crops/opaque children. Split a changed shared cover
+  to a new image instead of changing aliases. Rendered slots carry their actual
+  referring track IDs for the optional shadow; physical song ID alone is not a
+  per-track cache mapping. New images still use their own track/song identity.
+  Unchanged MHIT artwork count/size also remain exact: Music can store an MHIT
+  size one byte below the MHII source size. Pixel reuse does not authorize
+  normalizing that native bookkeeping on every track.
 - **Incremental ithmb writes may touch only currently unreferenced slots.** Keep
   image IDs stable, reuse free fixed-size holes before appending, and publish
   ArtworkDB before iTunesDB. Hash free-slot pixels during the Mac-side plan and
@@ -2076,8 +2275,34 @@ none of those optional modules.
 
 ## Rockbox / iPod (Phase 3 — hardware)
 
-- Do not stream large interrupted device payloads merely to construct the
-  confirmation dialog. A dual recovery plan may identify an exact-path,
+- Bind cancellation to the exact worker/coordinator event, including hashing,
+  media preparation and streaming copies. A cancellable copy cannot use one
+  uninterruptible native full-file call. Concatenation must always append each
+  segment; native copyfile can replace earlier segments. Recovery and the small
+  database publication critical section suppress only cancellation, preserving
+  progress/metrics and the original mount/session owner. Never suppress source
+  save drains or mistake committed-with-cleanup-cancelled for a rolled-back job.
+- Stock playlist Delete uses native indexed entity witnesses, not whole-audio
+  SHA passes. Keep explicit confirmation, fresh catalog/reference checks and
+  exclusive claimed-file disposal. This policy does not authorize stat-only
+  content reuse or relax ordinary Sync ownership. Cancelling a prepublication
+  commit may leave recovery backups; say playlists unchanged, not nothing written.
+- A cancelled or disconnected result retires only its captured worker, deferred
+  command and progress. Do not clear a newer device or USB format owner. A
+  cancelled partial export keeps its manifest/M3U ownership and does not start
+  fresh finalization reads. Background attention waits behind the device
+  operation without losing terminal errors; routine metadata progress is never
+  replayed into the footer after the device result.
+- FAT32 can change a regular file's reported inode when its first data cluster
+  is allocated, including through the same still-open descriptor. Never pin a
+  publication temporary to its empty-file inode. Compare the current retained
+  descriptor with the no-follow directory entry at publication and cleanup,
+  keeping the descriptor open through cleanup. Parent/mount checks and caller
+  byte verification remain required. FAT deleted-open files can still report
+  one link: link count alone does not prove that the named stage is ours.
+  APFS-only copied-device tests cannot establish FAT publication behavior.
+- Do not stream large interrupted device payloads merely to prepare a
+  planning display. A dual recovery plan may identify an exact-path,
   exact-size candidate, but commit preflight must verify its full expected
   SHA-256 before the first write. Report that verification through normal sync
   progress. Every adoption/preflight freshly hashes the affected candidate;
@@ -2085,7 +2310,7 @@ none of those optional modules.
   remain untouched, and no new per-file proof JSON is written.
 - **The mounted on-disk layout selects the exporter.** SoundBox does not know
   which firmware the user last booted. `/.rockbox/` alone uses ordinary Rockbox
-  export; `/.rockbox/` plus `iPod_Control/` uses only the MA446/FAT32 composite
+  export; `/.rockbox/` plus `iPod_Control/` uses only the observed-stock-format/FAT32 composite
   path. Root `/Music` files are not automatically visible to stock firmware.
 - **Dual-library means shared files, not two exports.** Stock-safe media lives
   once under `iPod_Control/Music` and is referenced by both iTunesDB and Rockbox
@@ -2123,8 +2348,8 @@ none of those optional modules.
 - Device sync manifest lives at `<device>/.soundbox/manifest.json`.
 - **A USB remount can defeat rollback without corrupting the committed
   generation.** `DeviceSession` must reject the new mount identity; a read-only
-  stock/composite plan must also carry its pinned identity across the
-  confirmation modal and compare it before commit performs any write. Never cross
+  stock/composite plan must carry its pinned identity from planning through
+  commit (and any destructive consent) before any write. Never cross
   the remount to delete paths remembered by the old session. A dual recovery
   directory named for the still-current manifest can authorize a later retry to
   adopt only freshly planned path/size/SHA-256 matches. Freshly hash each affected
@@ -2139,23 +2364,24 @@ none of those optional modules.
   share the mount, and revalidate recursively without following symlinks. M3U8
   device import is read-only but still must confine every resolved entry to that
   volume; otherwise `..` or an on-device symlink can copy an unrelated Mac file.
-- **Dual playlist drops are confirmed jobs, not hidden planner mutations.** Ask
-  Yes/No for each drop before expensive work. Deduplicate by stable playlist
-  identity and retain FIFO intent. Once the active worker finishes, coalesce all
-  already-confirmed waiting playlists into one next generation so iTunesDB and
+- **Dual playlist drops are accepted jobs, not hidden planner mutations.** The
+  explicit drop is consent; no extra Yes/No is required. Deduplicate by stable
+  playlist identity and retain FIFO intent. Once the active worker finishes,
+  coalesce all already-accepted waiting playlists into one next generation so iTunesDB and
   the same managed-media baseline are not reparsed for every drop. Drops that
   arrive after that plan starts form the following batch. Carry one cumulative
   entry counter/summary across the queue and cancel unseen queued work after a
   failure; never revive hidden stale intent later.
 - Device detection is read-only and capability-based. See `DEVICES.md`.
 - `soundbox.stock_ipod` is the sole exception to the `iPod_Control` no-write
-  rule. Its first boundary is stock-only MA446 + checksum-zero `iTunesDB` +
-  MP3/WAV: Clickwheel renders only off-device, SoundBox reparses and audits the
+  rule. Its original hardware boundary was MA446/checksum-zero; current source
+  admits the observed Video/Classic database/signing profiles in `DEVICES.md`
+  and validated MP3/PCM16 WAV. Clickwheel renders only off-device, SoundBox reparses and audits the
   database plus artwork linkage, archives recovery bytes, copies media/artwork
   atomically, and commits the database last. Never pass the live mount to
   Clickwheel's high-level copy/sync
   helpers; they do not meet SoundBox's rollback, stale-state, play-count, or
-  smart-playlist contract. On a dual-boot FAT32 MA446, only
+  smart-playlist contract. On a compatible dual-boot FAT32 iPod, only
   `soundbox.dual_ipod` may invoke this transaction. It supplies verified
   picture-free payloads, pre-copies Rockbox-only files, publishes Rockbox
   playlists after the validated stock commit, writes schema 3 last, and uses
@@ -2178,6 +2404,17 @@ none of those optional modules.
   across every captured generation; pair it with the macOS volume UUID when
   remembering a confirmed model. `stock_ipod_info` owns read-only UI snapshots
   and may merge `Play Counts` only in memory.
+- **An empty SysInfo is not a missing Classic capability.** Prefer bounded
+  existing metadata and exact current macOS records; unrelated historical USB
+  IDs never supply identity. The isolated native identity helper can issue
+  endpoint0 vendor IN requests without USBDeviceOpen/OpenSeize or interface
+  claims. Keep mount/BSD/UUID/registry/VID/PID/serial guards, request/size/deadline
+  bounds and current reply GUID equality. Apple's extended XML may contain keys
+  inside arrays: canonicalize the validated CF dictionary to binary instead of
+  weakening Python plist parsing. Never write SysInfoExtended as a discovery
+  side effect. Cache complete replies per mounted USB identity and back off
+  failures; UI cached-only paths remain zero-I/O. Display model memory/catalog
+  and USB reply fields never grant source or device signing authority.
 - **The validated MA446 Rockbox path has real hardware acceptance.** The
   original/picture-free/external-cover `Take a Trip` A/B proved the giant APIC
   caused the freeze; picture-free media, theme-native art, full-Collection
@@ -2272,8 +2509,9 @@ references/sizes; Deep Verify also hashes managed files; Repair explicitly audit
 inventory and restores missing owned Rockbox payloads/art. None of these modes
 turns a clean badge into a fresh source-content integrity certificate.
 
-Post-sync polling is held through the completion dialog only. Dismissal releases
-the hold so subsequent SoundBox edits can update drift without reconnecting.
+Post-sync polling is held through owned finalization and any actual attention
+dialog. Quiet completion releases the hold immediately so subsequent SoundBox
+edits can update drift without reconnecting.
 
 ## September 27 software audit — outstanding boundaries
 
@@ -2617,6 +2855,37 @@ through publication and recovery. Full protocol: [prep plan](rekordbox-prep.md).
   adopt iPod additions. All source domains retain their own authorities.
 
 ## November2 native command performance follow-up
+
+- Own metadata ACKs must not use created-library/full-refresh publication. Keep
+  the fresh native metadata/cue/tag/smart snapshot and durable ACK, then reuse
+  prepared services only for the same source/library and complete compatible
+  media/display inventory. Reattach only known prepared unbound imports. Refresh
+  affected rows; changed global artist lookup context invalidates all rows.
+  Changed paths, media or other display scalars require ordinary full loading.
+  Never restart device discovery, artwork or library preparation per field save.
+  Adopted imports keep their saved local added_ts; apply that exact existing
+  scalar rule before deciding a snapshot needs media preparation. Collection
+  and custom refreshes must use the unchanged-row guard too, or each ACK still
+  resets/re-sorts the entire visible model. Tag/status signals are not inventory
+  invalidations. Preserve prepared media facts and accept in-flight format scans
+  only against unchanged exact media/native inventory and visibility.
+  Retaining model rows after a full row rebuild still blocks scrolling. A
+  compatible ACK must rebind the prepared Artists owner and compute only dirty
+  Collection rows. Capture detached visibility/tag/organization boundaries;
+  reject sparse reuse after an intervening invalidation, different model owner
+  or global registry change. Preserve full native playlist occurrence rendering.
+  Scalar input memos also require the unchanged presentation generation, so a
+  prep/media update cannot hide behind the next metadata acknowledgement.
+  Compare current Track display scalars and nested info/origin values against
+  detached painted inputs too: a mutated current Track can equal the readback
+  while its cached row is older. Unchanged inputs may reuse artist derivation;
+  complete registry votes still decide global invalidation. Keep both sidebar
+  item owners when their exact organization/visibility context is unchanged.
+  Unique Collection rows can update in place only while natural/filter/header
+  order remains exact; changed raw-title ties still follow source order.
+  Compute disposable row-cache fingerprints in the existing cache worker from
+  immutable, generation-matching inputs; never publish stale row inputs or adopt
+  a worker key onto a newer GUI generation.
 
 - Reuse only successful immutable reconstruction keyed by exact raw plan/record,
   authority/profile and verified payload digests. Fresh source/apps/paths, ALL

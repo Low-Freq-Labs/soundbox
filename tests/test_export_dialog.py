@@ -34,6 +34,7 @@ class Host(ExportSelectionMixin,QWidget):
     def _device_operation_owned(self, target=None):return self._exporting or bool(getattr(self,"_usb_format_device","") and (target is None or target==self._usb_format_device))
     def _start_pulse(self,*_):pass
     def _stop_pulse(self):pass
+    def _flash_status(self,*_args):pass
     def _update_device_action_state(self):pass
     def _refresh_devices(self,**_):pass
     def _begin_cdj_export(self,dev,playlists,**options):
@@ -114,7 +115,7 @@ class ExportDialogTests(unittest.TestCase):
 
     def test_two_targets_serialize_and_rebind_selected_playlist_after_first_failure(self):
         host=self.host()
-        with mock.patch('desktop.export_dialog.QMessageBox.information') as message:
+        with mock.patch('desktop.export_dialog.QMessageBox.warning') as message:
             host._start_next_export_target();self.assertEqual(len(host.calls),1)
             first=host.calls[0][0]
             host._export_target_result(first,ValueError('USB write failed'))
@@ -128,12 +129,13 @@ class ExportDialogTests(unittest.TestCase):
             host._exporting=False;host._maybe_finish_export_target();self.drain()
             self.assertIsNone(host._export_batch)
             self.assertIn('USB A: USB write failed',message.call_args.args[2])
-            self.assertIn('USB B: Export complete',message.call_args.args[2])
+            self.assertNotIn('USB B: Export complete',message.call_args.args[2])
+            self.assertIn(('USB B','Export complete'),host._last_export_batch_results)
 
     def test_remounted_target_is_skipped_without_redirecting_export(self):
         host=self.host();first=host._export_batch['pending'][0]
         host._device_mount_tokens[first['path']]+=1
-        with mock.patch('desktop.export_dialog.QMessageBox.information'):
+        with mock.patch('desktop.export_dialog.QMessageBox.warning'):
             host._start_next_export_target();self.drain()
             self.assertEqual([Path(c[0]).name for c in host.calls],['USB B'])
             self.assertIn('Device disconnected or changed',host._export_batch['results'][0][1])
@@ -141,7 +143,7 @@ class ExportDialogTests(unittest.TestCase):
 
     def test_cancel_discards_remaining_targets_and_shutdown_admits_none(self):
         host=self.host()
-        with mock.patch('desktop.export_dialog.QMessageBox.information'):
+        with mock.patch('desktop.export_dialog.QMessageBox.warning'):
             host._start_next_export_target()
             host._export_batch['cancelled']=True;host._export_batch['pending'].clear()
             host._exporting=False;host._maybe_finish_export_target();self.drain()
@@ -153,7 +155,7 @@ class ExportDialogTests(unittest.TestCase):
         host=self.host()
         host._export_batch['pending'].clear()
         with mock.patch.object(host,'_refresh_devices',side_effect=AssertionError('Completion scan')), \
-                mock.patch('desktop.export_dialog.QMessageBox.information'):
+                mock.patch('desktop.export_dialog.QMessageBox.warning'):
             host._start_next_export_target()
         self.assertIsNone(host._export_batch)
 
@@ -162,7 +164,7 @@ class ExportDialogTests(unittest.TestCase):
         first,second=host._export_batch['pending']
         host._usb_format_device=first['path']
         host._usb_format_volumes=(first['path'],)
-        with mock.patch('desktop.export_dialog.QMessageBox.information'), \
+        with mock.patch('desktop.export_dialog.QMessageBox.warning'), \
                 mock.patch('desktop.export_dialog.Path.stat',side_effect=AssertionError('UI-thread USB I/O')):
             host._start_next_export_target();self.drain()
         self.assertEqual([call[0] for call in host.calls],[second['path']])
@@ -206,17 +208,120 @@ class ExportDialogTests(unittest.TestCase):
             host=self.host()
             if change=='source':host.lib.source='another-source'
             else:host.lib.playlists=[]
-            with mock.patch('desktop.export_dialog.QMessageBox.information'):
+            with mock.patch('desktop.export_dialog.QMessageBox.warning'):
                 host._start_next_export_target();self.drain()
             self.assertEqual(host.calls,[])
+
+    def test_source_error_or_pause_ends_wait_and_preserves_other_device_progress(self):
+        from copy import deepcopy
+        for blocker in ('error','pause'):
+            for other_owned in (False,True):
+                with self.subTest(blocker=blocker,other_owned=other_owned):
+                    host=self.host();timers=[]
+                    host.metadata_controller=SimpleNamespace(pending=[{'error':''}],
+                        queue_error=lambda:'',migration_pending=False,background_paused=False)
+                    host._start_pulse=mock.Mock();host._stop_pulse=mock.Mock()
+                    host._export_batch['results']=[('Earlier USB','Export complete')]
+                    host._export_batch['outcomes']=['complete']
+                    host.progress.setVisible(True)
+                    with mock.patch('desktop.export_dialog.QTimer.singleShot',
+                            side_effect=lambda _ms,fn:timers.append(fn)), \
+                            mock.patch('desktop.export_dialog.QMessageBox.warning') as message:
+                        host._start_next_export_target()
+                        self.assertEqual(len(timers),1);self.assertEqual(host.calls,[])
+                        if blocker=='error':
+                            host.metadata_controller.pending[0]['error']='Selected song changed; refresh before retrying'
+                            expected='Selected song changed'
+                        else:
+                            host.metadata_controller.background_paused=True;expected='resume'
+                        intentions=deepcopy(host.metadata_controller.pending)
+                        host._exporting=other_owned
+                        timers.pop(0)()
+                        self.assertEqual(timers,[]);self.assertEqual(host.calls,[])
+                        self.assertIsNone(host._export_batch)
+                        self.assertEqual(host.metadata_controller.pending,intentions)
+                        summary=message.call_args.args[2]
+                        self.assertNotIn('Earlier USB: Export complete',summary)
+                        self.assertIn(('Earlier USB','Export complete'),host._last_export_batch_results)
+                        self.assertIn('USB A:',summary);self.assertIn('USB B:',summary)
+                        self.assertIn(expected,summary)
+                        self.assertEqual(host._stop_pulse.called,not other_owned)
+                        self.assertEqual(host.cancel_btn.isHidden(),not other_owned)
+                        self.assertEqual(host.progress.isHidden(),not other_owned)
+
+    def test_initial_paused_source_never_polls_or_starts_export(self):
+        host=self.host();host.metadata_controller=SimpleNamespace(pending=[],queue_error=lambda:'',
+            migration_pending=True,background_paused=True)
+        host._start_pulse=mock.Mock()
+        with mock.patch('desktop.export_dialog.QTimer.singleShot') as timer, \
+                mock.patch('desktop.export_dialog.QMessageBox.warning') as message:
+            host._start_next_export_target()
+        self.assertIsNone(host._export_batch);self.assertEqual(host.calls,[])
+        timer.assert_not_called();host._start_pulse.assert_not_called()
+        self.assertIn('resume',message.call_args.args[2])
+
+    def test_blocked_batch_preserves_another_mount_format_progress(self):
+        host=self.host();host._usb_format_device=host._export_batch['pending'][0]['path']
+        host._show_usb_format_status=mock.Mock();host._stop_pulse=mock.Mock()
+        host.cancel_btn.setVisible(True);host.progress.setVisible(True)
+        host.metadata_controller=SimpleNamespace(pending=[],queue_error=lambda:'',
+            migration_pending=True,background_paused=True)
+        with mock.patch('desktop.export_dialog.QTimer.singleShot') as timer, \
+                mock.patch('desktop.export_dialog.QMessageBox.warning'):
+            host._start_next_export_target()
+        self.assertIsNone(host._export_batch);self.assertEqual(host.calls,[])
+        timer.assert_not_called();host._stop_pulse.assert_not_called()
+        self.assertFalse(host.cancel_btn.isHidden());self.assertFalse(host.progress.isHidden())
+        host._show_usb_format_status.assert_called_once()
+
+    def test_replayed_wait_callback_cannot_start_a_second_target_during_export(self):
+        host=self.host();timers=[]
+        host.metadata_controller=SimpleNamespace(pending=[{'error':''}],queue_error=lambda:'',
+            migration_pending=False)
+        with mock.patch('desktop.export_dialog.QTimer.singleShot',side_effect=lambda _ms,fn:timers.append(fn)):
+            host._start_next_export_target();waiting=timers.pop(0)
+            host.metadata_controller.pending=[];waiting()
+            batch=host._export_batch;first=batch['active'];remaining=list(batch['pending'])
+            # Even if the actor is between physical phases, its captured batch
+            # target still owns admission until the normal result continuation.
+            host._exporting=False;waiting()
+        self.assertEqual(len(host.calls),1);self.assertIs(batch['active'],first)
+        self.assertEqual(batch['pending'],remaining);self.assertEqual(timers,[])
 
     def test_mixed_usb_ipod_queue_routes_selected_playlists_to_each_existing_exporter(self):
         host=self.host();second=host._export_batch['pending'][1]
         second['kind']='stock_ipod';host._device_profiles[second['path']].kind='stock_ipod'
         with mock.patch.object(host,'_begin_stock_ipod_sync',wraps=host._begin_stock_ipod_sync) as stock, \
-                mock.patch('desktop.export_dialog.QMessageBox.information'):
+                mock.patch('desktop.export_dialog.QMessageBox.warning'):
             host._start_next_export_target();host._exporting=False
             host._maybe_finish_export_target();self.drain()
             stock.assert_called_once()
             self.assertEqual([p.pid for p in stock.call_args.args[1]],['one'])
             host._exporting=False;host._maybe_finish_export_target();self.drain()
+
+    def test_existing_stock_playlist_sync_uses_displayed_values_without_waiting_for_native_backlog(self):
+        for blocked in ('paused', 'error'):
+            with self.subTest(blocked=blocked):
+                host=self.host();target=host._export_batch['pending'][0]
+                host._export_batch['pending']=[target];target['kind']='stock_ipod'
+                host._device_profiles[target['path']].kind='stock_ipod'
+                host._stock_view_cache={target['path']:(object(),None)}
+                host.metadata_controller=SimpleNamespace(pending=[{'error':'Native save needs attention' if blocked=='error' else ''}],
+                    queue_error=lambda:'',migration_pending=True,background_paused=blocked=='paused')
+                selections=(('123','First',212),)
+                def sync(owner, selected, **options):
+                    self.assertIs(owner,host);self.assertEqual(selected,selections)
+                    self.assertEqual(options['device'],target['path']);self.assertTrue(options['confirmed'])
+                    self.assertEqual([p.pid for p in options['source_playlists']],['one'])
+                    owner._exporting=True
+                with (
+                    mock.patch('desktop.stock_catalog_sync.source_sync_selection',return_value=selections),
+                    mock.patch('desktop.stock_catalog_sync.request_sync',side_effect=sync) as start,
+                    mock.patch('desktop.export_dialog.QTimer.singleShot') as timer,
+                    mock.patch('desktop.export_dialog.QMessageBox.warning') as message,
+                ):
+                    host._start_next_export_target()
+                    start.assert_called_once();timer.assert_not_called();message.assert_not_called()
+                    self.assertIs(host._export_batch['active'],target)
+                    self.assertEqual(host.calls,[])
+                host._export_batch=None

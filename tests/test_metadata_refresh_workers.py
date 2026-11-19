@@ -1,7 +1,7 @@
 """Native refresh compares scalar metadata in its existing read worker."""
 from dataclasses import replace
 from pathlib import Path
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -70,6 +70,50 @@ class MetadataRefreshWorker(unittest.TestCase):
         projected = replace(original, tracks_by_id={'logical': replace(original.tracks_by_id['1'],
             track_id='logical', source_native_id='1')})
         self.assertEqual(self.read(original, self.baseline(projected)), ())
+
+    def test_owned_helper_runs_after_existing_recovery_preflight_and_retains_exact_dirty_inventory(self):
+        original = self.library()
+        incoming = replace(original, tracks_by_id={'1': replace(original.tracks_by_id['1'], artist='New Artist')})
+        order = []
+        worker = RefreshWorker(original.source)
+        worker.preflight = lambda path:order.append(('recovery', path))
+        worker.retained_tracks = {'123': {'1': 'uuid'}}
+        worker.metadata_baseline = self.baseline(original)
+        def read(path, **kwargs):
+            order.append(('reader', path, kwargs))
+            return incoming
+        worker.native_reader = SimpleNamespace(read_live=mock.Mock(side_effect=read))
+        with mock.patch('desktop.workers.rekordbox_db.load_live', side_effect=AssertionError('No parent fallback')):
+            worker.run()
+        self.assertIs(worker.result, incoming)
+        self.assertEqual(worker.metadata_changed_ids, ('1',))
+        self.assertEqual(order, [('recovery', original.source),
+            ('reader', original.source, {'retain_tracks': worker.retained_tracks})])
+
+    def test_helper_failure_and_recovery_failure_do_not_fall_back_or_publish_a_partial_library(self):
+        from soundbox.worker_protocol import ProtocolError
+        for recovery_failure in (False, True):
+            with self.subTest(recovery_failure=recovery_failure):
+                worker = RefreshWorker(self.library().source)
+                worker.preflight = mock.Mock(side_effect=RuntimeError('Recovery requires attention') if recovery_failure else None)
+                worker.native_reader = SimpleNamespace(read_live=mock.Mock(side_effect=ProtocolError('Read helper exited')))
+                failures = [];published = []
+                worker.failed.connect(failures.append);worker.done.connect(published.append)
+                with mock.patch('desktop.workers.rekordbox_db.load_live', side_effect=AssertionError('No fallback')):
+                    worker.run()
+                self.assertIsNone(worker.result)
+                self.assertFalse(published)
+                self.assertEqual(failures, [worker.error])
+                self.assertIn('Recovery requires attention' if recovery_failure else 'Read helper exited', worker.error)
+                self.assertEqual(worker.native_reader.read_live.call_count, 0 if recovery_failure else 1)
+
+    def test_explicit_standalone_reader_retains_existing_retained_tracks_interface(self):
+        incoming = self.library();worker = RefreshWorker(incoming.source)
+        worker.retained_tracks = {'123': {'1': 'uuid'}}
+        with mock.patch('desktop.workers.rekordbox_db.load_live', return_value=incoming) as read:
+            worker.run()
+        read.assert_called_once_with(incoming.source, retain_tracks=worker.retained_tracks)
+        self.assertIs(worker.result, incoming)
 
 
 if __name__ == '__main__':

@@ -7,12 +7,15 @@ Qt-free library, source protocols, analysis and device exporters.
 - `native_transaction.py`, `cache_io.py`, `ipod_policy.py`: shared mechanics; domain rules stay separate.
 - `rekordbox_*.py`: snapshots and independently authorized native edit domains; prep companion reads grant no second write permission.
 - `source_truth.py` / `alias_intents.py` / `metadata_provenance.py`: frozen pairs, raw scalar/ACK ownership and durable merges/resets.
+- `mutation_domain.py`: revision-observed JSON containers for worker validation; plain snapshots grant no source authority.
+- `worker_process.py` / `library_codec.py`: owned Qt-free helper transport; `cache_process.py` and `native_reader_process.py` keep encoding/readback outside GUI Python contention.
 - `source_acquisition.py` / `source_verification.py`: stable captured bytes and identity proofs.
+- `media_transition.py`: read-only actual replacement/recovery witnesses; CDJ policy does not admit or reject iPod media.
 - `track_analysis.py` / `waveform_sections.py`: waveform/cache facade and pure section codec.
-- `stock_ipod.py`, `dual_ipod.py`, `sync.py`: distinct firmware planners and transactions.
+- `stock_ipod.py`, `dual_ipod.py`, `sync.py`: distinct firmware transactions; `stock_ipod_catalog.py` recognizes cached playlists independently of media ownership.
 - `cdj_*.py`: generic USB capture, native rendering and selected-playlist publication.
-- `export_snapshot.py`: immutable selected inputs plus the complete source-overlap boundary.
-- `device_staging.py`: pinned descriptor IO shared by guarded device publishers.
+- `export_snapshot.py` / `ipod_export_metadata.py` / `ipod_export_witness.py`: immutable effective iPod inputs and verified optional catalog correspondence; source-overlap guards remain complete.
+- `device_staging.py` / `stock_delete.py`: cancellable descriptor IO and native indexed-entity deletion; recovery retains exact ownership.
 - `providers.py`: explicit public/personal provider admission; never bypass it.
 
 Keep source/device separation, independent authorities, fresh guards and recovery order intact.

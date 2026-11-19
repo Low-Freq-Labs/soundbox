@@ -82,6 +82,8 @@ class GraveyardUI(unittest.TestCase):
         self.assertNotIn(KEY,w.settings);self.assertEqual(w.settings['analysis_results'],saved)
         self.assertEqual(w.titles['chosen'],'Curated');self.assertEqual(w.graveyard_controller.ids(),{'numeric'})
         self.assertTrue(self.path.exists());w._after_track_edit.assert_called_once()
+        self.assertEqual(w._after_track_edit.call_args.kwargs,dict(persist=False,refresh_devices=False))
+        self.assertIn('chosen',read_state(w._data_file)['settings'][DONE])
 
     def test_failed_local_confirmation_save_never_reaches_apply_and_unrelated_queue_does_not_block(self):
         w=self.w;self.confirm.return_value=True;w.settings['analysis_jobs']=[dict(track_id='untouched')]

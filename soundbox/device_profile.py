@@ -1,17 +1,19 @@
 """Read-only removable-device classification and stock-iPod planning.
 
-Detection never creates, edits, or removes anything.  Stock write capability
-means only that the mounted model/database crosses the narrow, offline-tested
-engine allowlist; an actual sync still requires a complete dry-run and explicit
-commit through :mod:`soundbox.stock_ipod`.
+Detection never creates, edits, or removes anything. Stock write capability
+describes the mounted database format; an actual sync still requires a complete
+dry-run and explicit commit through :mod:`soundbox.stock_ipod`.
 """
 
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import os
 from pathlib import Path
 import plistlib
 import struct
+
+from .stock_ipod_format import StockWriteFormat, inspect_stock_write_format
 
 
 FAT_FILESYSTEMS = frozenset({"msdos", "fat32", "fat"})
@@ -30,6 +32,7 @@ class DeviceProfile:
     stock_write: bool
     model: str = ""
     library_persistent_id: int = 0
+    stock_format: StockWriteFormat | None = None
 
     @property
     def cdj_export(self) -> bool:
@@ -56,42 +59,48 @@ def _read_model(root: Path) -> str:
         try:
             value = plistlib.loads(raw)
             if isinstance(value, dict):
-                for key in ("ProductType", "ModelNumStr", "ModelNumber"):
+                for key in ("ModelNumStr", "ModelNumber", "ProductType"):
                     if value.get(key):
                         return str(value[key])
         except Exception:
             pass
         try:
+            fields: dict[str, str] = {}
             for line in raw.decode("utf-8", "replace").splitlines():
                 key, sep, value = line.partition(":")
                 if sep and key.strip() in {
                         "ModelNumStr", "ModelNumber", "ProductType"}:
-                    return value.strip()
+                    fields.setdefault(key.strip(), value.strip())
+            for key in ("ModelNumStr", "ModelNumber", "ProductType"):
+                if fields.get(key):
+                    return fields[key]
         except Exception:
             pass
     return ""
 
 
-def _stock_database_compatible(root: Path) -> bool:
-    """Bounded MA446 database probe: classic iTunesDB, checksum scheme zero."""
+def _stock_database_format(root: Path, *, firewire_guid: str = '') -> StockWriteFormat:
+    """Bounded format probe; no model lookup or catalog/media enumeration."""
     itunes = root / "iPod_Control" / "iTunes"
     cdb = itunes / "iTunesCDB"
     try:
         if cdb.is_file() and cdb.stat().st_size:
-            return False
+            return StockWriteFormat(reason='Compressed iPod databases are not supported')
     except OSError:
-        return False
+        return StockWriteFormat(reason='The connected iPod database could not be read')
+    if (itunes / 'Library.itdb').exists() or (itunes / 'iTunes Library.itlp').exists():
+        return StockWriteFormat(reason='SQLite iPod databases are not supported')
     database = itunes / "iTunesDB"
     try:
         with database.open("rb") as handle:
-            header = handle.read(0x32)
+            header = handle.read(0xA4)
+            size = os.fstat(handle.fileno()).st_size
     except OSError:
-        return False
-    return (
-        len(header) == 0x32
-        and header[:4] == b"mhbd"
-        and struct.unpack_from("<H", header, 0x30)[0] == 0
-    )
+        return StockWriteFormat(reason='The connected iPod database could not be read')
+    result = inspect_stock_write_format(header, header_only=True, firewire_guid=firewire_guid)
+    if result.writable and struct.unpack_from('<I', header, 8)[0] != size:
+        return StockWriteFormat(reason='The connected iTunesDB is truncated or has unsupported trailing data')
+    return result
 
 
 def _stock_library_persistent_id(root: Path) -> int:
@@ -107,7 +116,7 @@ def _stock_library_persistent_id(root: Path) -> int:
     return int(struct.unpack_from("<Q", header, 0x48)[0])
 
 
-def inspect_device(root: str | Path, filesystem: str = "") -> DeviceProfile:
+def inspect_device(root: str | Path, filesystem: str = "", *, firewire_guid: str = '') -> DeviceProfile:
     """Classify one mounted volume using read-only, bounded probes."""
     base = Path(root)
     fs = str(filesystem or "").lower()
@@ -119,22 +128,20 @@ def inspect_device(root: str | Path, filesystem: str = "") -> DeviceProfile:
         or any((itunes / name).is_file() for name in _STOCK_DATABASES)
     )
     if has_rockbox and has_stock:
-        kind, label = "dual_boot", "Dual Boot iPod"
+        kind, label = "dual_boot", "iTunes/Rockbox"
     elif has_rockbox:
         kind, label = "rockbox", "Rockbox"
     elif has_stock:
-        kind, label = "stock_ipod", "Stock iPod"
+        kind, label = "stock_ipod", "iTunes"
     else:
         kind, label = "generic_usb", "USB"
     fat = fs in FAT_FILESYSTEMS
     model = _read_model(base) if has_stock else ""
-    stock_write = False
+    stock_format = _stock_database_format(base, firewire_guid=firewire_guid) if has_stock else None
     # Routing is derived from the mounted on-disk layout, not from a guessed
     # last-booted firmware. Dual boot uses the separately guarded composite
     # planner; this flag only describes whether the stock half is compatible.
-    if has_stock and fat and _stock_database_compatible(base):
-        from .stock_ipod import supports_stock_write
-        stock_write = supports_stock_write(model)
+    stock_write = bool(fat and stock_format and stock_format.writable)
     return DeviceProfile(
         kind=kind,
         label=label,
@@ -147,6 +154,7 @@ def inspect_device(root: str | Path, filesystem: str = "") -> DeviceProfile:
         model=model,
         library_persistent_id=(
             _stock_library_persistent_id(base) if has_stock else 0),
+        stock_format=stock_format,
     )
 
 
@@ -175,7 +183,8 @@ def plan_stock_ipod_export(
             f"{unsupported} track(s) are outside the initial MP3/WAV boundary.")
     if not profile.stock_write:
         blockers.append(
-            "This model/database is outside the validated MA446 write allowlist.")
+            profile.stock_format.reason if profile.stock_format and profile.stock_format.reason
+            else "This iPod database format is not supported.")
     return {
         "device_kind": profile.kind,
         "model": profile.model,

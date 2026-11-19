@@ -1,6 +1,6 @@
 # UI polish review — November 3, 2026
 
-Current personal build169 is installed and accepted. It includes eager Info and
+At the November8 cleanup checkpoint, personal build169 was installed and accepted. It includes eager Info and
 Artists preparation plus explicit window-filter retirement, while retaining the
 selected-cover-before-show contract. The November3–5 measurements below remain
 dated evidence; [HANDOFF](HANDOFF.md) records current provenance and the measured

@@ -75,6 +75,53 @@ class CdjTransactionTests(unittest.TestCase):
             self.assertEqual((self.target/'.soundbox-cdj/transactions'/result['generation']/path).read_bytes(), raw)
         self.assertFalse((self.target/tx.JOURNAL).exists())
 
+    def test_partial_postcommit_retirement_is_saved_and_fresh_recovery_finishes_only_cleanup(self):
+        removed = ('Contents/old-a.wav', 'Contents/old-b.wav')
+        for path in removed:
+            self.put(self.target/path, path.encode())
+        plan = self.plan(removed_files=removed)
+        actual = tx.CdjSession.unlink
+        def refuse_second(session, path):
+            if path.name == 'old-b.wav':
+                raise OSError('device cleanup temporarily unavailable')
+            return actual(session, path)
+        with mock.patch.object(tx.CdjSession, 'unlink', refuse_second), \
+                self.assertRaises(tx.CommittedCleanupPending) as caught:
+            tx.commit(plan)
+        self.assertIsInstance(caught.exception, RuntimeError)
+        self.assertIs(caught.exception.manifest, plan.manifest)
+        self.assertIn('Export saved', str(caught.exception))
+        self.assertEqual((self.target/tx.MANIFEST).read_bytes(), tx._json(plan.manifest))
+        backup = self.target/'.soundbox-cdj/transactions'/plan.manifest['generation']
+        self.assertFalse((backup/removed[0]).exists())
+        self.assertEqual((backup/removed[1]).read_bytes(), removed[1].encode())
+        self.assertTrue((self.target/tx.JOURNAL).is_file())
+        expected = {path: (self.target/path).read_bytes() for path in DATABASE_FILES}
+        session = tx.CdjSession(self.target, [], token=self.token, volume_uuid=self.volume)
+        tx.recover(session, self.root/'receipts')
+        self.assertFalse((self.target/tx.JOURNAL).exists())
+        self.assertTrue(all(not (backup/path).exists() and not (self.target/path).exists() for path in removed))
+        self.assertEqual({path: (self.target/path).read_bytes() for path in DATABASE_FILES}, expected)
+        self.assertEqual((self.target/tx.MANIFEST).read_bytes(), tx._json(plan.manifest))
+
+    def test_committed_journal_unlink_refusal_is_saved_and_retry_keeps_new_generation(self):
+        plan = self.plan()
+        actual = tx.CdjSession.unlink
+        def refuse_journal(session, path):
+            if path == self.target/tx.JOURNAL:
+                raise OSError('pending journal removal refused')
+            return actual(session, path)
+        with mock.patch.object(tx.CdjSession, 'unlink', refuse_journal), \
+                self.assertRaises(tx.CommittedCleanupPending) as caught:
+            tx.commit(plan)
+        self.assertIn('journal removal refused', str(caught.exception))
+        self.assertEqual((self.target/tx.MANIFEST).read_bytes(), tx._json(plan.manifest))
+        self.assertTrue((self.target/tx.JOURNAL).is_file())
+        expected = {path: (self.target/path).read_bytes() for path in DATABASE_FILES}
+        tx.recover(self.session, self.root/'receipts')
+        self.assertFalse((self.target/tx.JOURNAL).exists())
+        self.assertEqual({path: (self.target/path).read_bytes() for path in DATABASE_FILES}, expected)
+
     def test_mid_copy_failure_restores_entire_original_set(self):
         plan = self.plan()
         actual = tx.CdjSession.atomic_copy

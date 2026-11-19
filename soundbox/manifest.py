@@ -70,23 +70,32 @@ def manifest_path(device_root) -> Path:
     return Path(device_root) / _DIRNAME / _FILENAME
 
 
-def _guarded_manifest_path(device_root, *, create: bool = False) -> tuple[Path, DeviceSession]:
+def _guarded_manifest_path(
+        device_root, *, create: bool = False,
+        session: DeviceSession | None = None,
+) -> tuple[Path, DeviceSession]:
     # Local import avoids the manifest/sync module dependency at import time.
     from .sync import DeviceSession
     root = Path(device_root)
-    if not create and not root.exists():
-        raise FileNotFoundError(root)
-    session = DeviceSession(root, [], create=create)
+    if session is None:
+        if not create and not root.exists():
+            raise FileNotFoundError(root)
+        session = DeviceSession(root, [], create=create)
+    else:
+        session.revalidate()
+        if root.expanduser().resolve(strict=True) != session.target:
+            raise RuntimeError("Manifest target differs from the captured device")
     return session.guard(manifest_path(session.target)), session
 
 
-def has_composite_ownership(device_root) -> bool:
+def has_composite_ownership(device_root, *, session: DeviceSession | None = None) -> bool:
     """Bounded read-only guard for the dual-library schema.
 
     Older Rockbox-only export/resync code must never interpret schema 3 as an
     empty schema-2 manifest and overwrite its cross-firmware ownership state.
     """
-    payload = read_device_manifest(device_root)
+    payload = (read_device_manifest(device_root) if session is None else
+               read_device_manifest(device_root, session=session))
     if payload is None:
         return False
     try:
@@ -107,9 +116,15 @@ def _empty() -> dict:
     }
 
 
-def load(device_root) -> dict:
+def load(device_root, *, session: DeviceSession | None = None) -> dict:
     """Read a device's manifest, or a blank one if absent/corrupt."""
-    payload = read_device_manifest(device_root)
+    payload = (read_device_manifest(device_root) if session is None else
+               read_device_manifest(device_root, session=session))
+    return parse(payload)
+
+
+def parse(payload: bytes | None) -> dict:
+    """Pure schema-2/legacy parsing; captured bytes grant no write authority."""
     if payload is None:
         return _empty()
     try:
@@ -139,15 +154,16 @@ def load(device_root) -> dict:
     return data
 
 
-def load_composite(device_root) -> dict:
+def load_composite(device_root, *, session: DeviceSession | None = None) -> dict:
     """Read and strictly validate a schema-3 composite ownership manifest."""
-    return read_composite(device_root)[0]
+    return read_composite(device_root, session=session)[0]
 
 
-def read_composite(device_root) -> tuple[dict, bytes]:
+def read_composite(device_root, *, session: DeviceSession | None = None) -> tuple[dict, bytes]:
     """Return one fresh captured payload and its strictly validated model."""
     try:
-        payload = read_device_manifest(device_root)
+        payload = (read_device_manifest(device_root) if session is None else
+               read_device_manifest(device_root, session=session))
     except OSError as exc:
         raise ValueError("Composite SoundBox manifest is unreadable") from exc
     if payload is None:
@@ -292,8 +308,8 @@ def composite_playlist_entries(
     return status.entries
 
 
-def save(device_root, manifest: dict) -> None:
-    p, session = _guarded_manifest_path(device_root, create=True)
+def save(device_root, manifest: dict, *, session: DeviceSession | None = None) -> None:
+    p, session = _guarded_manifest_path(device_root, create=True, session=session)
     output = manifest
     if isinstance(manifest.get("files"), dict):
         output = {
@@ -373,7 +389,8 @@ def entry_for(playlist, hidden=frozenset(), removals=None, *,
 
 def record_export(device_root, playlists, incomplete=(), hidden=frozenset(),
                   removals=None, *, managed_files: dict | None = None,
-                  completed: bool = True) -> dict:
+                  completed: bool = True,
+                  session: DeviceSession | None = None) -> dict:
     """After an export, upsert the exported playlists into the device's manifest
     (accumulates — never clobbers entries for other playlists).
 
@@ -382,7 +399,10 @@ def record_export(device_root, playlists, incomplete=(), hidden=frozenset(),
     them "out of date" and the next Sync finishes the job — a cancelled export
     must never masquerade as a completed one."""
     inc = set(incomplete)
-    m = load(device_root)
+    _, session = _guarded_manifest_path(device_root, create=True, session=session)
+    if has_composite_ownership(device_root, session=session):
+        raise RuntimeError("Rockbox export cannot replace composite dual-library ownership")
+    m = load(device_root, session=session)
     generation = int(m.get("generation") or 0) + 1
     for pl in playlists:
         e = entry_for(
@@ -401,7 +421,7 @@ def record_export(device_root, playlists, incomplete=(), hidden=frozenset(),
     if completed and not inc:
         m["completed_generation"] = generation
     m["updated"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    save(device_root, m)
+    save(device_root, m, session=session)
     return m
 
 

@@ -89,6 +89,9 @@ class NativeOnlyController(unittest.TestCase):
         self.assertEqual((remembered['id'],remembered['uuid'],remembered['path']),('1',source_fixture.UUID,str(self.source.audio)))
         self.assertEqual(remembered['display']['title'],'My curated title')
         self.assertFalse(self.w.lib.tracks_by_id)
+        self.w._after_track_edit.assert_called_once_with('Removed 1 from native Collection; files kept',
+            persist=False,refresh_devices=False)
+        self.assertIn('chosen',read_state(self.w._data_file)['hidden_tracks'])
 
     def test_source_uuid_or_path_changes_before_click_cannot_retarget_the_selection(self):
         captured=self.c.capture_collection(['chosen']);original=self.w.lib;track=original.tracks_by_id['chosen']

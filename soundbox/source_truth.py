@@ -6,9 +6,12 @@ after stripping the artist edge from the native title.
 """
 from collections import Counter
 from copy import deepcopy
+from dataclasses import dataclass
 import hashlib
 import json
 from pathlib import Path
+from types import MappingProxyType
+from typing import Mapping, Sequence
 from uuid import uuid4
 
 from . import metadata
@@ -132,11 +135,11 @@ def build(raw,*,migration_id=None,include_equal=False):
     return descriptor,targets
 
 
-def validate(descriptor,targets):
+def validate_static(descriptor,targets):
+    """Complete immutable-plan semantics; this result alone admits no writes."""
     if (not isinstance(descriptor,dict) or descriptor.get('format')!=_FORMAT or not isinstance(targets,dict)
             or not isinstance(descriptor.get('order'),list) or not isinstance(descriptor.get('unresolved'),list)
-            or len(targets)>2*_MAX_TRACKS or type(descriptor.get('cursor')) is not int
-            or not 0<=descriptor['cursor']<=len(descriptor['order'])
+            or len(targets)>2*_MAX_TRACKS
             or len(set(descriptor['order']+descriptor['unresolved']))!=len(descriptor['order'])+len(descriptor['unresolved'])
             or set(descriptor['order']+descriptor['unresolved'])!=set(targets)):
         raise ValueError('Invalid frozen source-truth descriptor')
@@ -160,9 +163,18 @@ def validate(descriptor,targets):
         if key!=_sha(expected):raise ValueError('Frozen source-truth key differs from its source identity')
         if key in ordered and (not row['uuid'] or not row['native_id'] or not Path(row['path']).is_absolute() or row['error']):
             raise ValueError('Unresolved metadata target cannot enter the writer FIFO')
+    return descriptor
+
+
+def validate_progress(descriptor):
+    """Check each current cursor/active operation, without visiting all targets."""
+    if (not isinstance(descriptor,dict) or not isinstance(descriptor.get('order'),list)
+            or type(descriptor.get('cursor')) is not int
+            or not 0<=descriptor['cursor']<=len(descriptor['order'])):
+        raise ValueError('Invalid frozen source-truth descriptor')
     active=descriptor.get('active')
-    if active is not None and (not isinstance(active,dict) or active.get('target') not in descriptor['order']
-            or descriptor['cursor']>=len(descriptor['order']) or descriptor['order'][descriptor['cursor']]!=active['target']
+    if active is not None and (not isinstance(active,dict)
+            or descriptor['cursor']>=len(descriptor['order']) or descriptor['order'][descriptor['cursor']]!=active.get('target')
             or not isinstance(active.get('operations'),dict) or set(active['operations'])-{'title','artist'}):
         raise ValueError('Invalid active source-truth row pair')
     if active is not None and any(type(value) is not str or len(value)!=32 or any(c not in '0123456789abcdef' for c in value)
@@ -171,10 +183,17 @@ def validate(descriptor,targets):
     return descriptor
 
 
-def _curation(document):
+def validate(descriptor,targets):
+    """Public callers always receive the complete static and progress checks."""
+    validate_static(descriptor,targets)
+    return validate_progress(descriptor)
+
+
+def _curation(document,*,detach=True):
     settings=document.get('settings',{})
-    return dict(top={key:deepcopy(document.get(key,{})) for key in _SCOPED},
-                settings={key:deepcopy(settings[key]) for key in _SCOPED_SETTINGS if key in settings})
+    result=dict(top={key:document.get(key,{}) for key in _SCOPED},
+                settings={key:settings[key] for key in _SCOPED_SETTINGS if key in settings})
+    return deepcopy(result) if detach else result
 
 
 def _ids(curation):
@@ -195,16 +214,51 @@ def _pins(library,ids):
     return pins,unbound
 
 
-def _verify_pins(header,library):
-    native:dict[str,list]={}
-    for track in library.tracks_by_id.values():
-        if track.source_uuid:native.setdefault(track.native_id,[]).append(track)
+@dataclass(frozen=True,slots=True)
+class _CurationPinIndex:
+    library:object
+    scope:tuple
+    native:Mapping[str,tuple[str,...]]
+
+
+def prepare_pin_index(library,*,rows=None):
+    """Capture complete native occurrences on the unpublished readback worker.
+
+    An explicit row iterator lets a caller fuse an existing complete pass. It
+    must still visit every mapping entry once, with its exact current Track.
+    The result is a readback fact, never native write or source authority.
+    """
+    identity=tuple(scope(library).items());count=len(library.tracks_by_id)
+    native:dict[str,list[str]]={};seen=set()
+    for local,track in library.tracks_by_id.items() if rows is None else rows:
+        if local in seen or library.tracks_by_id.get(local) is not track:
+            raise ValueError('Curation readback inventory changed while preparing its pins')
+        seen.add(local)
+        if track.source_uuid:native.setdefault(track.native_id,[]).append(track.source_uuid)
+    if len(seen)!=count or len(library.tracks_by_id)!=count or tuple(scope(library).items())!=identity:
+        raise ValueError('Curation readback inventory is incomplete or changed')
+    return _CurationPinIndex(library,identity,
+        MappingProxyType({key:tuple(values) for key,values in native.items()}))
+
+
+def _verify_pins(header,library,pin_index=None):
+    native:Mapping[str,Sequence[str]]
+    if pin_index is None:
+        captured:dict[str,list[str]]={}
+        for track in library.tracks_by_id.values():
+            if track.source_uuid:captured.setdefault(track.native_id,[]).append(track.source_uuid)
+        native=captured
+    else:
+        if (type(pin_index) is not _CurationPinIndex or pin_index.library is not library
+                or pin_index.scope!=tuple(scope(library).items())):
+            raise ValueError('Prepared curation pins belong to another readback or source')
+        native=pin_index.native
     for local,pin in header['pins'].items():
         occupied=library.tracks_by_id.get(local)
         if occupied is not None and (occupied.native_id,occupied.source_uuid)!=(pin['native_id'],pin['uuid']):
             raise ValueError('A logical track ID with saved curation now refers to another native identity')
         matches=native.get(pin['native_id'],[])
-        if matches and (len(matches)!=1 or matches[0].source_uuid!=pin['uuid']):
+        if matches and (len(matches)!=1 or matches[0]!=pin['uuid']):
             raise ValueError('A native identity with saved curation was replaced; preserve the original source')
     for local in header['unbound']:
         if local in native or local in library.tracks_by_id and library.tracks_by_id[local].source_uuid:
@@ -275,7 +329,7 @@ def _validate_header(header,*,partition=False):
             raise ValueError('Invalid archived source curation')
 
 
-def stage_scope(document,incoming,*,previous=None,bootstrap=False):
+def stage_scope(document,incoming,*,previous=None,bootstrap=False,pin_index=None):
     """Pure staged state; caller commits selection+curation in ONE save.
 
     A new source with conflicting numeric IDs never inherits or silently clears
@@ -283,7 +337,9 @@ def stage_scope(document,incoming,*,previous=None,bootstrap=False):
     """
     incoming_scope=scope(incoming);current=document.get('settings',{}).get(CURATION)
     result=dict(document);result['settings']=dict(document.get('settings',{}))
-    curation=_curation(document)
+    # Same-source refresh only reads these maps to select fresh identity pins.
+    # Detach them only when they actually become an archived partition below.
+    curation=_curation(document,detach=False)
     if current is None:
         populated=any(curation['top'].values()) or any(curation['settings'].values())
         if populated and not bootstrap and (previous is None or scope(previous)!=incoming_scope):
@@ -291,7 +347,7 @@ def stage_scope(document,incoming,*,previous=None,bootstrap=False):
         basis=previous if previous is not None and scope(previous)==incoming_scope else incoming
         pins,unbound=_pins(basis,_ids(curation));header=dict(scope=incoming_scope,pins=pins,unbound=unbound,
                                                          **_playlist_header(basis,curation))
-        _verify_pins(header,incoming)
+        _verify_pins(header,incoming,pin_index)
         result['settings'][CURATION]=dict(format=_FORMAT,active=header,partitions={})
         return result
     if (not isinstance(current,dict) or set(current)!={'format','active','partitions'} or current['format']!=_FORMAT
@@ -303,7 +359,7 @@ def stage_scope(document,incoming,*,previous=None,bootstrap=False):
         if identity!=scope_key(partition['scope']):raise ValueError('Saved source partition key changed')
     state=deepcopy(current);active=state['active']
     if active['scope']==incoming_scope:
-        _verify_pins(active,incoming)
+        _verify_pins(active,incoming,pin_index)
         pins,unbound=_refresh_pins(active,incoming,_ids(curation));active.update(pins=pins,unbound=unbound)
         active.update(_playlist_header(incoming,curation,active))
     else:
@@ -312,7 +368,7 @@ def stage_scope(document,incoming,*,previous=None,bootstrap=False):
         _verify_pins(active,previous)
         pins,unbound=_refresh_pins(active,previous,_ids(curation))
         state['partitions'][scope_key(active['scope'])]=dict(scope=active['scope'],pins=pins,unbound=unbound,
-            **_playlist_header(previous,curation,active),curation=curation)
+            **_playlist_header(previous,curation,active),curation=deepcopy(curation))
         existing=state['partitions'].pop(scope_key(incoming_scope),None)
         if existing is None:
             incoming_ids={track.native_id for track in incoming.tracks_by_id.values()}
@@ -325,7 +381,7 @@ def stage_scope(document,incoming,*,previous=None,bootstrap=False):
             empty:dict[str,dict]=dict(top={key:{} for key in _SCOPED},settings={})
             existing=dict(scope=incoming_scope,pins={},unbound=[],playlist_pins={},unbound_playlists=[],curation=empty)
         if existing['scope']!=incoming_scope:raise ValueError('Saved source partition identity changed')
-        _verify_pins(existing,incoming)
+        _verify_pins(existing,incoming,pin_index)
         for key,value in existing['curation']['top'].items():result[key]=deepcopy(value)
         for key in _SCOPED_SETTINGS:result['settings'].pop(key,None)
         result['settings'].update(deepcopy(existing['curation']['settings']))

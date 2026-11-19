@@ -1,6 +1,7 @@
 """TrackModel view logic: click-to-sort (view-only), art column, filter interplay."""
 
 import unittest
+from unittest import mock
 
 from PySide6.QtCore import Qt
 
@@ -22,6 +23,53 @@ def _rows():
         {"id": "4", "title": "delta", "artist": "M", "bpm": "128.00", "key": "2B",
          "time": "3:04", "art": "avatar"},
     ]
+
+
+class SparseRows(unittest.TestCase):
+    def test_visible_scalar_change_keeps_list_owner_and_emits_without_reset(self):
+        model=TrackModel(_rows());all_rows=model._all_rows;visible=model._rows
+        reset=mock.Mock();changed=mock.Mock()
+        model.modelReset.connect(reset);model.dataChanged.connect(changed)
+        update={**model._all_rows[0],'title':'Bravo revised'}
+        self.assertTrue(model.patch_rows({'1':update}))
+        reset.assert_not_called();changed.assert_called_once()
+        self.assertIs(model._all_rows,all_rows);self.assertIs(model._rows,visible)
+        self.assertEqual(model.data(model.index(0,0)),'Bravo revised')
+
+    def test_filter_and_sort_results_match_complete_replacement(self):
+        for text,sorting,update in (('Bravo',None,{'title':'Different'}),
+                                   ('Revised',None,{'title':'Revised title'}),
+                                   ('',('title',False),{'title':'Zed'}),
+                                   ('',('title',False),{'title':'Bravo revised'}),
+                                   ('',('bpm',True),{'bpm':'96.00'})):
+            with self.subTest(text=text,sorting=sorting,update=update):
+                model=TrackModel(_rows());reference=TrackModel(_rows())
+                model.set_filter(text);reference.set_filter(text)
+                if sorting:
+                    field,descending=sorting
+                    model.sort(_col(field),Qt.DescendingOrder if descending else Qt.AscendingOrder)
+                    reference.sort(_col(field),Qt.DescendingOrder if descending else Qt.AscendingOrder)
+                replacement={**model._all_rows[0],**update}
+                self.assertTrue(model.patch_rows({'1':replacement}))
+                reference.set_rows([replacement if row['id']=='1' else row for row in _rows()])
+                clean=lambda rows:[{key:value for key,value in row.items() if key!='_hay'} for row in rows]
+                self.assertEqual(clean(model._rows),clean(reference._rows))
+                self.assertEqual(clean(model._all_rows),clean(reference._all_rows))
+
+    def test_sort_value_change_without_order_change_keeps_visible_owner(self):
+        model=TrackModel(_rows());model.sort(_col('title'));visible=model._rows
+        reset=mock.Mock();model.modelReset.connect(reset)
+        self.assertTrue(model.patch_rows({'1':{**model._all_rows[0],'title':'Bravo revised'}}))
+        reset.assert_not_called();self.assertIs(model._rows,visible)
+
+    def test_duplicate_missing_and_mismatched_targets_refuse_without_mutation(self):
+        for rows,updates in ((_rows()+[_rows()[0]],{'1':{'id':'1','title':'Changed'}}),
+                             (_rows(),{'unknown':{'id':'unknown'}}),
+                             (_rows(),{'1':{'id':'2','title':'Wrong song'}})):
+            with self.subTest(updates=updates,rows=len(rows)):
+                model=TrackModel(rows);before=[dict(row) for row in model._all_rows]
+                self.assertFalse(model.patch_rows(updates))
+                self.assertEqual(model._all_rows,before)
 
 
 class SortBehavior(unittest.TestCase):

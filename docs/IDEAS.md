@@ -39,8 +39,8 @@ replacement or an implemented training system.
 
 | Idea | Existing foundation | Possible future addition |
 | --- | --- | --- |
-| Sync report | Backend reports and completion dialogs expose transaction outcomes | A more detailed summary of additions, removals, bytes, durations and warnings |
-| iPod dry-run preview | Stock/composite iPods retain guarded planning/confirmation; selected USB export is already authorized by its gesture | An optional itemized iPod preview, without adding a USB approval step |
+| Sync report | Backend reports, nonmodal summaries and attention dialogs expose transaction outcomes | A more detailed summary of additions, removals, bytes, durations and warnings |
+| iPod dry-run preview | Stock/composite iPods retain guarded planning; ordinary Export/Sync is authorized by its gesture | An optional itemized iPod preview, without adding a USB approval step |
 | Device health | Stock-iPod tabs show identity, storage, music, playlists and playback facts | Reliable battery/filesystem facts or equivalent Rockbox diagnostics where available |
 | Export/sync result detail | Explicit operations already avoid unchanged transfers | A concise unchanged/modified/new breakdown after a requested operation, without idle USB comparisons |
 | Sync history | Transaction/recovery evidence exists | A user-facing history of device, date, changes, bytes and duration |
@@ -64,7 +64,8 @@ requested existing Collection/custom-playlist upgrade is complete. Artists stays
 virtual-only. See [the workflow](shared-library-workflow-plan.md) and
 [current scope](ROADMAP.md); this is no longer an unimplemented transfer idea.
 
-The October26 intelligent-playlist proposal remains separately gated: creating
-single-My-Tag intelligent playlists has not been accepted. Broader intelligent/
-cloud mutations and new write domains require their own proof and authorization.
+My Tag smart-playlist creation passed separate exact-library acceptance November12,
+including multiple ANY/OR conditions. That part of the October26 proposal is delivered;
+existing intelligent-rule/cloud mutations and new write domains still require
+their own proof and authorization.
 No entry in this ideas page expands any accepted source API.

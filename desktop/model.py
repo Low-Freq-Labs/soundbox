@@ -158,6 +158,44 @@ class TrackModel(QAbstractTableModel):
             r.pop("_hay", None)  # force a fresh search index (title/artist may have changed)
         self._apply_filter()
 
+    def patch_rows(self, updates: dict[str, dict]) -> bool:
+        """Patch a unique-song inventory; reset only if visible order changes.
+
+        Return False without mutation for an occurrence-based/obsolete target,
+        so the caller can retain its ordinary complete rendering path.
+        """
+        by_id={row.get('id'):row for row in self._all_rows}
+        if (len(by_id)!=len(self._all_rows) or any(type(key) is not str or not key for key in by_id)
+                or updates.keys()-by_id.keys()
+                or any(row.get('id')!=key for key,row in updates.items())):
+            return False
+        clean=lambda row:{key:value for key,value in row.items() if key!='_hay'}
+        changed={key:clean(row) for key,row in updates.items() if clean(row)!=clean(by_id[key])}
+        if not changed:return True
+        terms=self._filter.split()
+        membership_changed=bool(terms and any(
+            row_matches(by_id[key],terms)!=row_matches(row,terms) for key,row in changed.items()))
+        order_changed=False
+        if not membership_changed and self._sort:
+            field,descending=self._sort
+            if self._sort_dirty or any(_sort_value(field,by_id[key])!=_sort_value(field,row)
+                                       for key,row in changed.items()):
+                visible=[changed.get(row['id'],row) for row in self._all_rows
+                         if not terms or row_matches(changed.get(row['id'],row),terms)]
+                visible.sort(key=lambda row:_sort_value(field,row),reverse=descending)
+                order_changed=[row['id'] for row in visible]!=[row['id'] for row in self._rows]
+        for key,row in changed.items():
+            by_id[key].clear();by_id[key].update(row)
+        if membership_changed or order_changed:
+            self._apply_filter()
+        else:
+            self._sort_dirty=False
+            for index,row in enumerate(self._rows):
+                if row['id'] in changed:
+                    self.dataChanged.emit(self.index(index,0),self.index(index,len(COLUMNS)-1),
+                                          [Qt.DisplayRole,Qt.EditRole,Qt.ToolTipRole])
+        return True
+
     def set_filter(self, text: str) -> None:
         """Live-filter the visible rows. Multi-field (title/artist/genre/key/bpm/
         format) and multi-term: each whitespace-separated word must match SOME

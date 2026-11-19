@@ -257,10 +257,18 @@ class NewSmartPlaylistDialog(QDialog):
 
 
 class TagCreationMixin:
-    def _publish_created_library(self, library):
+    def _publish_metadata_library(self,library,changed_ids,*,projected_bindings_owner=None,projected_scope=None):
+        self._publish_created_library(library,changed_ids=changed_ids,
+            projected_bindings_owner=projected_bindings_owner,projected_scope=projected_scope)
+
+    def _publish_created_library(self, library, *, changed_ids=(),projected_bindings_owner=None,projected_scope=None):
         seat = self._browser_seat() if self.stack.currentIndex() == 0 else None
-        self._on_refresh_done(library)
-        if seat is not None and self.stack.currentIndex() == 0:self._restore_browser_seat(seat)
+        rows = self.model._rows if seat is not None else None
+        projection=({'projected_bindings_owner':projected_bindings_owner,'projected_scope':projected_scope}
+                    if projected_scope is not None else {})
+        self._on_refresh_done(library,prepared_native_ids=changed_ids,**projection)
+        if (seat is not None and self.stack.currentIndex() == 0
+                and self.model._rows is not rows):self._restore_browser_seat(seat)
         self._finish_tag_refresh()
         self._finish_edit_status()
 

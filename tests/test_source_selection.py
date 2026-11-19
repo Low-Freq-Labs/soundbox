@@ -4,6 +4,8 @@ from types import SimpleNamespace
 import unittest
 from unittest import mock
 
+from PySide6.QtWidgets import QApplication
+
 from desktop.app import MainWindow
 from soundbox.library import Library,Track
 
@@ -18,7 +20,7 @@ class Window:
         self.lib=Library({},[],'/synthetic/a/master.db')
         self.settings={}
         self._last_xml='/synthetic/old.xml'
-        self.tag_controller=SimpleNamespace(busy=False,checking=False,admission_paused=False)
+        self.tag_controller=SimpleNamespace(busy=False,checking=False,admission_paused=False,owned=False)
         self._refresh_worker=None
         self._analysis_worker=None
         self._state_maintenance=False
@@ -30,6 +32,63 @@ class Window:
 
 
 class SourceSelection(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):cls.app=QApplication.instance() or QApplication([])
+
+    def grid_source_window(self):
+        from tests.test_prep_grid import GridInterface
+        fixture=GridInterface();fixture.app=self.app;fixture.setUp()
+        def cleanup():
+            fixture.shared.analysis_admission=lambda:False
+            fixture.doCleanups()
+        self.addCleanup(cleanup)
+        w=Window();w.lib=fixture.shared.lib;w.tag_controller=fixture.shared
+        w.grid_controller=fixture.grid
+        return w,fixture
+
+    def test_debounced_grid_shift_blocks_direct_xml_and_admission_during_chooser_without_losing_queue(self):
+        w,fixture=self.grid_source_window();original=w.lib;groups=[]
+        def choose(*_):
+            self.assertTrue(fixture.grid.request('7','shift',1))
+            groups.append(fixture.grid._queue[0])
+            self.assertFalse(fixture.shared.busy)
+            self.assertTrue(fixture.shared.owned)
+            return '/synthetic/other.xml',''
+        with mock.patch('desktop.app.QFileDialog.getOpenFileName',side_effect=choose) as chooser, \
+                mock.patch('desktop.app.engine.load_library') as loader:
+            w._open_dialog()
+            self.assertFalse(w.open_library('/synthetic/other.xml'))
+        chooser.assert_called_once();loader.assert_not_called()
+        self.assertIs(w.lib,original);self.assertIs(fixture.grid._queue[0],groups[0])
+        self.assertEqual(fixture.requests,[]);w._save_state.assert_not_called()
+        # The ordinary fake source actor acknowledges the accepted shift; no
+        # manual queue clearing or source bypass is needed to release admission.
+        fixture.wait_for(lambda:not fixture.shared.owned)
+        self.assertEqual(len(fixture.requests),1)
+        self.assertEqual(w._source_selection_reason('/synthetic/other.xml'),'')
+
+    def test_queued_cue_admitted_during_xml_chooser_blocks_parse_then_normal_drain_releases_it(self):
+        w,fixture=self.grid_source_window();original=w.lib;intents=[]
+        fixture.shared.analysis_admission=lambda:True
+        track=fixture.shared.lib.tracks_by_id['7']
+        occupied={cue['slot'] for cue in track.source_cues if cue['kind']=='hot'}
+        slot=next(value for value in range(8) if value not in occupied)
+        def choose(*_):
+            self.assertTrue(fixture.shared.request_cue('7','hot',slot,'add',500))
+            intents.append(fixture.shared._cue_queue[0])
+            self.assertFalse(fixture.shared.busy)
+            return '/synthetic/other.xml',''
+        with mock.patch('desktop.app.QFileDialog.getOpenFileName',side_effect=choose), \
+                mock.patch('desktop.app.engine.load_library') as loader:
+            w._open_dialog()
+        loader.assert_not_called();self.assertIs(w.lib,original)
+        self.assertIs(fixture.shared._cue_queue[0],intents[0]);w._save_state.assert_not_called()
+        fixture.shared.analysis_admission=lambda:False
+        fixture.shared._start_next_cue()
+        fixture.wait_for(lambda:not fixture.shared.owned)
+        self.assertEqual(fixture.shared._cue_queue,[])
+        self.assertEqual(w._source_selection_reason('/synthetic/other.xml'),'')
+
     def scoped_window(self):
         from desktop.metadata_controller import MetadataController
         w=Window()

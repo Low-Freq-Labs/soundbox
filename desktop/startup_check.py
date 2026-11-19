@@ -11,6 +11,18 @@ import time
 from PySide6.QtCore import QStandardPaths, QTimer
 
 
+def runtime_crypto_check() -> bool:
+    """Exercise the bundled AES backend with NIST SP800-38A's first CBC block."""
+    from Crypto.Cipher import AES
+
+    key = bytes.fromhex('2b7e151628aed2a6abf7158809cf4f3c')
+    iv = bytes.fromhex('000102030405060708090a0b0c0d0e0f')
+    plain = bytes.fromhex('6bc1bee22e409f96e93d7e117393172a')
+    cipher = bytes.fromhex('7649abac8119b246cee98e9b12e9197d')
+    return (AES.new(key, AES.MODE_CBC, iv).encrypt(plain) == cipher
+            and AES.new(key, AES.MODE_CBC, iv).decrypt(cipher) == plain)
+
+
 def runtime_sql_check() -> bool:
     """Exercise bundled native ORM/SQLCipher entirely in disposable RAM."""
     from pyrekordbox.db6 import tables

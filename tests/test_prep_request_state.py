@@ -25,7 +25,8 @@ class _RequestHost:
     def reason(self,*_args,**_kwargs):
         return ''
 
-    def refresh(self,_tid):
+    def refresh(self,_tid,*,cue_only=False):
+        if not cue_only:raise AssertionError('Cue gesture requested a grid refresh')
         self.events.append('refresh')
 
     def schedule(self):

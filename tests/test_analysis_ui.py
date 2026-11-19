@@ -122,7 +122,7 @@ class AnalysisUi(unittest.TestCase):
                                      'id':str(uuid4()),'path':'/other.wav'})
                 queue=[selected,unrelated]
                 prep=PrepHost()
-                host=SimpleNamespace(_shutting_down=False,_state_maintenance=False,
+                host=SimpleNamespace(_shutting_down=False,_state_maintenance=False,_state_publication=False,
                     _analysis_owner=SimpleNamespace(stopping=False),lib=lib,prep_controller=prep,
                     settings={analysis_jobs.KEY:jobs,'analysis_results':{key:newest},prep_edits.KEY:queue},
                     _save_state=mock.Mock(return_value=saved),_invalidate_rows=mock.Mock(),

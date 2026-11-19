@@ -46,6 +46,20 @@ class CoverSnapshot:
         return hashlib.sha256(self.data).hexdigest()
 
 
+@dataclass(frozen=True, eq=False)
+class ArtworkSelection:
+    """Opaque selected artwork intent; strong owners prevent identity reuse.
+
+    This is an in-memory publication fence, not a proof of image-file bytes.
+    Exporters retain their normal worker-side image acquisition and freshness.
+    """
+    _cache: Any
+    _generation: int
+    _rows: tuple
+    _edge_pool: tuple
+    _edge_seed: str
+
+
 def _art_mutation[**P, R](method: Callable[Concatenate[Any, P], R]) -> Callable[Concatenate[Any, P], R]:
     """Compose and publish one artwork mutation under the shared state owner."""
     @wraps(method)
@@ -61,9 +75,10 @@ def _art_mutation[**P, R](method: Callable[Concatenate[Any, P], R]) -> Callable[
                 self._reload_index()
                 self._defaults = self._load_defaults()
                 self._rebuild_default_assignments(persist=False)
+                self._selection_exclusions = self.source_exclusions()
                 self._revision = self._area.art_revision
             before = (self.index, self._defaults, self._default_assignments,
-                      self._default_track_ids)
+                      self._default_track_ids, self._selection_exclusions)
             # Mutations replace/remove individual entries. Detach namespace
             # maps for rollback without cloning every unrelated cover, photo
             # and assignment for a one-track change (or an unchanged balance).
@@ -85,7 +100,7 @@ def _art_mutation[**P, R](method: Callable[Concatenate[Any, P], R]) -> Callable[
                 return result
             except Exception:
                 (self.index, self._defaults, self._default_assignments,
-                 self._default_track_ids) = before
+                 self._default_track_ids, self._selection_exclusions) = before
                 raise
             finally:
                 self._changes = {}
@@ -125,6 +140,75 @@ class ArtCache:
         self._default_track_ids: tuple[str, ...] = ()
         self._default_assignments: dict[str, str] = {}
         self._defaults = self._load_defaults()
+        self._selection_exclusions = self.source_exclusions()
+
+    def _selection_rows(self, track_ids) -> tuple[tuple, bool]:
+        from .art_sources import excluded_source
+        rows = []
+        edge = False
+        for track_id in dict.fromkeys(track_ids):
+            entry = self.index.get(track_id)
+            state = ((entry or {}).get('status'), (entry or {}).get('ext'), (entry or {}).get('src'))
+            ok = state[0] == 'ok'
+            excluded = bool(ok and excluded_source(
+                url=state[2] or '', excluded_accounts=self._selection_exclusions))
+            photo_id = self._default_assignments.get(track_id) if not ok else None
+            photo = self._defaults['photos'].get(photo_id) if photo_id is not None else None
+            edge = edge or not ok and photo is None
+            rows.append((track_id, entry, state, excluded, photo_id, photo))
+        return tuple(rows),edge
+
+    @_art_read
+    def selection_token(self, track_ids) -> ArtworkSelection:
+        """Capture only selected canonical owners/policy, without filesystem IO."""
+        rows,edge=self._selection_rows(track_ids)
+        pool = tuple(self._defaults['photos'].items()) if edge else ()
+        return ArtworkSelection(self, self._area.generation, rows, pool,
+                                self._defaults['seed'] if edge else '')
+
+    def _selection_pool_current(self, token: ArtworkSelection) -> bool:
+        # Canonical mutations detach the photos map under the area lock. One
+        # exact comparison per immutable owner covers all indexed row tokens;
+        # strong owners prevent object-ID reuse and rollback retains its map.
+        photos=self._defaults['photos'];seed=self._defaults['seed']
+        cached=getattr(self,'_selection_pool_check',None)
+        if (cached is not None and cached[0] is token._edge_pool and cached[1] is photos
+                and cached[2]==token._edge_seed and cached[3]==seed):return bool(cached[4])
+        valid=(seed==token._edge_seed and len(photos)==len(token._edge_pool)
+               and all(key==old_key and owner is old_owner for (key,owner),(old_key,old_owner)
+                       in zip(photos.items(),token._edge_pool)))
+        self._selection_pool_check=(token._edge_pool,photos,token._edge_seed,seed,valid)
+        return valid
+
+    @_art_read
+    def selection_current(self, token: ArtworkSelection) -> bool:
+        """Check selected intent on any thread; never read, decode or hash images."""
+        if (not isinstance(token, ArtworkSelection) or token._cache is not self
+                or token._generation != self._generation or self._generation != self._area.generation
+                or self._revision != self._area.art_revision or getattr(self, '_writing', False)):
+            return False
+        rows,edge=self._selection_rows(row[0] for row in token._rows)
+        return ((self._selection_pool_current(token) if edge else
+                 not token._edge_pool and token._edge_seed=='')
+                and all(row[0] == old[0] and row[1] is old[1] and row[2:5] == old[2:5]
+                        and row[5] is old[5] for row, old in zip(rows, token._rows)))
+
+    @_art_read
+    def split_selection(self, token: ArtworkSelection) -> dict[str, ArtworkSelection]:
+        """Index captured single-track intents in one pass, sharing fallback data.
+
+        Splitting grants no freshness: each returned token still uses
+        ``selection_current``. A changed track can fail independently while
+        unchanged tracks retain their original selected intent.
+        """
+        if (not isinstance(token, ArtworkSelection) or token._cache is not self
+                or token._generation != self._generation or self._generation != self._area.generation
+                or self._revision != self._area.art_revision or getattr(self, '_writing', False)):
+            raise ValueError('Artwork selection no longer belongs to the current cache generation')
+        return {row[0]: ArtworkSelection(self, token._generation, (row,),
+                    token._edge_pool if row[2][0] != 'ok' and row[5] is None else (),
+                    token._edge_seed if row[2][0] != 'ok' and row[5] is None else '')
+                for row in token._rows}
 
     def _reload_index(self) -> None:
         self.index = (json.loads(self._index_path.read_text())
@@ -539,7 +623,7 @@ class ArtCache:
             self._write(self.root / f"{tid}.jpg", safe)
             if e.get("ext") != "jpg":
                 self._write(p, None)
-                self.index[tid] = {**e, "ext": "jpg"}
+            self.index[tid] = {**e, "ext": "jpg"}
             fixed += 1
         if fixed:
             self._save()
@@ -734,6 +818,7 @@ class ArtCache:
         accounts = sorted(set(self.source_exclusions()) | {account})
         self._write(self.root / "source-policy.json", json.dumps(
             {"schema": 1, "accounts": accounts}, ensure_ascii=False).encode())
+        self._selection_exclusions = tuple(accounts)
         return account
 
     @_art_mutation
@@ -741,6 +826,7 @@ class ArtCache:
         accounts = sorted(set(self.source_exclusions()) - {account})
         self._write(self.root / "source-policy.json", json.dumps(
             {"schema": 1, "accounts": accounts}, ensure_ascii=False).encode())
+        self._selection_exclusions = tuple(accounts)
 
     @_art_mutation
     def apply_review(self, track_id: str, expected: CoverSnapshot, res: ArtResult, *,

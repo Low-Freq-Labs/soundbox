@@ -38,8 +38,8 @@ registration and initial full BPM/Grid+Key/native waveforms on supported bare
 stereo PCM16/24 WAV44.1/48kHz have subsequently passed independent acceptance and
 are installed. Bare unlocked MPEG-1 CBR/no-Info/Xing stereo44.1kHz MP3 has its own
 separately accepted initial full-analysis authority; it never inherits the WAV
-authority. These paths were delivered in accepted personal build169 and remain
-in the current installed build171. The
+authority. These paths were delivered in accepted personal build169 and retained
+in the later build171 checkpoint. The
 November5 responsiveness build167/runtime `3fb0ff60…`, whole-app build165/runtime
 `7ffde716…` and earlier build163/build160 source releases are dated delivery evidence.
 Exact provenance is in [HANDOFF](HANDOFF.md).
@@ -91,14 +91,16 @@ remain preserved. This acceptance enables ordinary user creation through the
 guarded forms; it grants no permission to repeat source tests or modify existing
 smart definitions.
 
-The combined personal build171 is installed and normally reopened after the
+The November12 combined personal build171 was installed and normally reopened after the
 fresh 3,025-case render gate, 744-input comparison, signed package and isolated
 startup checks. CoreAudio/Metal, 3,296 native tracks/91 playlists and zero preparation/
 art-fetch work are verified. Curation, the user's newer column layout, artwork
 JSON and custom white app icon are preserved. The installed chronology correction
 uses native assignment creation dates, including pre-update history; the actual
 cache/default-order check puts STINK MODE first in the reported example. One
-build169 rollback remains pending postinstall user acceptance.
+build169 rollback was pending user acceptance at that checkpoint. These are dated
+delivery/retention facts; [HANDOFF](HANDOFF.md) governs current installation and
+protected fallback retention.
 
 ## Original October26 scope, with subsequently accepted grid behavior
 
@@ -192,7 +194,13 @@ These offline metadata conventions remain **provisional** and differ from the
 native-derived production rules below. Successful SQLite reads alone do not prove
 rekordbox acceptance. Do not reuse the offline mutation algorithm on a live DB.
 
-The current title/artist publisher has independent default-off exact-library
+The original metadata preparation described next is historical. Later v5 native
+reopen checks and general exact-library activation superseded its pending status;
+current supported profiles and migration status are in
+[the shared-library audit](shared-library-audit-2026-11.md) and HANDOFF. Those
+acceptances do not widen the original profile or recovery semantics.
+
+At that preparation checkpoint, the title/artist publisher had independent default-off exact-library
 authority. Its original `ascii-local-analysed-empty-album-v1` stays local-only;
 the separately admitted `ascii-active-analysed-empty-album-v2` candidate also
 preserves synced0/1 Content with no remote USN. Both retain printable ASCII,
@@ -201,7 +209,7 @@ compact acknowledgement bind the exact profile. Generated vendor-component and
 encrypted real-row copy checks do not activate production authority. A compatible
 validated package and native source/reopen acceptance remain pending; installed171
 cannot safely consume the new source-truth records or metadata recovery route.
-The current3,418-case source gate passes; see [current handoff](HANDOFF.md) for
+The then-current3,418-case source gate passed; see [current handoff](HANDOFF.md) for
 proof and the separate package/runtime acceptance status.
 
 Recovery after a real process exit handles both SQLite WAL commits and hot
@@ -361,8 +369,11 @@ integration, not an official rekordbox write service.
 ### Milestone 3 — cue editing and native acceptance
 
 The native references below preserve the October26/27 protocol and its original
-RAM-session FIFO. Current ordinary native/import prep uses later durable per-song
-intentions before presentation; source failures retain them for reconciliation.
+RAM-session FIFO. Current cue-only native/import gestures publish exact
+track-bound usable overlays immediately, then admit canonical intentions and
+native saves in the background. An overlay is not durable success; pending and
+failed tails remain owned for reconciliation. Grid intentions retain their
+separate durable admission contract.
 Normal UI Quit keeps the usable app and source pumps open until captured saves
 finish. The old RAM-tail loss descriptions below are historical, not current
 admission or persistence requirements. Exact installed proof is in HANDOFF.
@@ -456,8 +467,8 @@ explicit custom shortcuts. Preview remains usable without write authority.
 
 Three raw snapshot queries capture source revisions and native cue identities
 outside normalized display dictionaries. The cue milestone used instant-paint
-schema7 and read older4–6 caches. Current `libcache` uses schema11 and reads
-schemas4–11; every cached view remains unverified for editing until fresh source
+schema7 and read older4–6 caches. Current `libcache` uses schema13 and reads
+schemas4–13; every cached view remains unverified for editing until fresh source
 load. These fields
 do not alter waveform fingerprints or force recooking. Cue saves publish only a
 new target Track/Library view and live markers, without seeking/reloading audio,

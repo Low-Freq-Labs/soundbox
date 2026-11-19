@@ -19,6 +19,7 @@ from soundbox.rekordbox_playlist_store import (PlaylistStore, load_authority, re
     command_requests, validate_collection_pins)
 from soundbox.rekordbox_write import WriteProofError, assert_rekordbox_closed
 from .choices import Menu, exec_transient_menu
+from .task_owner import DeferredCall
 from .trees import (ARTISTS_ROLE, COLLECTION_ROLE, CUSTOM_ROLE, NATIVE_TREE_ROLE,
                     PATH_ROLE, RB_NODE_ROLE, PINNED_TREE_ROLE, sidebar_choice_icon)
 
@@ -145,6 +146,7 @@ class PlaylistEditController(QObject):
         self.factory=store_factory;self.closing=False;self.not_before=0.0
         self.timer=QTimer(self);self.timer.setSingleShot(True);self.timer.setInterval(2000)
         self.timer.timeout.connect(self.pump)
+        self._pump_wakeup=DeferredCall(self._scheduled_pump,self)
         self.tags.idle.connect(self.schedule);self.tags.changed.connect(self.schedule)
 
     @property
@@ -277,13 +279,16 @@ class PlaylistEditController(QObject):
         self.status('Updating playlist…');self.schedule();return True
 
     def schedule(self):
+        if not self.closing:self._pump_wakeup.schedule()
+
+    def _scheduled_pump(self):
         if self.closing:return
-        if self.queue_error():self.status(self.queue_error());return
+        error=self.queue_error()
+        if error:self.status(error);return
         if self.pending:
-            if self.queue_error():self.status(self.queue_error())
-            elif self.pending[0].get('error'):self.status('Rekordbox playlist edit needs attention — '+self.pending[0]['error'])
+            if self.pending[0].get('error'):self.status('Rekordbox playlist edit needs attention — '+self.pending[0]['error'])
             elif not self.tags.playlist_update_status:self.status('Playlist edits pending')
-            QTimer.singleShot(0,self.pump)
+            self.pump()
 
     def pump(self):
         w=self.window
@@ -339,7 +344,7 @@ class PlaylistEditController(QObject):
                                              else None)
                 result['removal_overlay_targets']=targets
             if job['request']['operation'] == 'create_smart':
-                result['library'] = self.tags._loader(Path(lib.source))
+                result['library'] = self.tags.readback_library(lib)
             return result
         def completed(worker):
             if worker.error:self.fail(worker.error, job);return
@@ -463,19 +468,27 @@ class PlaylistEditController(QObject):
         else:w.settings[QUEUE]=previous
 
     def discard(self):
-        if not self.pending or self.tags.owned:return
+        from .intent_review import capture_discard,discard_is_current
+        review=capture_discard(self)
+        if review is None:return False
         w=self.window
         if QMessageBox.question(w,'Discard pending playlist edits',
-                f'Discard {len(self.pending)} pending playlist edit(s)?\nEdits already saved in rekordbox remain saved.',
-                QMessageBox.Yes|QMessageBox.No,QMessageBox.No)!=QMessageBox.Yes:return
+                f'Discard {len(review.jobs)} pending playlist edit(s)?\nEdits already saved in rekordbox remain saved.',
+                QMessageBox.Yes|QMessageBox.No,QMessageBox.No)!=QMessageBox.Yes:return False
+        if not discard_is_current(self,review):
+            w._flash_status('A save started or the pending edits changed; review them and try again.',12)
+            return False
         previous=self.pending;w.settings[QUEUE]=[]
-        if not w._save_state():w.settings[QUEUE]=previous
+        if not w._save_state():
+            w.settings[QUEUE]=previous
+            return False
         else:
             self.timer.stop();self.status('');w._native_pending_changed(rebuild=True)
             w._native_reconcile_source()
+            return True
 
     def stop(self):
-        self.closing=True;self.timer.stop()
+        self.closing=True;self.timer.stop();self._pump_wakeup.stop()
 
 
 class NativePlaylistsMixin:
@@ -695,14 +708,17 @@ class NativePlaylistsMixin:
             active=next((p.pid for p in self.lib.playlists if p.display_path==current[3:]),None)
         if current.startswith('rb:') and active in removed:
             self._stash_view();self._active_native_playlist_id=None
-            self._select_only(self.sb_tree)
-            item=self.sb_tree.topLevelItem(0)
-            if item and item.data(0,COLLECTION_ROLE):
-                self.sb_tree.blockSignals(True)
-                try:self.sb_tree.setCurrentItem(item)
-                finally:self.sb_tree.blockSignals(False)
-            self._show_collection()
-            self._restore_view('sb:Collection')
+            if self.stack.currentIndex() == 1:
+                self._view_key='sb:Collection'
+            else:
+                self._select_only(self.sb_tree)
+                item=self.sb_tree.topLevelItem(0)
+                if item and item.data(0,COLLECTION_ROLE):
+                    self.sb_tree.blockSignals(True)
+                    try:self.sb_tree.setCurrentItem(item)
+                    finally:self.sb_tree.blockSignals(False)
+                self._show_collection()
+                self._restore_view('sb:Collection')
         if rebuild:
             if current.startswith('rb:') and active:
                 updated=next((p for p in presentation.playlists if p.pid==active),None)
@@ -941,6 +957,16 @@ class NativePlaylistsMixin:
         if metadata and (metadata.pending or getattr(metadata,'migration_pending',False)
                          or getattr(metadata,'retirement_pending',False)):
             menu.addSeparator()
+            summary = getattr(metadata, 'background_summary', '')
+            if summary:
+                progress = menu.addAction(summary)
+                progress.setEnabled(False)
+                progress.setToolTip(getattr(tags, 'metadata_update_status', ''))
+            paused=metadata.background_paused
+            pause_scope=(str(self.lib.source),self.lib.source_kind,self.lib.source_library_id)
+            pause=menu.addAction('Resume background song updates' if paused else 'Pause background song updates',
+                lambda:self._set_metadata_background_paused(not paused,pause_scope))
+            pause.setEnabled(not getattr(self,'_state_publication',False))
             retry=menu.addAction('Retry metadata saves',metadata.retry);retry.setEnabled(not physical)
             error=metadata.pending[0].get('error','') if metadata.pending else metadata.queue_error()
             if error:retry.setToolTip(error)

@@ -250,7 +250,8 @@ class TreeDeletionGestures(unittest.TestCase):
         self.assertIn('4000',{row['ID'] for row in self.window._native_presentation().source_playlist_catalog['nodes']})
 
     def test_metadata_and_assignment_retries_preserve_errors_and_guard_physical_worker(self):
-        metadata=SimpleNamespace(pending=[dict(error='exact metadata conflict')],retry=mock.Mock())
+        metadata=SimpleNamespace(pending=[dict(error='exact metadata conflict')],retry=mock.Mock(),
+                                 background_paused=False)
         tags=SimpleNamespace(pending=[dict(error='exact assignment conflict')],retry=mock.Mock(),
                              busy=False,checking=False,owned=True,owner=SimpleNamespace(pending=0))
         self.window.metadata_controller=metadata

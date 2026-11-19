@@ -8,14 +8,18 @@ from uuid import uuid4
 
 from PySide6.QtCore import QObject,QTimer
 
-from soundbox import alias_intents,engine,metadata,metadata_provenance as provenance,source_truth
+from soundbox import alias_intents,engine,metadata,metadata_provenance as provenance,mutation_domain,shared_imports,source_truth
 from soundbox import rekordbox_metadata_store as native
 from soundbox.rekordbox_write import WriteProofError,assert_rekordbox_closed
+from soundbox.state_repository import VerificationChanged
 from .task_owner import TaskOwner
 from .workers import OneShotTask
 
 KEY='pending_metadata_edits'
 ACKS='metadata_receipt_acks'
+PAUSE_KEY='metadata_background_pauses'
+EDITING_DISABLED_REASON='Title and artist saving is unavailable for this library'
+BACKGROUND_PAUSED_STATUS='Background song updates paused'
 _JOB={'id','source','library_id','local_id','native_id','track_uuid','path','field','value','request','retry','error'}
 _BUILDING='soundbox-source-truth-building-v1'
 
@@ -37,11 +41,137 @@ class MetadataController(QObject):
         self.factory=store_factory;self.loader=loader
         self.closing=False;self.not_before=0.0
         self.tasks=TaskOwner(self);self._truth_index=None
-        self._truth_validation=None
+        self._truth_index_owner=None
+        self._truth_observed_proof=None;self._truth_observed_error=None;self._truth_check_pending=False
+        self._truth_observed_owners=();self._truth_error_owners=()
+        self._truth_observed_epoch=None;self._truth_error_epoch=None
+        self._truth_observed_source=None
+        self._truth_static_proof=None
+        self._truth_observed_progress=None
+        self._truth_error_progress=None
         self._alias_validation=None;self._validated_origins=None
         self._derived_dirty={};self._derived_context=None;self._derived_epoch=0;self._derived_frozen=None
+        self._state_commit_pending=False;self._state_commit_error='';self._state_commit_token=None
+        self._attention_message=''
+        self._retirement_ack=None
         self.timer=QTimer(self);self.timer.setSingleShot(True);self.timer.timeout.connect(self.pump)
         self.tags.idle.connect(self.schedule);self.tags.changed.connect(self.schedule)
+
+    def _commit_background_state(self,before,replacements,*,removals=(),committed,failed,message):
+        """Commit detached selected leaves; no source phase advances on admission.
+
+        Older isolated hosts retain synchronous saves. Production restores the
+        staged owners before dispatch, then its coordinator publishes only these
+        leaves after the state worker's durable completion.
+        """
+        w=self.window;commit=getattr(w,'_commit_metadata_state',None);removals=tuple(removals)
+        transfer=self._truth_progress_transfer(before,replacements,removals) if callable(commit) else None
+        def restore():
+            for name,value in before.items():setattr(w,name,value)
+        if not callable(commit):
+            if w._save_state():committed();return True
+            restore();failed();return False
+        restore();self._state_commit_pending=True;token=object();self._state_commit_token=token
+        def saved():
+            if self._state_commit_token is not token:return
+            self._state_commit_token=None;self._state_commit_pending=False;self._state_commit_error=''
+            if transfer is not None:
+                stamp,epoch,progress=transfer;current=self._observed_truth()
+                if (current is not None and self._truth_stamp(*current)==stamp and self._truth_epoch()==epoch
+                        and self._truth_progress(current[0])==progress):self._truth_observed_progress=progress
+            committed()
+        def rejected(error):
+            if self._state_commit_token is not token:return
+            self._state_commit_token=None;self._state_commit_pending=False;self._state_commit_error=message
+            self.timer.stop();self.status(message,attention=True)
+        try:accepted=commit(replacements,removals,saved,rejected)
+        except (OSError,ValueError,RuntimeError) as exc:
+            rejected(exc);return False
+        if not accepted:rejected('State commit was not admitted')
+        return accepted
+
+    def _pause_error(self):
+        pauses=self.window.settings.get(PAUSE_KEY,[])
+        try:
+            if not isinstance(pauses,list) or len(pauses)>16:raise ValueError('Pause scopes')
+            seen=set()
+            for scope in pauses:
+                source_truth._validate_scope(scope)
+                identity=source_truth.scope_key(scope)
+                if scope['kind']!='rekordbox-db' or identity in seen:raise ValueError('Pause binding')
+                seen.add(identity)
+        except (ValueError,TypeError,KeyError):
+            return 'Saved background song-update pause needs attention; intentions are preserved'
+        return ''
+
+    @property
+    def background_paused(self):
+        """An exact source choice, independent of every native write permission."""
+        lib=self.window.lib
+        if not lib or lib.source_kind!='rekordbox-db' or self._pause_error():return False
+        return source_truth.scope(lib) in self.window.settings.get(PAUSE_KEY,[])
+
+    def set_background_paused(self,paused):
+        """Persist one scheduling choice; accepted FIFO work keeps its ownership."""
+        w=self.window;lib=w.lib
+        if (type(paused) is not bool or self._state_commit_pending or self.closing or w._shutting_down or w._state_maintenance
+                or getattr(w,'_state_publication',False) or not lib or lib.source_kind!='rekordbox-db'
+                or not self.tags.verified):return False
+        error=self._pause_error()
+        if error:w._flash_status(error,12);return False
+        scope=source_truth.scope(lib);previous=w.settings.get(PAUSE_KEY)
+        values=w.settings.get(PAUSE_KEY,[])
+        if (scope in values)==paused:return True
+        updated=[*values,scope] if paused else [value for value in values if value!=scope]
+        if len(updated)>16:w._flash_status('Too many saved library pause choices',12);return False
+        if updated:w.settings[PAUSE_KEY]=updated
+        else:w.settings.pop(PAUSE_KEY,None)
+        if not w._save_state():
+            if previous is None:w.settings.pop(PAUSE_KEY,None)
+            else:w.settings[PAUSE_KEY]=previous
+            return False
+        self.timer.stop()
+        self.status(BACKGROUND_PAUSED_STATUS if paused else
+            'Metadata saves pending' if self.pending or self.migration_pending else '')
+        self.schedule();return True
+
+    def _paused_progress_pending(self):
+        descriptor=self.window.settings.get(source_truth.MIGRATION)
+        active=descriptor.get('active') if isinstance(descriptor,dict) else None
+        return bool(isinstance(active,dict) and not descriptor.get('error'))
+
+    def _paused_status(self):
+        if self._state_commit_error:return self._state_commit_error
+        for key in (alias_intents.NEXT,source_truth.MIGRATION):
+            plan=self.window.settings.get(key)
+            if isinstance(plan,dict) and plan.get('error'):return plan['error']
+        return BACKGROUND_PAUSED_STATUS
+
+    def _show_paused_status(self):
+        message=self._paused_status()
+        self.status(message,attention=message!=BACKGROUND_PAUSED_STATUS)
+
+    @property
+    def background_summary(self):
+        """Cheap menu-only progress; never revalidate or scan a library to draw it."""
+        if self.window.lib is None:
+            return ''
+        descriptor = self.window.settings.get(source_truth.MIGRATION)
+        if isinstance(descriptor, dict) and descriptor.get('scope') == source_truth.scope(self.window.lib):
+            order = descriptor.get('order')
+            cursor = descriptor.get('cursor')
+            if isinstance(order, list) and type(cursor) is int and 0 <= cursor <= len(order):
+                phase = 'Paused' if self.background_paused else 'Background'
+                if descriptor.get('error') or self._state_commit_error or self._attention_message:
+                    phase = 'Needs attention'
+                elif cursor == len(order) and descriptor.get('active') is None:
+                    phase = 'Complete'
+                return f'Song updates: {cursor:,} of {len(order):,} · {phase}'
+        if self._attention_message or self._state_commit_error:
+            return 'Song updates: Needs attention'
+        if self.pending:
+            return f'Song details: {len(self.pending):,} save(s) pending'
+        return ''
 
     @property
     def retirement_pending(self):
@@ -64,22 +194,38 @@ class MetadataController(QObject):
     def _resume_receipt_retirement(self):
         w=self.window;ledger=w.settings.get(ACKS,[])
         if (self.closing or w._shutting_down or w._state_maintenance or getattr(w,'_state_publication',False)
-                or self.tasks.pending or self._retirement_error() or not ledger or ledger[0]['error']):return
+                or self._background_state_busy() or self._retirement_error() or not ledger or ledger[0]['error']):return
+        if self._retirement_ack is not None:
+            captured,result=self._retirement_ack;self._retirement_ack=None
+            if ledger[0]!=captured:return
+            error=str(result) if isinstance(result,Exception) else ''
+            updated=[{**captured,'error':error},*ledger[1:]] if error else ledger[1:]
+            before=w.settings;w.settings={**before,ACKS:updated}
+            def committed():
+                if error:self.status('Metadata receipt retirement needs attention',attention=True)
+                else:self.schedule()
+            def failed():
+                w.settings[ACKS]=[{**captured,'error':error or 'Compacted receipt acknowledgement could not be saved'},*ledger[1:]]
+                self.status('Metadata receipt retirement needs storage attention',attention=True)
+            self._commit_background_state({'settings':before},{('settings',ACKS):updated},
+                committed=committed,failed=failed,message='Metadata receipt retirement needs storage attention')
+            return
+        if self.tasks.pending:return
         captured=deepcopy(ledger[0]);entry=captured['entry']
         worker=OneShotTask(lambda:native.retire_acknowledged_receipt(self.tags.data_root,entry),
                            log_label='Acknowledged metadata receipt retirement')
         def completed(task):
             current=w.settings.get(ACKS,[])
-            if not current or current[0]!=captured or getattr(w,'_state_publication',False):return
-            if isinstance(task.result,Exception):
-                w.settings[ACKS]=[{**captured,'error':str(task.result)},*current[1:]]
-                w._save_state();self.status('Metadata receipt retirement needs attention');return
-            w.settings[ACKS]=current[1:]
-            if not w._save_state():
-                w.settings[ACKS]=[{**captured,'error':'Compacted receipt acknowledgement could not be saved'},*current[1:]]
-                self.status('Metadata receipt retirement needs storage attention');return
-            self.schedule()
+            if not current or current[0]!=captured:return
+            self._retirement_ack=(captured,task.result)
+            if self._background_state_busy() or getattr(w,'_state_publication',False):self.schedule()
+            else:self._resume_receipt_retirement()
         self.tasks.adopt(worker,completed);worker.start()
+
+    def _background_state_busy(self):
+        w=self.window
+        return bool(self.tags.source_job_owned or self.tags.prep_priority or w._refresh_worker is not None
+                    or w._device_operation_owned())
 
     def stage_source_scope(self,incoming,*,previous=None,bootstrap=False):
         """Stage RAM only; caller saves source selection and curation together.
@@ -101,6 +247,44 @@ class MetadataController(QObject):
 
     def rollback_source_scope(self,token):
         for attr,value in token.items():setattr(self.window,attr,value)
+
+    def _stage_ack_source_curation(self,incoming,replacements,removals,*,pin_index=None):
+        """Commit changed curation pins with the overlays that own them.
+
+        Publication repeats the normal source guards. Its header must already
+        describe the durable ACK, otherwise retiring one mask causes a second
+        whole-state GUI save during publication.
+        """
+        w=self.window
+        if w.lib is None or source_truth.scope(w.lib)!=source_truth.scope(incoming):
+            raise ValueError('Metadata acknowledgement cannot retarget saved curation')
+        previous=w.settings.get(source_truth.CURATION)
+        if previous is not None and previous.get('active',{}).get('scope')!=source_truth.scope(incoming):
+            raise ValueError('Metadata acknowledgement differs from the saved curation source')
+        fields={'title_overrides':'titles','artist_overrides':'overrides','artist_aliases':'aliases',
+                'custom':'custom','playlist_removals':'removals','playlist_additions':'playlist_additions'}
+        document={key:getattr(w,attr,{}) for key,attr in fields.items()}
+        document['hidden_tracks']={key:getattr(w,'hidden_dates',{}).get(key,'') for key in getattr(w,'hidden',())}
+        document['settings']=w.settings
+        current=source_truth.stage_scope(document,incoming,previous=w.lib,
+                                        pin_index=pin_index)['settings'][source_truth.CURATION]
+        if current==previous:return
+        w.settings[source_truth.CURATION]=current
+        root=('settings',source_truth.CURATION)
+        if (previous is None or current['format']!=previous['format']
+                or current['partitions']!=previous['partitions']
+                or current['active']['scope']!=previous['active']['scope']):
+            replacements[root]=current;return
+        before=previous['active'];after=current['active'];missing=object()
+        for namespace in ('pins','playlist_pins'):
+            for identity in before[namespace].keys()|after[namespace].keys():
+                old=before[namespace].get(identity,missing);new=after[namespace].get(identity,missing)
+                if old==new:continue
+                path=(*root,'active',namespace,identity)
+                if new is missing:removals.append(path)
+                else:replacements[path]=new
+        for namespace in ('unbound','unbound_playlists'):
+            if before[namespace]!=after[namespace]:replacements[(*root,'active',namespace)]=after[namespace]
 
     def stage_native_refresh(self,incoming,*,changed_ids,verified=True):
         """Stage sparse ACK reconciliation; caller saves before publication.
@@ -166,7 +350,7 @@ class MetadataController(QObject):
         w=self.window
         if (not self._derived_dirty or self._derived_context is None or self.tasks.pending or self.closing
                 or w._shutting_down or w._state_maintenance or getattr(w,'_state_publication',False)
-                or not self.tags.verified or not w.lib or self.queue_error()):return False
+                or not self.tags.verified or not w.lib or self.queue_error() or self.background_paused):return False
         scope,context=self._derived_context
         if source_truth.scope(w.lib)!=scope:return False
         if w.settings.get(alias_intents.NEXT) is not None:return False
@@ -215,7 +399,8 @@ class MetadataController(QObject):
         def completed(task):
             if (self.closing or w._shutting_down or not w.lib or source_truth.scope(w.lib)!=scope
                     or getattr(w,'_state_publication',False)):return
-            if isinstance(task.result,Exception):self.status(str(task.result));self.timer.start(2000);return
+            if self.background_paused:self.status(BACKGROUND_PAUSED_STATUS);return
+            if isinstance(task.result,Exception):self.status(str(task.result),attention=True);self.timer.start(2000);return
             if w.settings.get(alias_intents.NEXT) is not None:self.schedule();return
             if (self._derived_context is not context_owner or
                     policy!=(tuple(w.settings.get('title_rules_off',())),tuple(w.settings.get('title_words',())))):
@@ -262,7 +447,7 @@ class MetadataController(QObject):
                 w.settings.update({alias_intents.NEXT:dict(format=alias_intents.FORMAT,id=identity,scope=scope,
                     state='ready',inputs_sha256=plan['inputs_sha256'],edits={},error='',plan=plan),alias_intents.TARGETS:targets})
             if w.settings is not before and not w._save_state():
-                w.settings=before;self.status('Derived metadata needs storage attention');self.timer.start(2000);return
+                w.settings=before;self.status('Derived metadata needs storage attention',attention=True);self.timer.start(2000);return
             for local in accepted:
                 if self._derived_dirty.get(local)==selected[local]:self._derived_dirty.pop(local)
             if not targets and not self.planning_pending and getattr(self.tags,'metadata_update_status','')=='Metadata updates pending':
@@ -281,7 +466,179 @@ class MetadataController(QObject):
         return (descriptor.get('format')==_BUILDING or descriptor.get('active') is not None
                 or descriptor['cursor']<len(descriptor['order']) or bool(descriptor['unresolved']))
 
-    def _migration_error(self):
+    def _observed_truth(self):
+        """Observe durable plan containers once, retaining nested mutation detection.
+
+        The small descriptor changes for ACKs and cursor progress retain these
+        containers. No semantic validation or target copying happens on those
+        GUI turns. Plain isolated hosts keep the original full validation path.
+        """
+        w=self.window;descriptor=w.settings.get(source_truth.MIGRATION)
+        if (not callable(getattr(w,'_commit_metadata_state',None)) or not isinstance(descriptor,dict)
+                or descriptor.get('format')==_BUILDING):return None
+        targets=w.settings.get(source_truth.TARGETS)
+        if not isinstance(targets,dict):return None
+        for name,kind in (('order',list),('unresolved',list),('scope',dict)):
+            if not isinstance(descriptor.get(name),kind):return None
+        observed_targets=mutation_domain.observe(targets)
+        containers={name:mutation_domain.observe(descriptor[name]) for name in ('order','unresolved','scope')}
+        if observed_targets is not targets or any(containers[name] is not descriptor[name] for name in containers):
+            descriptor={**descriptor,**containers}
+            w.settings={**w.settings,source_truth.MIGRATION:descriptor,source_truth.TARGETS:observed_targets}
+        return descriptor,observed_targets
+
+    @staticmethod
+    def _truth_stamp(descriptor,targets):
+        # Scalar descriptor identity is checked even if a caller edits its
+        # ordinary dict in place; containers carry recursive revision stamps.
+        return (*(item for name in ('format','id','inputs_sha256')
+                  for item in (type(descriptor.get(name)),descriptor.get(name))),
+            *(value for name in ('order','unresolved','scope')
+              for value in (id(descriptor[name]),descriptor[name].revision)),id(targets),targets.revision)
+
+    def _truth_epoch(self):
+        repository=getattr(self.window,'_state_repository',None)
+        return (repository,getattr(repository,'generation',None),getattr(getattr(repository,'area',None),'generation',None))
+
+    def _truth_source_context(self):
+        library=self.window.lib
+        return (str(library.source),library.source_kind,library.source_library_id) if library else None
+
+    @staticmethod
+    def _static_truth_identity(descriptor,targets,context):
+        if context is None:return None
+        owners=(targets,*(descriptor.get(name) for name in ('order','unresolved','scope')))
+        if tuple(type(value) for value in owners)!=(mutation_domain.FrozenDict,
+                mutation_domain.FrozenList,mutation_domain.FrozenList,mutation_domain.FrozenDict):return None
+        scope=owners[3]
+        if context[1]!=(scope.get('source'),scope.get('kind'),scope.get('library_id')):return None
+        scalars=tuple((type(descriptor.get(name)),descriptor.get(name))
+                      for name in ('format','id','inputs_sha256'))
+        return context,scalars,owners
+
+    @classmethod
+    def _same_static_truth(cls,proof,descriptor,targets,context):
+        current=cls._static_truth_identity(descriptor,targets,context)
+        return bool(proof is not None and current is not None and proof[:2]==current[:2]
+                    and all(left is right for left,right in zip(proof[2],current[2],strict=True)))
+
+    @staticmethod
+    def _truth_progress(descriptor):
+        cursor=descriptor.get('cursor');active=descriptor.get('active')
+        if type(cursor) is not int:raise ValueError('Invalid frozen progress')
+        if active is None:return cursor,None
+        if not isinstance(active,dict) or not isinstance(active.get('operations'),dict) or len(active['operations'])>2:
+            raise ValueError('Invalid frozen active pair')
+        return cursor,(active.get('target'),tuple(sorted(active['operations'].items())))
+
+    def _truth_progress_transfer(self,before,replacements,removals):
+        """Carry a proven domain only across the exact durable small progress delta."""
+        old=before.get('settings',{});descriptor=old.get(source_truth.MIGRATION)
+        targets=old.get(source_truth.TARGETS)
+        if not isinstance(descriptor,dict) or not isinstance(targets,mutation_domain.ObservedDict):return None
+        try:
+            stamp=self._truth_stamp(descriptor,targets);epoch=self._truth_epoch()
+            if (stamp!=self._truth_observed_proof or epoch!=self._truth_observed_epoch
+                    or self._truth_observed_source!=self._truth_source_context()
+                    or self._truth_progress(descriptor)!=self._truth_observed_progress):return None
+            expected={**descriptor,'active':deepcopy(descriptor.get('active'))}
+            root=('settings',source_truth.MIGRATION)
+            for path,value in replacements.items():
+                if path[:2]!=root:continue
+                if path[2:] in (('cursor',),('active',)):expected[path[2]]=deepcopy(value)
+                elif path[2:]==('active','operations') and expected['active'] is not None:
+                    expected['active']['operations']=deepcopy(value)
+                else:return None
+            if any(path[:2]==root for path in removals):return None
+            current=self.window.settings.get(source_truth.MIGRATION)
+            current_targets=self.window.settings.get(source_truth.TARGETS)
+            if self._truth_stamp(current,current_targets)!=stamp or self._truth_progress(current)!=self._truth_progress(expected):return None
+            return stamp,epoch,self._truth_progress(expected)
+        except (ValueError,KeyError,TypeError,AttributeError):return None
+
+    @staticmethod
+    def _truth_saved_values(descriptor,targets):
+        return {('settings',source_truth.TARGETS):targets,**{
+            ('settings',source_truth.MIGRATION,name):descriptor[name]
+            for name in ('format','id','inputs_sha256','order','unresolved','scope','cursor','active')}}
+
+    @classmethod
+    def _snapshot_truth(cls,descriptor,targets,stamp,*,proof=None,context=None):
+        if cls._truth_stamp(descriptor,targets)!=stamp:return None
+        try:
+            frozen={name:descriptor.get(name) for name in ('format','id','inputs_sha256','cursor','active')}
+            frozen.update({name:descriptor[name].frozen_snapshot() for name in ('order','unresolved','scope')})
+            detached=targets.frozen_snapshot()
+        except mutation_domain.MutationChanged:return None
+        except (RuntimeError,KeyError):
+            if cls._truth_stamp(descriptor,targets)!=stamp:return None
+            raise
+        if cls._truth_stamp(descriptor,targets)!=stamp:return None
+        if cls._same_static_truth(proof,frozen,detached,context):source_truth.validate_progress(frozen)
+        else:source_truth.validate(frozen,detached)
+        return frozen,detached
+
+    def _ensure_truth_validation(self):
+        try:observed=self._observed_truth()
+        except (ValueError,TypeError):
+            self.status('Saved SoundBox source truth needs attention; all intentions are preserved',attention=True);return False
+        if observed is None:
+            self._truth_static_proof=None
+            return True
+        descriptor,targets=observed;stamp=self._truth_stamp(descriptor,targets);epoch=self._truth_epoch()
+        context=(epoch,self._truth_source_context())
+        if self._truth_static_proof is not None and self._truth_static_proof[0]!=context:
+            self._truth_static_proof=None
+        progress=self._truth_progress(descriptor)
+        if (self._truth_observed_proof==stamp and self._truth_observed_epoch==epoch
+                and self._truth_observed_source==self._truth_source_context()
+                and self._truth_observed_progress==progress):return True
+        if (self._truth_observed_error and self._truth_observed_error[0]==stamp and self._truth_error_epoch==epoch
+                and self._truth_error_progress==progress):
+            self.status(self._truth_observed_error[1],attention=True);return False
+        if self._truth_check_pending or self.tasks.pending:return False
+        self._truth_check_pending=True
+        captured={**descriptor,'active':deepcopy(descriptor.get('active'))}
+        def validate():
+            # Snapshotting and complete validation run on the worker. A change
+            # during snapshot invalidates its version; live GUI containers are
+            # never passed to the semantic validator.
+            checked=self._snapshot_truth(captured,targets,stamp,proof=self._truth_static_proof,context=context)
+            if checked is None:return None
+            proof=epoch[0].verify_selected_values(self._truth_saved_values(*checked))
+            if not epoch[0].current_verification(proof):return None
+            return stamp,proof,self._static_truth_identity(*checked,context)
+        worker=OneShotTask(validate,log_label='Frozen metadata intention validation')
+        def completed(task):
+            self._truth_check_pending=False
+            if self.closing or self.window._shutting_down or self.window._state_maintenance:return
+            current=self._observed_truth()
+            if (current is None or self._truth_stamp(*current)!=stamp or self._truth_epoch()!=epoch
+                    or (self._truth_epoch(),self._truth_source_context())!=context
+                    or self._truth_progress(current[0])!=progress):
+                self.schedule();return
+            if isinstance(task.result,Exception):
+                if isinstance(task.result,VerificationChanged):self.schedule();return
+                self._truth_observed_error=(stamp,'Saved SoundBox source truth needs attention; all intentions are preserved')
+                self._truth_error_owners=(targets,*(captured[name] for name in ('order','unresolved','scope')))
+                self._truth_error_epoch=epoch
+                self._truth_error_progress=progress
+                self._truth_static_proof=None
+                self.status(self._truth_observed_error[1],attention=True);return
+            if task.result is not None and task.result[0]==stamp and epoch[0].current_verification(task.result[1]):
+                self._truth_static_proof=task.result[2]
+                self._truth_observed_source=context[1]
+                self._truth_observed_proof=stamp;self._truth_observed_error=None
+                self._truth_observed_owners=(targets,*(captured[name] for name in ('order','unresolved','scope')))
+                self._truth_error_owners=()
+                self._truth_observed_epoch=epoch;self._truth_error_epoch=None;self._truth_error_progress=None
+                self._truth_observed_progress=progress
+            self.schedule()
+        self.tasks.adopt(worker,completed);worker.start();return False
+
+    def _migration_error(self,*,force_truth=False):
+        pause_error=self._pause_error()
+        if pause_error:return pause_error
         try:
             origins=self.window.settings.get(alias_intents.ORIGINS,{})
             next_plan=self.window.settings.get(alias_intents.NEXT)
@@ -321,9 +678,26 @@ class MetadataController(QObject):
                 if active is not None and (not isinstance(active,dict) or cursor>=len(order)
                         or active.get('target')!=order[cursor] or not isinstance(active.get('operations'),dict)):
                     raise ValueError('Active pair')
-                key=(id(descriptor),id(targets))
-                if self._truth_validation!=key:
-                    source_truth.validate(descriptor,targets);self._truth_validation=key
+                if active is not None:
+                    operations=active['operations']
+                    if (len(operations)>2 or set(operations)-{'title','artist'}
+                            or any(type(value) is not str or len(value)!=32
+                                   or any(c not in '0123456789abcdef' for c in value)
+                                   for value in operations.values())):raise ValueError('Active operation')
+                observed=self._observed_truth()
+                if observed is not None:
+                    descriptor,targets=observed;stamp=self._truth_stamp(descriptor,targets)
+                    if (self._truth_observed_error and self._truth_observed_error[0]==stamp
+                            and self._truth_error_epoch==self._truth_epoch()
+                            and self._truth_error_progress==self._truth_progress(descriptor)):
+                        return self._truth_observed_error[1]
+                    if (stamp==self._truth_observed_proof and self._truth_epoch()==self._truth_observed_epoch
+                            and self._truth_progress(descriptor)!=self._truth_observed_progress):
+                        raise ValueError('Frozen progress changed outside its durable continuation')
+                else:
+                    # Mutable fixture/legacy hosts have no revision proof.
+                    # Their full validator must see in-place changes too.
+                    source_truth.validate(descriptor,targets)
         except (ValueError,KeyError,TypeError,AttributeError):return 'Saved SoundBox source truth needs attention; all intentions are preserved'
         return ''
 
@@ -346,12 +720,14 @@ class MetadataController(QObject):
                 if value is None:w.settings.pop(name,None)
                 else:w.settings[name]=value
             return False
-        self.status('Preparing frozen SoundBox metadata');self._resume_source_truth_build();return True
+        self.status(BACKGROUND_PAUSED_STATUS if self.background_paused else
+            'Preparing frozen SoundBox metadata');self._resume_source_truth_build();return True
 
     def _resume_source_truth_build(self):
         w=self.window;descriptor=w.settings.get(source_truth.MIGRATION)
         if (self.closing or w._state_maintenance or getattr(w,'_state_publication',False) or self.tasks.pending
-                or not descriptor or descriptor.get('format')!=_BUILDING or descriptor.get('error')):return
+                or not descriptor or descriptor.get('format')!=_BUILDING or descriptor.get('error')
+                or self.background_paused):return
         try:
             if not w.lib or source_truth.scope(w.lib)!=descriptor['scope']:return
             record=w.settings[source_truth.TARGETS][descriptor['input_key']]
@@ -359,7 +735,7 @@ class MetadataController(QObject):
             if record['format']!=_BUILDING or hashlib.sha256(raw).hexdigest()!=descriptor['inputs_sha256']:
                 raise ValueError('Frozen metadata inputs changed')
         except (ValueError,TypeError,KeyError) as exc:
-            w.settings[source_truth.MIGRATION]={**descriptor,'error':str(exc)};w._save_state();self.status(str(exc));return
+            w.settings[source_truth.MIGRATION]={**descriptor,'error':str(exc)};w._save_state();self.status(str(exc),attention=True);return
         captured_id=descriptor['id'];captured_sha=descriptor['inputs_sha256'];captured_scope=deepcopy(descriptor['scope'])
         captured_origins=deepcopy(w.settings.get(alias_intents.ORIGINS,{}))
         def build():
@@ -378,9 +754,10 @@ class MetadataController(QObject):
                     or not isinstance(current,dict) or current.get('format')!=_BUILDING
                     or current.get('id')!=captured_id or current.get('inputs_sha256')!=captured_sha
                     or current.get('scope')!=captured_scope):return
-            if self._migration_error():self.status(self._migration_error());return
+            if self.background_paused:self.status(BACKGROUND_PAUSED_STATUS);return
+            if self._migration_error():self.status(self._migration_error(),attention=True);return
             if isinstance(task.result,Exception):
-                w.settings[source_truth.MIGRATION]={**current,'error':str(task.result)};w._save_state();self.status(str(task.result));return
+                w.settings[source_truth.MIGRATION]={**current,'error':str(task.result)};w._save_state();self.status(str(task.result),attention=True);return
             descriptor,targets,origins=task.result
             for row in targets.values():
                 edits=current.get('edits',{}).get(row['local_id'])
@@ -397,11 +774,11 @@ class MetadataController(QObject):
                 w.settings[source_truth.TARGETS]=previous_targets
                 if previous_origins is None:w.settings.pop(alias_intents.ORIGINS,None)
                 else:w.settings[alias_intents.ORIGINS]=previous_origins
-                self.status('Frozen metadata plan needs storage attention');return
+                self.status('Frozen metadata plan needs storage attention',attention=True);return
             unresolved=len(descriptor['unresolved'])
             self.status('Frozen SoundBox metadata pending' if descriptor['order'] else
                 f'No available native changes; {unresolved} unresolved saved entries preserved' if unresolved else
-                'Native metadata already matches SoundBox')
+                'Native metadata already matches SoundBox',attention=bool(unresolved))
             self.schedule()
         self.tasks.adopt(worker,completed);worker.start()
 
@@ -412,11 +789,12 @@ class MetadataController(QObject):
         if self.queue_error() or self._migration_error():return result
         if (descriptor and descriptor.get('format')!=_BUILDING and w.lib
                 and descriptor.get('scope')==source_truth.scope(w.lib)):
-            key=(id(targets),descriptor.get('id'))
+            key=(id(targets),getattr(targets,'revision',None),descriptor.get('id'))
             if self._truth_index is None or self._truth_index[0]!=key:
                 self._truth_index=(key,{targets[value]['local_id']:(index,targets[value])
                     for index,value in enumerate(descriptor.get('order',[])) if value in targets
                     and isinstance(targets[value],dict) and isinstance(targets[value].get('local_id'),str)})
+                self._truth_index_owner=targets
             value=self._truth_index[1].get(track.track_id)
             if value and value[0]>=descriptor.get('cursor',0):
                 row=value[1]
@@ -593,7 +971,8 @@ class MetadataController(QObject):
     def _resume_alias_build(self):
         w=self.window;next_plan=w.settings.get(alias_intents.NEXT)
         if (not next_plan or next_plan['state']!='building' or next_plan['error'] or self.tasks.pending
-                or self.closing or w._shutting_down or w._state_maintenance or getattr(w,'_state_publication',False)):return
+                or self.closing or w._shutting_down or w._state_maintenance or getattr(w,'_state_publication',False)
+                or self.background_paused):return
         if not w.lib or source_truth.scope(w.lib)!=next_plan['scope']:return
         captured=deepcopy(next_plan);raw=source_truth._encode(w.settings[alias_intents.TARGETS]['inputs:'+captured['id']]['raw'])
         worker=OneShotTask(lambda:alias_intents.build(raw,migration_id=captured['id']),log_label='Frozen native artist alias plan')
@@ -603,9 +982,10 @@ class MetadataController(QObject):
                 self.schedule();return
             if self.closing or w._shutting_down or getattr(w,'_state_publication',False):return
             if not w.lib or source_truth.scope(w.lib)!=captured['scope']:return
-            if self._migration_error():self.status(self._migration_error());return
+            if self.background_paused:self.status(BACKGROUND_PAUSED_STATUS);return
+            if self._migration_error():self.status(self._migration_error(),attention=True);return
             if isinstance(task.result,Exception):
-                w.settings[alias_intents.NEXT]={**current,'error':str(task.result)};w._save_state();self.status(str(task.result));return
+                w.settings[alias_intents.NEXT]={**current,'error':str(task.result)};w._save_state();self.status(str(task.result),attention=True);return
             descriptor,targets,origins=task.result
             alias_intents.apply_edits(descriptor,targets,current['edits'])
             before=w.settings
@@ -621,7 +1001,7 @@ class MetadataController(QObject):
             if not w._save_state():
                 w.settings={**before,alias_intents.NEXT:{**current,'error':'Artist alias plan could not be saved'}}
                 w.titles=before_titles
-                self.status('Artist alias plan needs storage attention');return
+                self.status('Artist alias plan needs storage attention',attention=True);return
             w._invalidate_rows()
             reload=getattr(w,'_reload_current_view',None)
             if reload:reload()
@@ -630,7 +1010,7 @@ class MetadataController(QObject):
 
     def _promote_alias(self):
         w=self.window;next_plan=w.settings.get(alias_intents.NEXT)
-        if not next_plan or next_plan['state']!='ready' or self.pending:return False
+        if not next_plan or next_plan['state']!='ready' or self.pending or self.background_paused:return False
         if not w.lib or source_truth.scope(w.lib)!=next_plan['scope']:return False
         current=w.settings.get(source_truth.MIGRATION)
         if current and current.get('active') and current['active']['operations']:return False
@@ -638,20 +1018,26 @@ class MetadataController(QObject):
         before=w.settings
         w.settings={**before,source_truth.MIGRATION:descriptor,source_truth.TARGETS:targets}
         w.settings.pop(alias_intents.NEXT,None);w.settings.pop(alias_intents.TARGETS,None)
-        if not w._save_state():w.settings=before;self.status('Artist alias promotion needs storage attention');return False
+        if not w._save_state():w.settings=before;self.status('Artist alias promotion needs storage attention',attention=True);return False
         self.schedule();return True
 
     def _source_truth_step(self):
         w=self.window;descriptor=w.settings.get(source_truth.MIGRATION)
         if w._state_maintenance or getattr(w,'_state_publication',False):return False
+        if self._background_state_busy():self.timer.start(2000);return True
         if descriptor is None:return False
-        if self._migration_error():self.status(self._migration_error());return True
-        if descriptor.get('format')==_BUILDING:self._resume_source_truth_build();return True
+        if not self._ensure_truth_validation():return True
+        descriptor=w.settings.get(source_truth.MIGRATION)
+        error=self._migration_error(force_truth=True)
+        if error:self.status(error,attention=True);return True
+        if descriptor.get('format')==_BUILDING:
+            if self.background_paused:self.status(BACKGROUND_PAUSED_STATUS)
+            else:self._resume_source_truth_build()
+            return True
         if not self.migration_pending:return False
-        if descriptor.get('error'):self.status(descriptor['error']);return True
+        if descriptor.get('error'):self.status(descriptor['error'],attention=True);return True
         targets=w.settings.get(source_truth.TARGETS,{})
         try:
-            source_truth.validate(descriptor,targets)
             if not w.lib or source_truth.scope(w.lib)!=descriptor['scope']:return True
             if descriptor['active'] is not None:
                 if descriptor['active']['operations']:
@@ -662,18 +1048,25 @@ class MetadataController(QObject):
                     track.source_native_path or str(track.path))==(target['native_id'],target['uuid'],target['path'])]
                 if len(matches)!=1 or (matches[0].name,matches[0].artist)!=(target['title'],target['artist']):
                     raise ValueError('The title or artist differs from SoundBox. Retry to save the preserved values.')
-                previous=descriptor;descriptor={**descriptor,'cursor':descriptor['cursor']+1,'active':None}
-                w.settings[source_truth.MIGRATION]=descriptor
-                if not w._save_state():w.settings[source_truth.MIGRATION]=previous;self.status('Source metadata progress could not be saved');return True
-                if descriptor['cursor']==len(descriptor['order']):
-                    unresolved=len(descriptor.get('unresolved',[]))
-                    self.status(f'Available native metadata saved; {unresolved} unresolved saved entries preserved'
-                                if unresolved else 'Frozen SoundBox metadata saved')
-                    if self._derived_dirty:self.schedule()
-                    return True
-            if descriptor['cursor']==len(descriptor['order']):
-                self.status(f"{len(descriptor['unresolved'])} unresolved saved entries preserved; native identities need attention")
+                before=w.settings;descriptor={**descriptor,'cursor':descriptor['cursor']+1,'active':None}
+                w.settings={**before,source_truth.MIGRATION:descriptor}
+                def advanced():
+                    if self.background_paused:self._show_paused_status()
+                    elif descriptor['cursor']==len(descriptor['order']):
+                        unresolved=len(descriptor.get('unresolved',[]))
+                        self.status(f'Available native metadata saved; {unresolved} unresolved saved entries preserved'
+                                    if unresolved else 'Frozen SoundBox metadata saved',attention=bool(unresolved))
+                    self.schedule()
+                self._commit_background_state({'settings':before},
+                    {('settings',source_truth.MIGRATION,'cursor'):descriptor['cursor'],
+                     ('settings',source_truth.MIGRATION,'active'):None},committed=advanced,
+                    failed=lambda:self.status('Source metadata progress could not be saved',attention=True),
+                    message='Source metadata progress could not be saved')
                 return True
+            if descriptor['cursor']==len(descriptor['order']):
+                self.status(f"{len(descriptor['unresolved'])} unresolved saved entries preserved; native identities need attention",attention=True)
+                return True
+            if self.background_paused:self.status(BACKGROUND_PAUSED_STATUS);return True
             target_key=descriptor['order'][descriptor['cursor']];target=targets[target_key]
             if target['info']:raise ValueError('Frozen Track Info fields need their separate native save profile')
             queue=[];operations={}
@@ -685,17 +1078,15 @@ class MetadataController(QObject):
                 if target.get('curation',{}).get(field) is not None:
                     queue[-1]['curation']=target['curation'][field]
             if not queue:raise ValueError('Frozen metadata target has no supported changes')
-            previous_descriptor=w.settings[source_truth.MIGRATION];previous_queue=w.settings.get(KEY)
-            w.settings[source_truth.MIGRATION]={**descriptor,'active':dict(target=target_key,operations=operations)}
-            w.settings[KEY]=queue
-            if not w._save_state():
-                w.settings[source_truth.MIGRATION]=previous_descriptor
-                if previous_queue is None:w.settings.pop(KEY,None)
-                else:w.settings[KEY]=previous_queue
-                self.status('Frozen metadata pair could not be queued');return True
-            self.schedule();return True
+            before=w.settings;active=dict(target=target_key,operations=operations)
+            w.settings={**before,source_truth.MIGRATION:{**descriptor,'active':active},KEY:queue}
+            self._commit_background_state({'settings':before},
+                {('settings',source_truth.MIGRATION,'active'):active,('settings',KEY):queue},
+                committed=self.schedule,failed=lambda:self.status('Frozen metadata pair could not be queued',attention=True),
+                message='Frozen metadata pair could not be queued')
+            return True
         except (ValueError,KeyError,TypeError) as exc:
-            w.settings[source_truth.MIGRATION]={**descriptor,'error':str(exc)};w._save_state();self.status(str(exc));return True
+            w.settings[source_truth.MIGRATION]={**descriptor,'error':str(exc)};w._save_state();self.status(str(exc),attention=True);return True
 
     @property
     def pending(self):
@@ -703,6 +1094,7 @@ class MetadataController(QObject):
         return value if isinstance(value,list) else []
 
     def queue_error(self):
+        if self._state_commit_error:return self._state_commit_error
         if self._retirement_error():return self._retirement_error()
         try:
             queue=self.window.settings.get(KEY,[])
@@ -740,18 +1132,24 @@ class MetadataController(QObject):
         A native request or active worker still uses the ordinary drain gate.
         Unstarted read-only derivation is reconstructed on the next verified
         source read; durable curation and frozen publication intentions remain.
-        This exception is only for a verified source without metadata authority.
+        A scoped pause can also retain an idle frozen backlog. Explicit queued
+        edits and a pair already admitted to the FIFO must still drain normally.
         """
         if self.queue_error():return False
-        if (self.factory or self.tasks.pending or self.tags.busy
+        if (self._state_commit_pending or self.tasks.pending or self.tags.busy
                 or self.window.settings.get(ACKS)
                 or any(job.get('request') is not None for job in self.pending)):
             return False
-        return self.reason()=='Native metadata editing requires separate acceptance for this library'
+        if self.background_paused:
+            return bool(not self.pending and not self._paused_progress_pending()
+                and self._paused_status()==BACKGROUND_PAUSED_STATUS)
+        if self.factory:return False
+        return self.reason()==EDITING_DISABLED_REASON
 
     def reason(self):
         w=self.window;lib=w.lib
         if self.queue_error():return self.queue_error()
+        if self._state_commit_pending:return 'Saving song updates…'
         if self.closing or w._shutting_down or w._state_maintenance or getattr(w,'_state_publication',False):
             return 'Library operation in progress'
         if not lib or lib.source_kind!='rekordbox-db' or not self.tags.verified:return 'Refresh the native library before editing metadata'
@@ -764,7 +1162,7 @@ class MetadataController(QObject):
                     or plan.get('active') or plan.get('unresolved') or plan.get('cursor',0)<len(plan.get('order',[]))):
                 return 'Switch to the original library to finish its metadata saves'
         if not self.factory and native.load_authority(self.tags.data_root/'rekordbox-metadata-authority.json',
-                lib.source,lib.source_library_id) is None:return 'Native metadata editing requires separate acceptance for this library'
+                lib.source,lib.source_library_id) is None:return EDITING_DISABLED_REASON
         return ''
 
     def _store(self,lib):
@@ -773,6 +1171,10 @@ class MetadataController(QObject):
 
     def _readback(self,previous):
         if self.loader is not None:return self.loader(Path(previous.source))
+        reader=getattr(self.window,'native_reader',None)
+        if reader is not None:return reader.read_metadata(previous)
+        if self.factory is None:
+            raise RuntimeError('The background native reader is unavailable; restart SoundBox before retrying metadata saves')
         from soundbox import rekordbox_db
         return rekordbox_db.load_metadata_readback(previous)
 
@@ -917,11 +1319,23 @@ class MetadataController(QObject):
         if reload:QTimer.singleShot(0,w,reload)
         self.status('Metadata saves pending' if queue else '');self.schedule();return True
 
-    def status(self,message):
+    def status(self,message,*,attention=False):
+        previous=self._attention_message
+        # A paused scheduler may synchronously run from changed.emit(). That
+        # scheduling preference cannot dismiss a saved-state failure notice.
+        if attention:self._attention_message=message
+        elif message!=BACKGROUND_PAUSED_STATUS:self._attention_message=''
         if getattr(self.tags,'metadata_update_status','')!=message:
             self.tags.metadata_update_status=message;self.tags.changed.emit()
+        if attention and message and message!=previous:
+            getattr(self.window,'_background_notice',self.window._flash_status)(str(message),12)
 
     def schedule(self):
+        if self.closing or self.window._shutting_down or self._state_commit_pending:return
+        if self._retirement_ack is not None and not self._background_state_busy():
+            self.timer.start(0);return
+        if self.background_paused and not self.pending and not self.window.settings.get(ACKS) and not self._paused_progress_pending():
+            self._show_paused_status();return
         if not self.closing and (self.pending or self.migration_pending or self.window.settings.get(ACKS)) and not self.timer.isActive():
             self.timer.start(max(0,int((self.not_before-time.monotonic())*1000)))
 
@@ -935,8 +1349,9 @@ class MetadataController(QObject):
             queue=list(self.pending);queue[index]={**queue[index],'error':str(message)}
             if companion is not None:queue[index]['companion_conflict']=companion
             self.window.settings[KEY]=queue;self.window._save_state()
-            self.status('Metadata save needs attention — '+str(message))
-        self.window._flash_status(str(message),12)
+            self.status('Metadata save needs attention — '+str(message),attention=True)
+        else:
+            getattr(self.window,'_background_notice',self.window._flash_status)(str(message),12)
 
     def _expected_companion(self,job):
         w=self.window;field='artist' if job['field']=='title' else 'title'
@@ -972,20 +1387,50 @@ class MetadataController(QObject):
                     return not row['error'] and field in row['fields']
         return False
 
+    def _background_migration_wait(self):
+        """Yield unstarted frozen-backlog work while the user is browsing.
+
+        Captured requests, committed ACKs and explicit edits keep their ordinary
+        completion path; input never cancels a source operation in flight.
+        """
+        delay=getattr(self.window,'_background_library_not_before',0)-time.monotonic()
+        if delay<=0:return False
+        descriptor=self.window.settings.get(source_truth.MIGRATION)
+        if not descriptor:return False
+        if self.pending:
+            head=self.pending[0]
+            if (head['request'] is not None or head['id'] not in
+                    (descriptor.get('active') or {}).get('operations',{}).values()):return False
+        elif not self.migration_pending:return False
+        self.timer.start(max(1,int(delay*1000)+1));return True
+
     def pump(self):
         w=self.window
-        if self.closing or w._shutting_down:return
+        if self.closing or w._shutting_down or self._state_commit_pending:return
+        if self._state_commit_error:self.status(self._state_commit_error,attention=True);return
         if w._state_maintenance or getattr(w,'_state_publication',False):
             if self.pending or self.migration_pending or w.settings.get(ACKS):self.timer.start(2000)
             return
-        if self._retirement_error():self.status(self._retirement_error());return
+        if self._background_state_busy():
+            if self.pending or self.migration_pending or w.settings.get(ACKS):self.timer.start(2000)
+            return
+        if self._retirement_error():self.status(self._retirement_error(),attention=True);return
         if w.settings.get(ACKS):
+            error=w.settings[ACKS][0]['error']
+            if error:
+                self.status('Metadata receipt retirement needs attention — '+error,attention=True);return
             self._resume_receipt_retirement();return
         descriptor=w.settings.get(source_truth.MIGRATION)
-        if self._migration_error():self.status(self._migration_error());return
+        if self._migration_error():self.status(self._migration_error(),attention=True);return
+        if self.queue_error():self.status(self.queue_error(),attention=True);return
+        if self.background_paused and not self.pending:
+            if self._paused_progress_pending():self._source_truth_step()
+            self._show_paused_status();return
+        if self._background_migration_wait():return
+        if not self._ensure_truth_validation():return
         next_plan=w.settings.get(alias_intents.NEXT)
         if next_plan and next_plan['error']:
-            self.status(next_plan['error']);return
+            self.status(next_plan['error'],attention=True);return
         if next_plan and next_plan['state']=='building':self._resume_alias_build();return
         if next_plan and not self.pending:
             self._promote_alias();return
@@ -993,18 +1438,20 @@ class MetadataController(QObject):
         if not self.pending:
             if self._resume_derived():return
             self._source_truth_step();return
-        if self.queue_error():self.status(self.queue_error());return
-        if self.pending[0]['error']:return
+        if self.pending[0]['error']:
+            self.status('Metadata save needs attention — '+self.pending[0]['error'],attention=True);return
         if (self.tags.source_job_owned or self.tags.prep_priority or w._refresh_worker is not None
                 or w._state_maintenance or w._device_operation_owned()):self.timer.start(2000);return
         imports=getattr(w,'shared_import_controller',None)
         if imports and imports.source_priority:self.timer.start(2000);return
         reason=self.reason()
-        if reason:self.status(reason);return
+        if reason:self.status(reason,attention=True);return
         if time.monotonic()<self.not_before:self.schedule();return
         job=deepcopy(self.pending[0]);lib=w.lib
+        bindings_owner=w.settings.get(shared_imports.BINDINGS)
+        captured_bindings=deepcopy(bindings_owner) if bindings_owner is not None else None
         if (str(lib.source),lib.source_library_id)!=(job['source'],job['library_id']):
-            self.status('Switch to the original library to finish its metadata saves');return
+            self.status('Switch to the original library to finish its metadata saves',attention=True);return
         if job['request'] is None and any((pending.get('source'),pending.get('library_id'))==(job['source'],job['library_id'])
                 and pending.get(field)==job['local_id'] and not pending.get('error') and pending.get('state')!='failed'
                 for key,field in (('analysis_jobs','track_id'),('native_analysis_jobs','local_id'))
@@ -1028,13 +1475,52 @@ class MetadataController(QObject):
             origins=w.settings.get(alias_intents.ORIGINS,{})
             matches=[row for row in origins.values() if row['scope']==source_truth.scope(lib)
                      and row['local_id']==job['local_id'] and not row['uuid'] and row['path']==job['path']]
+            replacements={('settings',KEY):queue}
             if len(matches)==1:
                 row={**matches[0],'native_id':track.native_id,'uuid':track.source_uuid,
                      'path':track.source_native_path or str(track.path),'native_artist':track.artist,'native_title':track.name}
-                w.settings[alias_intents.ORIGINS]={**origins,alias_intents.key(row['scope'],row):row}
-            if not w._save_state():w.settings=before_settings;self.fail(job,'The registered metadata binding could not be saved');return
-            self.schedule();return
+                identity=alias_intents.key(row['scope'],row)
+                w.settings[alias_intents.ORIGINS]={**origins,identity:row}
+                replacements[('settings',alias_intents.ORIGINS,identity)]=row
+            self._commit_background_state({'settings':before_settings},replacements,
+                committed=self.schedule,failed=lambda:self.fail(job,'The registered metadata binding could not be saved'),
+                message='The registered metadata binding could not be saved; retry after fixing storage')
+            return
+        observed_truth=self._observed_truth()
+        truth_context=None
+        if observed_truth is not None:
+            current,truth_targets=observed_truth
+            truth_context=(current,{**current,'active':deepcopy(current.get('active'))},truth_targets,
+                           self._truth_stamp(current,truth_targets),self._truth_epoch(),self._truth_source_context())
         def work():
+            if truth_context is not None:
+                owner,current,truth_targets,stamp,epoch,source_context=truth_context
+                context=(epoch,source_context)
+                def same_domain():
+                    return (self._truth_epoch()==epoch and self._truth_source_context()==source_context
+                        and w.settings.get(source_truth.MIGRATION) is owner
+                        and w.settings.get(source_truth.TARGETS) is truth_targets
+                        and owner.get('cursor')==current.get('cursor') and owner.get('active')==current.get('active')
+                        and self._truth_stamp(owner,truth_targets)==stamp)
+                checked=self._snapshot_truth(current,truth_targets,stamp,
+                    proof=self._truth_static_proof,context=context) if same_domain() else None
+                if checked is None or not same_domain():
+                    raise WriteProofError('Saved metadata intentions changed before writing; retry to verify the preserved values')
+                frozen,detached=checked
+                try:verification=epoch[0].verify_selected_values(self._truth_saved_values(frozen,detached))
+                except VerificationChanged:return dict(validation_retry=True)
+                if not epoch[0].current_verification(verification):return dict(validation_retry=True)
+                if not same_domain():
+                    raise WriteProofError('Saved metadata intentions changed before writing; retry to verify the preserved values')
+                self._truth_static_proof=self._static_truth_identity(frozen,detached,context)
+                if frozen['scope']!=dict(source=job['source'],kind='rekordbox-db',library_id=job['library_id']):
+                    raise WriteProofError('Saved metadata intentions belong to another source library')
+                active=frozen.get('active')
+                if active and active['operations'].get(job['field'])==job['id']:
+                    selected=detached[active['target']]
+                    if (selected['local_id'],selected['native_id'],selected['uuid'],selected['path'])!=(
+                            job['local_id'],job['native_id'],job['track_uuid'],job['path']):
+                        raise WriteProofError('The selected metadata intention differs from its frozen song identity')
             try:assert_rekordbox_closed()
             except WriteProofError as exc:
                 if str(exc)=='Close rekordbox and its background agent before editing':return dict(waiting=True)
@@ -1046,28 +1532,48 @@ class MetadataController(QObject):
             if job['retry']:return dict(request=store.retry_request(job['request']))
             store.apply(job['request'])
             retirement=getattr(store,'retirement_entry',None)
-            library=self._readback(lib);selected=None;match_count=0
-            for local,track in library.tracks_by_id.items():
-                path=track.source_native_path or str(track.path)
-                if (track.native_id,track.source_uuid,path)==(job['native_id'],job['track_uuid'],job['path']):
-                    match_count+=1
-                    if selected is None:selected=(local,track.native_id,track.source_uuid,path,track.name,track.artist)
+            library=self._readback(lib)
+            if captured_bindings is not None:library=shared_imports.project(library,captured_bindings,unavailable={})
+            if job['local_id'] in library.source_binding_issues:
+                raise WriteProofError('The selected song registration needs reconciliation; its metadata intention is preserved')
+            selected=None;match_count=0
+            def indexed_rows():
+                nonlocal selected,match_count
+                for local,track in library.tracks_by_id.items():
+                    if (track.native_id,track.source_uuid)==(job['native_id'],job['track_uuid']):
+                        path=track.source_native_path or str(track.path)
+                        if path==job['path']:
+                            match_count+=1
+                            if selected is None:selected=(local,track.native_id,track.source_uuid,path,track.name,track.artist)
+                    yield local,track
+            pin_index=source_truth.prepare_pin_index(library,rows=indexed_rows())
             return dict(library=library,selected=selected,match_count=match_count,
-                        retirement=retirement(job['request']) if retirement else None)
+                        curation_pin_index=pin_index,
+                        retirement=retirement(job['request']) if retirement else None,
+                        projected_bindings_owner=bindings_owner,
+                        projected_scope=(str(lib.source),lib.source_library_id))
         def completed(worker):
             if worker.error:self.fail(job,worker.error);return
+            if worker.result.get('validation_retry'):
+                self.not_before=time.monotonic()+.1;self.status('Checking saved song updates…');self.schedule();return
             if worker.result.get('waiting'):
-                self.not_before=time.monotonic()+2;self.status('Metadata pending — quit rekordbox to save');self.schedule();return
+                self.not_before=time.monotonic()+2;self.status('Metadata pending — quit rekordbox to save',attention=True);self.schedule();return
             if self._retains(job)!=0:return
             if self.queue_error():self.fail(job,self.queue_error());return
             if not w.lib or (str(w.lib.source),w.lib.source_library_id)!=(job['source'],job['library_id']):
                 self.fail(job,'Saved in the original library; switch back to finish metadata');return
+            if worker.result.get('projected_bindings_owner') is not None and (
+                    w.settings.get(shared_imports.BINDINGS) is not worker.result['projected_bindings_owner']
+                    or worker.result.get('projected_scope')!=(str(w.lib.source),w.lib.source_library_id)):
+                self.fail(job,'Song registration identities changed while saving; retry to verify the saved metadata');return
             before=w.settings[KEY];queue=list(before)
             if 'request' in worker.result:
                 queue[0]={**queue[0],'request':worker.result['request'],'retry':False}
-                w.settings[KEY]=queue
-                if not w._save_state():w.settings[KEY]=before;self.fail(job,'The exact metadata request could not be saved');return
-                self.schedule();return
+                prior=w.settings;w.settings={**prior,KEY:queue}
+                self._commit_background_state({'settings':prior},{('settings',KEY):queue},
+                    committed=self.schedule,failed=lambda:self.fail(job,'The exact metadata request could not be saved'),
+                    message='The exact metadata request could not be saved; retry after fixing storage')
+                return
             library=worker.result['library']
             selected=worker.result.get('selected');matches=[]
             if isinstance(selected,tuple) and len(selected)==6 and worker.result.get('match_count')==1:
@@ -1110,11 +1616,14 @@ class MetadataController(QObject):
                 try:native.validate_retirement(retirement)
                 except WriteProofError as exc:self.fail(job,str(exc));return
                 if len(w.settings.get(ACKS,[]))>=256:self.fail(job,'Metadata receipt retirement queue is full');return
+            prior_settings=w.settings;w.settings=dict(prior_settings);origin_identity=None
+            if retirement is not None:
                 w.settings[ACKS]=[*w.settings.get(ACKS,[]),dict(entry=retirement,error='')]
             if prior_origins:
                 identity=alias_intents.key(source_truth.scope(library),dict(local_id=job['local_id'],
                     native_id=job['native_id'],uuid=job['track_uuid'],path=job['path']))
                 if identity in prior_origins:
+                    origin_identity=identity
                     origin=provenance.acknowledge({**prior_origins[identity],
                         'native_artist' if job['field']=='artist' else 'native_title':job['value']},job)
                     info,retired_overlay=provenance.retire_overlay(origin,job,w.settings.get('track_info',{}))
@@ -1138,30 +1647,69 @@ class MetadataController(QObject):
                         operations[repair['field']]=repair['id']
                     w.settings[source_truth.MIGRATION]={**prior_descriptor,'active':{**active,'operations':operations}}
             w.settings[KEY]=([repair] if repair else [])+queue[1:]
-            if not w._save_state():
-                w.settings[KEY]=before
-                if prior_descriptor is not None:w.settings[source_truth.MIGRATION]=prior_descriptor
-                if prior_acks is None:w.settings.pop(ACKS,None)
-                else:w.settings[ACKS]=prior_acks
-                if prior_origins is None:w.settings.pop(alias_intents.ORIGINS,None)
-                else:w.settings[alias_intents.ORIGINS]=prior_origins
-                w.titles=prior_titles;w.overrides=prior_artists
-                if prior_info is None:w.settings.pop('track_info',None)
-                else:w.settings['track_info']=prior_info
-                self.fail(job,'Metadata saved in rekordbox; local acknowledgement failed. Retry after fixing storage.');return
-            acknowledged_origins=w.settings.get(alias_intents.ORIGINS)
-            if (prior_origins is prior_origin_validation and acknowledged_origins is not prior_origins
-                    and prior_alias_validation==(id(prior_origins),id(next_owner),id(targets_owner))
-                    and w.settings.get(alias_intents.NEXT) is next_owner
-                    and w.settings.get(alias_intents.TARGETS) is targets_owner):
-                self._validated_origins=acknowledged_origins
-                self._alias_validation=(id(acknowledged_origins),id(next_owner),id(targets_owner))
-            self.not_before=0;self.status('Metadata saves pending' if self.pending else '')
-            if not self.closing and not w._shutting_down:w._publish_created_library(library)
-            self.schedule()
+            replacements={('settings',KEY):w.settings[KEY]};removals=[];missing=object()
+            if w.settings.get(ACKS) is not prior_acks:replacements[('settings',ACKS)]=w.settings[ACKS]
+            if w.settings.get(source_truth.MIGRATION) is not prior_descriptor:
+                replacements[('settings',source_truth.MIGRATION,'active','operations')]=w.settings[source_truth.MIGRATION]['active']['operations']
+            if origin_identity is not None:
+                replacements[('settings',alias_intents.ORIGINS,origin_identity)]=w.settings[alias_intents.ORIGINS][origin_identity]
+            local=job['local_id']
+            for key,old,current in (('title_overrides',prior_titles,w.titles),
+                                    ('artist_overrides',prior_artists,w.overrides),
+                                    ('track_info',prior_info or {},w.settings.get('track_info',{}))):
+                previous_value=old.get(local,missing);value=current.get(local,missing)
+                if value==previous_value:continue
+                path=('settings',key,local) if key=='track_info' else (key,local)
+                if value is missing:removals.append(path)
+                else:replacements[path]=value
+            try:self._stage_ack_source_curation(library,replacements,removals,
+                                                pin_index=worker.result.pop('curation_pin_index',None))
+            except (ValueError,TypeError,KeyError,AttributeError) as exc:
+                w.settings=prior_settings;w.titles=prior_titles;w.overrides=prior_artists
+                self.fail(job,'Metadata saved in rekordbox; saved curation needs reconciliation: '+str(exc));return
+            def acknowledged():
+                projected=worker.result.get('projected_bindings_owner')
+                scope=worker.result.get('projected_scope')
+                if projected is not None and (w.settings.get(shared_imports.BINDINGS) is not projected
+                        or not w.lib or scope!=(str(w.lib.source),w.lib.source_library_id)):
+                    self._state_commit_error='Saved metadata needs a fresh song-registration check before continuing'
+                    self.status(self._state_commit_error,attention=True)
+                    reconcile=getattr(w,'_native_reconcile_source',None)
+                    if callable(reconcile):reconcile()
+                    return
+                acknowledged_origins=w.settings.get(alias_intents.ORIGINS)
+                if (prior_origins is prior_origin_validation and acknowledged_origins is not prior_origins
+                        and prior_alias_validation==(id(prior_origins),id(next_owner),id(targets_owner))
+                        and w.settings.get(alias_intents.NEXT) is next_owner
+                        and w.settings.get(alias_intents.TARGETS) is targets_owner):
+                    self._validated_origins=acknowledged_origins
+                    self._alias_validation=(id(acknowledged_origins),id(next_owner),id(targets_owner))
+                self.not_before=0;self.status('Metadata saves pending' if self.pending else
+                    BACKGROUND_PAUSED_STATUS if self.background_paused else '')
+                if not self.closing and not w._shutting_down:
+                    if projected is not None:
+                        w._publish_metadata_library(library,(job['local_id'],),
+                            projected_bindings_owner=projected,projected_scope=scope)
+                    else:w._publish_metadata_library(library,(job['local_id'],))
+                self.schedule()
+            self._commit_background_state({'settings':prior_settings,'titles':prior_titles,'overrides':prior_artists},
+                replacements,removals=removals,committed=acknowledged,
+                failed=lambda:self.fail(job,'Metadata saved in rekordbox; local acknowledgement failed. Retry after fixing storage.'),
+                message='Metadata saved in rekordbox; local acknowledgement needs storage attention. Retry to finish.')
         if not self.tags._run_source_job('metadata',work,completed):self.timer.start(2000)
 
     def retry(self):
+        if (self._state_commit_pending or self.closing or self.tags.busy or getattr(self.tags,'checking',False)
+                or getattr(getattr(self.tags,'owner',None),'pending',0)):return False
+        if self._truth_observed_error is not None:
+            if self.window._state_maintenance or getattr(self.window,'_state_publication',False):return False
+            self._truth_observed_error=None;self._truth_error_owners=();self._truth_error_epoch=None
+            self._truth_error_progress=None;self._truth_observed_proof=None
+            self._ensure_truth_validation();return True
+        if self._state_commit_error:
+            previous=self._state_commit_error;self._state_commit_error=''
+            if self.queue_error():self._state_commit_error=previous;return False
+            self.status('Metadata saves pending');self.schedule();return True
         if (self.closing or self.tags.busy or getattr(self.tags,'checking',False)
                 or getattr(getattr(self.tags,'owner',None),'pending',0) or self.queue_error()):return False
         if self.window.settings.get(ACKS):

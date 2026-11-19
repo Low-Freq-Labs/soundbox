@@ -21,6 +21,26 @@ LOG=logging.getLogger('soundbox')
 _CACHE_SCHEMA=1
 
 
+def _media_context(library,hidden,removals):
+    return (str(library.source),library.source_kind,library.source_library_id,
+            frozenset(hidden),frozenset((key,frozenset(bag)) for key,bag in removals.items()))
+
+
+def _media_inventory(library,hidden,removals):
+    """Detached scheduling identities; no filesystem/media proof or permission."""
+    context=_media_context(library,hidden,removals)
+    excluded=context[3]|frozenset(tid for _key,bag in context[4] for tid in bag)
+    inventory=[];tracks=[]
+    for track in library.tracks_by_id.values():
+        path=str(track.path)
+        inventory.append((track.track_id,path,track.location_uri,track.native_id,track.source_uuid,
+                          track.source_native_path,track.size,track.kind,track.imported))
+        if track.track_id not in excluded:
+            tracks.append(dict(id=track.track_id,path=path,
+                native=dict(id=track.native_id,uuid=track.source_uuid) if track.source_uuid else None))
+    return (context,frozenset(inventory)),tracks
+
+
 def _cache_digest(entries):
     return hashlib.sha256(json.dumps(entries,sort_keys=True,allow_nan=False,
                                     separators=(',',':')).encode()).hexdigest()
@@ -73,6 +93,7 @@ class MediaConversionController(QObject):
         super().__init__(window);self.window=window;self.tags=window.tag_controller
         self.factory=factory;self.closing=False;self.active=set();self.tasks=TaskOwner(self)
         self.cache={};self._cache_identity=None;self.scan_again=False
+        self._facts_context=None;self._scan_context=None
         self.scan_timer=QTimer(self);self.scan_timer.setSingleShot(True);self.scan_timer.setInterval(500)
         self.scan_timer.timeout.connect(self.scan)
         self.timer=QTimer(self);self.timer.setSingleShot(True);self.timer.setInterval(1000);self.timer.timeout.connect(self.pump)
@@ -88,9 +109,36 @@ class MediaConversionController(QObject):
         return getattr(lib,'media_facts',{}).get(tid) if lib else None
 
     def _publish_facts(self):
-        if self.window.lib:
-            self.window.lib.media_facts={t['id']:dict(path=path,epoch=e['epoch'],facts=e['facts'])
-                for path,e in self.cache.items() if e['facts']['status']=='compatible' for t in e['tracks']}
+        lib=self.window.lib
+        if lib:
+            context=_media_context(lib,self.window.hidden,self.window.removals)
+            excluded=context[3]|frozenset(tid for _key,bag in context[4] for tid in bag)
+            facts={}
+            if self._cache_identity==(str(lib.source),lib.source_library_id):
+                for path,entry in self.cache.items():
+                    if entry['facts']['status']!='compatible':continue
+                    for captured in entry['tracks']:
+                        track=lib.tracks_by_id.get(captured['id'])
+                        if track is None or track.track_id in excluded or str(track.path)!=captured['path']:continue
+                        native=dict(id=track.native_id,uuid=track.source_uuid) if track.source_uuid else None
+                        if native!=captured['native']:continue
+                        facts[track.track_id]=dict(path=path,epoch=entry['epoch'],facts=entry['facts'])
+            lib.media_facts=facts;self._facts_context=context
+
+    def rebind_prepared_library(self,previous,incoming):
+        """Preserve format hints after the caller's complete media compatibility check.
+
+        This handoff deliberately does not traverse tracks or touch media. A
+        worker still compares its complete captured scalar inventory once on
+        completion, and real conversion revalidates its own files/native rows.
+        """
+        context=_media_context(incoming,self.window.hidden,self.window.removals)
+        same_scope=(str(previous.source),previous.source_kind,previous.source_library_id)==context[:3]
+        known=self._facts_context if self._facts_context is not None else self._scan_context
+        compatible=same_scope and (known is None or known==context)
+        incoming.media_facts=(getattr(previous,'media_facts',{})
+            if compatible and self._facts_context==context else {})
+        return compatible
 
     def authority(self,lib):
         return load_authority(self.tags.data_root/'rekordbox-media-conversion-authority.json',lib.source,lib.source_library_id)
@@ -108,9 +156,8 @@ class MediaConversionController(QObject):
         w=self.window
         if self.closing or w._shutting_down or not self.scan_again:return
         if self.tasks.pending or self.active or w._refresh_worker is not None:self.scan_timer.start();return
-        lib=w.lib;hidden=set(w.hidden)|{tid for bag in w.removals.values() for tid in bag}
-        tracks=[dict(id=t.track_id,path=str(t.path),native=dict(id=t.native_id,uuid=t.source_uuid) if t.source_uuid else None)
-                for t in lib.tracks_by_id.values() if t.track_id not in hidden]
+        lib=w.lib;inventory,tracks=_media_inventory(lib,w.hidden,w.removals)
+        self._scan_context=inventory[0]
         identity=(str(lib.source),lib.source_library_id)
         prior=deepcopy(self.cache) if self._cache_identity==identity else {}
         load_saved=self._cache_identity!=identity
@@ -139,7 +186,8 @@ class MediaConversionController(QObject):
         worker=OneShotTask(work,log_label='Audio format check')
         def finished(task):
             if self.closing or w._shutting_down:return
-            if w.lib is not lib:self.discover();return
+            if w.lib is None or _media_inventory(w.lib,w.hidden,w.removals)[0]!=inventory:
+                self.discover();return
             if isinstance(task.result,Exception):w._flash_status('Audio format check needs attention — '+str(task.result),10);return
             self.cache=task.result;self._cache_identity=identity
             self._publish_facts()

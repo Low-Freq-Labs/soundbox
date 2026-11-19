@@ -87,6 +87,497 @@ class NativeMetadataStore(unittest.TestCase):
         return metadata.SourceMetadataStore(replace(self.authority,
             profile='ascii-active-analysed-empty-album-v2'),self.root/'data')
 
+    def unicode_writer(self):
+        return metadata.SourceMetadataStore(replace(self.authority,
+            profile=metadata.UNICODE_PROFILE),self.root/'data')
+
+    def retirement_case(self,*,synced,create,local_clock=12):
+        prior=('600','Previous artist','opaque search','00000000-0000-4000-8000-000000000600',
+               0,0,0,synced,None,local_clock,CLOCK,CLOCK)
+        keep=('900','Unrelated unused artist',None,'00000000-0000-4000-8000-000000000900',
+              0,0,0,1,None,11,CLOCK,CLOCK)
+        for actor in (prior,keep):self.mutate('INSERT INTO djmdArtist VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',actor)
+        if not create:
+            self.mutate('INSERT INTO djmdArtist VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+                ('601','東京 destination','opaque destination','00000000-0000-4000-8000-000000000601',0,0,0,1,None,10,CLOCK,CLOCK))
+        self.mutate("UPDATE djmdContent SET ArtistID='600' WHERE ID='1'")
+        writer=metadata.SourceMetadataStore(replace(self.authority,profile=metadata.RETIREMENT_PROFILE),self.root/'data')
+        return writer,prior,keep
+
+    def assert_retirement_save(self,*,synced,create):
+        writer,prior,keep=self.retirement_case(synced=synced,create=create)
+        request=writer.capture_request('1',UUID,'/synthetic/song.wav','artist','東京 destination','Previous artist')
+        self.assertEqual('retirement_clock' in request,bool(synced));self.assertEqual(bool(request['artist_seed']),create)
+        before=self.state();xml=writer.xml.read_bytes();saved=writer.apply(request)
+        self.assertEqual((saved['TrackInfoUpdated'],saved['rb_local_usn']),('3',43+int(create)))
+        self.assertEqual(self.mutate("SELECT * FROM djmdArtist WHERE ID='900'"),[keep])
+        old=self.mutate("SELECT * FROM djmdArtist WHERE ID='600'")
+        if synced:
+            expected=list(prior);expected[4]=2;expected[6]=1;expected[9]=42+int(create);expected[11]=request['retirement_clock']
+            self.assertEqual(old,[tuple(expected)])
+        else:self.assertEqual(old,[])
+        if create:
+            self.assertEqual(self.mutate('SELECT UUID,Name,rb_local_usn FROM djmdArtist WHERE ID=?',(saved['ArtistID'],)),
+                [(request['artist_seed']['UUID'],'東京 destination',41)])
+        else:self.assertEqual(self.mutate("SELECT Name,SearchStr,rb_local_synced,rb_local_usn,updated_at FROM djmdArtist WHERE ID='601'"),
+                [('東京 destination','opaque destination',1,10,CLOCK)])
+        self.assertEqual({t for t in before['tables'] if before['tables'][t]!=self.state()['tables'][t]},
+                         {'djmdContent','djmdArtist','agentRegistry'})
+        self.assertEqual(writer.xml.read_bytes(),xml)
+        committed=self.state();writer.apply(request);self.assertEqual(self.state(),committed)
+
+    def test_retirement_plan_matches_independent_native_component_and_main_sql_reference(self):
+        import hashlib
+        from soundbox import native_metadata_plan as planner
+        path=Path(__file__).parent/'fixtures/native-metadata-retirement-v2.json';raw=path.read_bytes()
+        self.assertEqual(hashlib.sha256(raw).hexdigest(),'fb6eaaabe816c9addeef5b77d43397f0185f99082d00829c872178feb0fd5e54')
+        for case in json.loads(raw)['cases']:
+            with self.subTest(synced=case['synced'],create=case['create']):
+                actors=[case['artistBefore']]+([] if case['create'] else [case['destination']])
+                seed=({k:case['destination'][k] for k in ('ID','UUID')}|{'timestamp':case['destination']['created_at']}) if case['create'] else None
+                options=dict(field='artist',value=case['destination']['Name'],timestamp=case['targetAfter']['updated_at'],
+                             artist_seed=seed,retirement_timestamp=case['cleanupClock'] if case['synced'] else None)
+                result=planner.construct(case['targetBefore'],case['counterBefore'],actors,{case['artistBefore']['ID']:1},
+                                         profile=metadata.RETIREMENT_PROFILE,**options)
+                self.assertEqual(result['after'],case['targetAfter']);self.assertEqual(result['counter_after'],case['counterAfter'])
+                self.assertEqual(result['artist_created'],case['destination'] if case['create'] else None)
+                self.assertEqual(result['artist_removed'],case['artistBefore'])
+                self.assertEqual(result.get('artist_retirement_after'),case['artistAfter'])
+                if case['synced'] or case['create']:
+                    with self.assertRaises(WriteProofError):planner.construct(case['targetBefore'],case['counterBefore'],actors,
+                        {case['artistBefore']['ID']:1},profile=metadata.UNICODE_PROFILE,**options)
+                else:
+                    self.assertEqual(planner.construct(case['targetBefore'],case['counterBefore'],actors,
+                        {case['artistBefore']['ID']:1},profile=metadata.UNICODE_PROFILE,**options),result)
+
+    def test_agent_twelve_hour_reference_cannot_supply_the_main_cleanup_clock(self):
+        import hashlib
+        from soundbox import native_metadata_plan as planner
+        raw=(Path(__file__).parent/'fixtures/native-metadata-retirement.json').read_bytes()
+        self.assertEqual(hashlib.sha256(raw).hexdigest(),'a5a7d511396b2306145315fc0078d4dcb4c1db7f28259c72e82defc3316371b9')
+        case=next(x for x in json.loads(raw)['cases'] if x['synced'] and x['create'])
+        seed={k:case['destination'][k] for k in ('ID','UUID')}|{'timestamp':case['destination']['created_at']}
+        self.assertLess(case['cleanupClock'],seed['timestamp'])
+        with self.assertRaisesRegex(WriteProofError,'retirement precedes artist creation'):
+            planner.construct(case['targetBefore'],case['counterBefore'],[case['artistBefore']],{case['artistBefore']['ID']:1},
+                field='artist',value=case['destination']['Name'],timestamp=case['targetAfter']['updated_at'],artist_seed=seed,
+                retirement_timestamp=case['cleanupClock'],profile=metadata.RETIREMENT_PROFILE)
+
+    def album_writer(self,*,synced=1,create=True,role=None):
+        _,prior,keep=self.retirement_case(synced=synced,create=create)
+        self.mutate('DROP TABLE djmdAlbum')
+        self.mutate('''CREATE TABLE djmdAlbum(ID TEXT PRIMARY KEY,Name TEXT,AlbumArtistID TEXT,Compilation INTEGER,
+            SearchStr TEXT,ImagePath TEXT,UUID TEXT,rb_data_status INTEGER,rb_local_data_status INTEGER,
+            rb_local_deleted INTEGER,rb_local_synced INTEGER,usn INTEGER,rb_local_usn INTEGER,created_at TEXT,updated_at TEXT)''')
+        self.mutate('INSERT INTO djmdAlbum VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            ('700','Album name with space ',role,0,'opaque album search','opaque image',
+             '00000000-0000-4000-8000-000000000700',0,0,0,synced,None,14,CLOCK,CLOCK))
+        self.mutate("UPDATE djmdContent SET AlbumID='700' WHERE ID='1'")
+        schema=self.mutate("SELECT name FROM sqlite_master WHERE name='djmdAlbum'")
+        self.assertEqual(schema,[('djmdAlbum',)])
+        conn=_connect(self.database)
+        try:authority=replace(self.authority,schema_sha256=tags._schema(conn),profile=metadata.ALBUM_PROFILE)
+        finally:conn.close()
+        return metadata.SourceMetadataStore(authority,self.root/'data'),prior,keep
+
+    def test_album_plan_matches_all_twenty_four_independent_native_sequences(self):
+        import hashlib
+        from soundbox import native_metadata_plan as planner
+        raw=(Path(__file__).parent/'fixtures/native-metadata-album-cloud.json').read_bytes()
+        self.assertEqual(hashlib.sha256(raw).hexdigest(),'22bab939400ad4ef0ebcf8550ee6028795577cdd8b8f327e391a7ddedd4cc97e')
+        cases=json.loads(raw)['album_cases'];self.assertEqual(len(cases),24)
+        for case in cases:
+            with self.subTest(synced=case['synced'],role=case['role'],create=case['create'],compilation=case['compilation']):
+                actors={case['artistBefore']['ID']:case['artistBefore']}
+                if not case['create']:actors[case['destination']['ID']]=case['destination']
+                if case['albumRoleArtist']:actors[case['albumRoleArtist']['ID']]=case['albumRoleArtist']
+                refs={case['artistBefore']['ID']:1}
+                role=case['albumBefore']['AlbumArtistID']
+                if role:refs[role]=refs.get(role,0)+1
+                seed=({k:case['destination'][k] for k in ('ID','UUID')}|
+                      {'timestamp':case['destination']['created_at']}) if case['create'] else None
+                options=dict(field='artist',value=case['destination']['Name'],timestamp=case['targetAfter']['updated_at'],
+                    artist_seed=seed,retirement_timestamp=case['cleanupClock'] if case['synced'] and role!=case['artistBefore']['ID'] else None,
+                    album=case['albumBefore'],album_timestamp=case['albumAfter']['updated_at'])
+                result=planner.construct(case['targetBefore'],case['counterBefore'],list(actors.values()),refs,
+                    profile=metadata.ALBUM_PROFILE,**options)
+                self.assertEqual(result['after'],case['targetAfter']);self.assertEqual(result['counter_after'],case['counterAfter'])
+                self.assertEqual(result['album_after'],case['albumAfter'])
+                self.assertEqual(result['artist_created'],case['destination'] if case['create'] else None)
+                self.assertEqual(result.get('artist_retirement_after'),case['artistAfter'] if case['artistAfter']!=case['artistBefore'] else None)
+                self.assertEqual(result['artist_removed'],case['artistBefore'] if role!=case['artistBefore']['ID'] else None)
+                with self.assertRaises(WriteProofError):planner.construct(case['targetBefore'],case['counterBefore'],
+                    list(actors.values()),refs,profile=metadata.RETIREMENT_PROFILE,**options)
+
+    def test_cloud_title_plan_matches_native_steps_and_exact_large_remote_integer(self):
+        from soundbox import native_metadata_plan as planner
+        fixture=json.loads((Path(__file__).parent/'fixtures/native-metadata-album-cloud.json').read_bytes())
+        stages=fixture['cloud_stages'];self.assertEqual(len(stages),16)
+        for start in range(0,len(stages),4):
+            field,revision=stages[start:start+2]
+            before=dict(field['before'],usn=int(field['exactRemoteUSNBefore']))
+            after=dict(revision['after'],usn=int(revision['exactRemoteUSNAfter']))
+            self.assertEqual(field['exactRemoteUSNBefore'],revision['exactRemoteUSNAfter'])
+            result=planner.construct(before,field['counterBefore'],[],{},field='title',value=after['Title'],
+                timestamp=after['updated_at'],profile=metadata.ALBUM_PROFILE)
+            self.assertEqual(result['after'],after);self.assertEqual(result['counter_after'],revision['counterAfter'])
+            for profile in (metadata.PROFILE,metadata.SYNCED_PROFILE,metadata.UNICODE_PROFILE,metadata.RETIREMENT_PROFILE):
+                with self.assertRaises(WriteProofError):planner.construct(before,field['counterBefore'],[],{},
+                    field='title',value=after['Title'],timestamp=after['updated_at'],profile=profile)
+
+    def test_album_save_preserves_opaque_rows_and_shared_album_artist(self):
+        writer,prior,keep=self.album_writer(create=False,role='600')
+        request=writer.capture_request('1',UUID,'/synthetic/song.wav','artist','東京 destination','Previous artist')
+        self.assertIn('album_context',request);self.assertNotIn('retirement_clock',request)
+        before=self.state();xml=writer.xml.read_bytes();saved=writer.apply(request)
+        self.assertEqual((saved['AlbumID'],saved['rb_local_usn'],saved['TrackInfoUpdated']),('700',43,'3'))
+        self.assertEqual(self.mutate("SELECT * FROM djmdArtist WHERE ID='600'"),[prior])
+        self.assertEqual(self.mutate("SELECT * FROM djmdArtist WHERE ID='900'"),[keep])
+        self.assertEqual(self.mutate("SELECT Name,AlbumArtistID,Compilation,SearchStr,ImagePath,rb_local_usn,updated_at FROM djmdAlbum WHERE ID='700'"),
+            [('Album name with space ','600',0,'opaque album search','opaque image',42,request['album_context']['timestamp'])])
+        after=self.state();self.assertEqual({k for k in before['tables'] if before['tables'][k]!=after['tables'][k]},
+            {'djmdAlbum','djmdContent','agentRegistry'})
+        self.assertEqual(writer.xml.read_bytes(),xml);writer.apply(request);self.assertEqual(self.state(),after)
+
+    def test_album_combined_creation_retirement_recovers_and_compacts_with_separate_clocks(self):
+        writer,prior,_=self.album_writer()
+        request=writer.capture_request('1',UUID,'/synthetic/song.wav','artist','東京 destination','Previous artist')
+        self.assertLessEqual(request['artist_seed']['timestamp'],request['album_context']['timestamp'])
+        self.assertLessEqual(request['album_context']['timestamp'],request['retirement_clock'])
+        self.assertLessEqual(request['retirement_clock'],request['timestamp'])
+        def interrupt(phase):
+            if phase=='after-commit':raise OSError('lost album save delivery')
+        with mock.patch.object(metadata,'_fault',side_effect=interrupt),self.assertRaises(OSError):writer.apply(request)
+        committed=self.state();writer=metadata.SourceMetadataStore(writer.authority,self.root/'data')
+        self.assertEqual(writer.recover(),'committed');saved=writer.apply(request)
+        self.assertEqual(saved['rb_local_usn'],45)
+        self.assertEqual(self.mutate("SELECT AlbumArtistID,rb_local_usn,updated_at FROM djmdAlbum WHERE ID='700'"),
+            [('',43,request['album_context']['timestamp'])])
+        self.assertEqual(self.mutate("SELECT UUID,rb_local_deleted,rb_data_status,rb_local_usn,updated_at FROM djmdArtist WHERE ID='600'"),
+            [(prior[3],1,2,44,request['retirement_clock'])])
+        metadata.retire_acknowledged_receipt(self.root/'data',writer.retirement_entry(request))
+        with mock.patch.object(metadata,'_apply',side_effect=AssertionError('No replay SQL')):writer.apply(request)
+        self.assertEqual(self.state(),committed)
+        old=metadata.SourceMetadataStore(replace(writer.authority,profile=metadata.RETIREMENT_PROFILE),self.root/'data')
+        with mock.patch.object(old.lease,'_connect') as connection:
+            with self.assertRaises(WriteProofError):old.apply(request)
+            connection.assert_not_called()
+
+    def test_album_stale_identity_ambiguous_lookup_and_clock_consumption_refuse_without_writes(self):
+        writer,_,_=self.album_writer(create=False)
+        request=writer.capture_request('1',UUID,'/synthetic/song.wav','artist','東京 destination','Previous artist')
+        original=self.mutate("SELECT UUID FROM djmdAlbum WHERE ID='700'")[0][0]
+        self.mutate("UPDATE djmdAlbum SET UUID='replaced' WHERE ID='700'");before=self.state()
+        with self.assertRaises(ConflictError):writer.apply(request)
+        self.assertEqual(self.state(),before)
+        self.mutate("UPDATE djmdAlbum SET UUID=? WHERE ID='700'",(original,))
+        self.mutate("INSERT INTO djmdAlbum SELECT '701',Name,AlbumArtistID,Compilation,SearchStr,ImagePath,'duplicate-name',rb_data_status,rb_local_data_status,rb_local_deleted,rb_local_synced,usn,rb_local_usn,created_at,updated_at FROM djmdAlbum WHERE ID='700'")
+        before=self.state()
+        with self.assertRaises(ConflictError):writer.apply(request)
+        self.assertEqual(self.state(),before);self.mutate("DELETE FROM djmdAlbum WHERE ID='701'")
+        missing=dict(request);missing.pop('album_context');before=self.state()
+        with self.assertRaises(WriteProofError):writer.apply(missing)
+        self.assertEqual(self.state(),before)
+        invalid=dict(request,album_context={**request['album_context'],'timestamp':'2099-01-01 00:00:00.000 +00:00'})
+        with self.assertRaises(WriteProofError):metadata.validate_request(invalid)
+        def interrupt(phase):
+            if phase=='before-commit':raise OSError('rollback all album and actor effects')
+        with mock.patch.object(metadata,'_fault',side_effect=interrupt),self.assertRaises(OSError):writer.apply(request)
+        self.assertEqual(self.state(),before);self.assertEqual(writer.recover(),'rolled-back')
+
+    def test_unique_active_artist_lookup_preserves_same_name_deleted_history(self):
+        actor=('600','CROMATIK','opaque active','00000000-0000-4000-8000-000000000600',0,0,0,1,None,12,CLOCK,CLOCK)
+        history=('601','CROMATIK','opaque history','00000000-0000-4000-8000-000000000601',2,0,1,1,None,13,CLOCK,CLOCK)
+        for row in (actor,history):self.mutate('INSERT INTO djmdArtist VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',row)
+        writer=metadata.SourceMetadataStore(replace(self.authority,profile=metadata.ALBUM_PROFILE),self.root/'data')
+        request=writer.capture_request('1',UUID,'/synthetic/song.wav','artist','CROMATIK','')
+        self.assertIsNone(request['artist_seed']);before=self.state()
+        with self.assertRaises(WriteProofError):self.unicode_writer().apply(request)
+        self.assertEqual(self.state(),before);saved=writer.apply(request)
+        self.assertEqual(saved['ArtistID'],'600')
+        self.assertEqual(self.mutate('SELECT * FROM djmdArtist ORDER BY ID'),[actor,history])
+        self.mutate("UPDATE djmdContent SET ArtistID=NULL WHERE ID='1'")
+        self.mutate("UPDATE djmdArtist SET rb_local_deleted=0,rb_data_status=0 WHERE ID='601'")
+        before=self.state()
+        with self.assertRaises(ConflictError):writer.capture_request('1',UUID,'/synthetic/song.wav','artist','CROMATIK','')
+        self.assertEqual(self.state(),before)
+
+    def cloud_writer(self):
+        # The old generic registration fixture gives NULL usn TEXT affinity.
+        # This new profile requires native BIGINT storage, including values above
+        # JavaScript's exact-number range; do not relax the integer guard for it.
+        conn=_connect(self.database)
+        try:
+            sql=conn.execute("SELECT sql FROM sqlite_master WHERE name='djmdContent'").fetchone()[0]
+            self.assertEqual(sql.count('usn TEXT'),1)
+            conn.execute('ALTER TABLE djmdContent RENAME TO temporary_content')
+            conn.execute(sql.replace('usn TEXT','usn BIGINT'))
+            conn.execute('INSERT INTO djmdContent SELECT * FROM temporary_content')
+            conn.execute('DROP TABLE temporary_content')
+            authority=replace(self.authority,schema_sha256=tags._schema(conn),profile=metadata.ALBUM_PROFILE)
+        finally:conn.close()
+        return metadata.SourceMetadataStore(authority,self.root/'data')
+
+    def test_cloud_pair_preserves_exact_remote_usn_and_reused_actor_all_columns(self):
+        writer=self.cloud_writer()
+        remote=123456789012345678
+        actor=('600','Cloud artist','opaque remote','00000000-0000-4000-8000-000000000600',257,2,0,1,remote,12,CLOCK,CLOCK)
+        self.mutate('INSERT INTO djmdArtist VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',actor)
+        self.mutate("UPDATE djmdContent SET rb_data_status=257,rb_local_data_status=2,rb_local_synced=1,usn=? WHERE ID='1'",(remote,))
+        title=writer.capture_request('1',UUID,'/synthetic/song.wav','title','Cloud 東京','Before')
+        artist=writer.capture_request('1',UUID,'/synthetic/song.wav','artist','Cloud artist','')
+        before=self.state();writer.apply(title);saved=writer.apply(artist)
+        self.assertEqual((saved['usn'],saved['rb_data_status'],saved['rb_local_data_status'],saved['rb_local_synced'],
+                          saved['rb_local_usn'],saved['TrackInfoUpdated']),(remote,257,2,1,44,'4'))
+        self.assertEqual(self.mutate('SELECT * FROM djmdArtist'),[actor])
+        after=self.state();self.assertEqual({k for k in before['tables'] if before['tables'][k]!=after['tables'][k]},
+            {'djmdContent','agentRegistry'})
+        for request in (title,artist):
+            metadata.retire_acknowledged_receipt(self.root/'data',writer.retirement_entry(request));writer.apply(request)
+        self.assertEqual(self.state(),after)
+
+    def test_cloud_incoherent_sync_states_and_future_local_clocks_remain_guarded(self):
+        writer=self.cloud_writer()
+        for changes in ({'rb_local_synced':0},{'usn':None},{'usn':-1},{'rb_local_data_status':1},
+                        {'rb_data_status':258},{'rb_local_usn':999},{'Analysed':0},{'AlbumID':'700'}):
+            self.mutate("UPDATE djmdContent SET rb_data_status=257,rb_local_data_status=0,rb_local_synced=1,usn=569,rb_local_usn=40,Analysed=105,AlbumID=NULL WHERE ID='1'")
+            for key,value in changes.items():self.mutate('UPDATE djmdContent SET '+key+"=? WHERE ID='1'",(value,))
+            before=self.state()
+            with self.subTest(changes=changes),self.assertRaises(WriteProofError):writer.apply(self.request())
+            self.assertEqual(self.state(),before)
+
+    def test_album_authorizer_never_changes_names_identity_history_or_title_save_dependencies(self):
+        import sqlite3
+        for profile in (metadata.PROFILE,metadata.SYNCED_PROFILE,metadata.UNICODE_PROFILE,metadata.RETIREMENT_PROFILE,metadata.ALBUM_PROFILE):
+            for field in ('title','artist'):
+                for column in ('Name','UUID','SearchStr','ImagePath','usn','rb_local_synced','rb_local_deleted','Compilation','AlbumArtistID','rb_local_usn','updated_at'):
+                    allowed=(profile==metadata.ALBUM_PROFILE and field=='artist'
+                             and column in ('Compilation','AlbumArtistID','rb_local_usn','updated_at'))
+                    self.assertEqual(metadata._authorizer(sqlite3.SQLITE_UPDATE,'djmdAlbum',column,'main',None,field=field,profile=profile),
+                                     sqlite3.SQLITE_OK if allowed else sqlite3.SQLITE_DENY)
+        for action in (sqlite3.SQLITE_INSERT,sqlite3.SQLITE_DELETE):
+            self.assertEqual(metadata._authorizer(action,'djmdAlbum','Name','main',None,field='artist',profile=metadata.ALBUM_PROFILE),sqlite3.SQLITE_DENY)
+
+    def test_retirement_profile_existing_artist_local_cleanup(self):
+        self.assert_retirement_save(synced=0,create=False)
+
+    def test_retirement_profile_existing_artist_synced_history(self):
+        self.assert_retirement_save(synced=1,create=False)
+
+    def test_retirement_profile_combined_new_artist_and_local_cleanup(self):
+        self.assert_retirement_save(synced=0,create=True)
+
+    def test_retirement_profile_combined_new_artist_and_synced_history(self):
+        self.assert_retirement_save(synced=1,create=True)
+
+    def test_retirement_profile_null_old_clock_failed_delivery_recovery_and_compact_ack(self):
+        writer,prior,_=self.retirement_case(synced=1,create=True,local_clock=None)
+        request=writer.capture_request('1',UUID,'/synthetic/song.wav','artist','東京 destination','Previous artist')
+        def interrupt(phase):
+            if phase=='after-commit':raise OSError('lost retirement delivery')
+        with mock.patch.object(metadata,'_fault',side_effect=interrupt),self.assertRaises(OSError):writer.apply(request)
+        committed=self.state()
+        with self.assertRaises(RecoveryRequired):self.unicode_writer().recover()
+        self.assertEqual(self.state(),committed)
+        writer=metadata.SourceMetadataStore(writer.authority,self.root/'data');self.assertEqual(writer.recover(),'committed')
+        writer.apply(request);self.assertEqual(self.state(),committed)
+        metadata.retire_acknowledged_receipt(self.root/'data',writer.retirement_entry(request))
+        marker=json.loads(writer._receipt_path(request['operation_id']).read_bytes());self.assertEqual(marker['profile'],metadata.RETIREMENT_PROFILE)
+        with self.assertRaises(WriteProofError):self.unicode_writer().apply(request)
+        writer.apply(request);self.assertEqual(self.state(),committed)
+        self.assertEqual(self.mutate("SELECT SearchStr,UUID,rb_local_deleted,rb_local_usn FROM djmdArtist WHERE ID='600'"),
+                         [(prior[2],prior[3],1,43)])
+
+    def test_retirement_profile_preserves_artist_still_referenced_by_another_role_or_album(self):
+        writer,prior,_=self.retirement_case(synced=1,create=False)
+        self.mutate("UPDATE djmdContent SET ComposerID='600' WHERE ID='1'")
+        self.mutate("INSERT INTO djmdAlbum VALUES ('700','600')")
+        request=writer.capture_request('1',UUID,'/synthetic/song.wav','artist','東京 destination','Previous artist')
+        self.assertNotIn('retirement_clock',request);saved=writer.apply(request)
+        self.assertEqual(saved['rb_local_usn'],42);self.assertEqual(saved['ComposerID'],'600')
+        self.assertEqual(self.mutate("SELECT * FROM djmdArtist WHERE ID='600'"),[prior])
+        self.assertEqual(self.mutate('SELECT * FROM djmdAlbum'),[('700','600')])
+
+    def test_retirement_clock_consumption_counter_bound_and_rollback_are_strict(self):
+        writer,_,_=self.retirement_case(synced=1,create=False)
+        request=writer.capture_request('1',UUID,'/synthetic/song.wav','artist','東京 destination','Previous artist')
+        missing=dict(request);missing.pop('retirement_clock');before=self.state()
+        with self.assertRaises(WriteProofError):writer.apply(missing)
+        self.assertEqual(self.state(),before)
+        invalid=dict(request,retirement_clock='2020-01-01 00:00:00.000 +00:00',field='title')
+        with self.assertRaises(WriteProofError):metadata.validate_request(invalid)
+        self.mutate("UPDATE agentRegistry SET int_1=2147483643 WHERE registry_id='localUpdateCount'");large=self.state()
+        with self.assertRaises(WriteProofError):writer.apply(request)
+        self.assertEqual(self.state(),large)
+        self.mutate("UPDATE agentRegistry SET int_1=40 WHERE registry_id='localUpdateCount'")
+        def interrupt(phase):
+            if phase=='before-commit':raise OSError('rolled back retirement')
+        with mock.patch.object(metadata,'_fault',side_effect=interrupt),self.assertRaises(OSError):writer.apply(request)
+        self.assertEqual(self.state(),before);self.assertEqual(writer.recover(),'rolled-back')
+        self.mutate("UPDATE djmdContent SET ComposerID='600' WHERE ID='1'");shared=self.state()
+        with self.assertRaises(WriteProofError):writer.apply(request)
+        self.assertEqual(self.state(),shared)
+
+    def test_artist_update_authorizer_is_exact_profile_field_and_column_bound(self):
+        import sqlite3
+        allowed={'rb_local_deleted','rb_data_status','rb_local_usn','updated_at'}
+        for profile in (metadata.PROFILE,metadata.SYNCED_PROFILE,metadata.UNICODE_PROFILE,metadata.RETIREMENT_PROFILE):
+            for field in ('title','artist'):
+                for column in ('Name','UUID','SearchStr','usn','rb_local_synced',*sorted(allowed)):
+                    expected=sqlite3.SQLITE_OK if profile==metadata.RETIREMENT_PROFILE and field=='artist' and column in allowed else sqlite3.SQLITE_DENY
+                    self.assertEqual(metadata._authorizer(sqlite3.SQLITE_UPDATE,'djmdArtist',column,'main',None,
+                                                         field=field,profile=profile),expected)
+        for database,trigger in (('temp',None),('main','unowned_trigger')):
+            self.assertEqual(metadata._authorizer(sqlite3.SQLITE_UPDATE,'djmdArtist','rb_local_deleted',database,trigger,
+                field='artist',profile=metadata.RETIREMENT_PROFILE),sqlite3.SQLITE_DENY)
+
+    def test_existing_profile_journal_reconstruction_keeps_legacy_numeric_revision_semantics(self):
+        self.mutate("UPDATE djmdContent SET TrackInfoUpdated='002' WHERE ID='1'")
+        request=self.request(value='Legacy saved title');before=self.state()
+        with self.assertRaises(WriteProofError):self.unicode_writer().apply(request)
+        self.assertEqual(self.state(),before)
+        def interrupt(phase):
+            if phase=='after-commit':raise OSError('lost legacy metadata delivery')
+        with mock.patch.object(metadata,'_fault',side_effect=interrupt),self.assertRaises(OSError):self.writer.apply(request)
+        committed=self.state()
+        self.writer=metadata.SourceMetadataStore(self.authority,self.root/'data')
+        self.assertEqual(self.writer.recover(),'committed')
+        self.writer.apply(request);self.assertEqual(self.state(),committed)
+        self.assertEqual(self.mutate("SELECT Title,TrackInfoUpdated FROM djmdContent WHERE ID='1'"),
+                         [('Legacy saved title','3')])
+        metadata.retire_acknowledged_receipt(self.root/'data',self.writer.retirement_entry(request))
+        self.writer.apply(request);self.assertEqual(self.state(),committed)
+
+    def test_unicode_pair_preserves_codepoints_without_retagging_or_normalizing_opaque_data(self):
+        writer=self.unicode_writer()
+        self.mutate('UPDATE djmdContent SET rb_local_synced=1 WHERE ID=?',('1',))
+        title='Björk 東京 — e\u0301 / 🎵';artist='Björk 東京 e\u0301'
+        before=self.state();xml=writer.xml.read_bytes()
+        title_request=writer.capture_request('1',UUID,'/synthetic/song.wav','title',title,'Before')
+        artist_request=writer.capture_request('1',UUID,'/synthetic/song.wav','artist',artist,'')
+        writer.apply(title_request);saved=writer.apply(artist_request)
+        self.assertEqual((saved['Title'],saved['TrackInfoUpdated'],saved['rb_local_synced'],saved['rb_local_usn']),
+                         (title,'4',1,45))
+        self.assertEqual(self.mutate('SELECT Name FROM djmdArtist WHERE ID=?',(saved['ArtistID'],)),[(artist,)])
+        self.assertEqual(writer.xml.read_bytes(),xml)
+        self.assertEqual({t for t in before['tables'] if before['tables'][t]!=self.state()['tables'][t]},
+                         {'djmdContent','djmdArtist','agentRegistry'})
+        committed=self.state();writer.apply(title_request);writer.apply(artist_request)
+        self.assertEqual(self.state(),committed)
+
+    def test_unicode_title_preserves_existing_album_and_related_artist_rows_under_separate_profile(self):
+        self.mutate('INSERT INTO djmdAlbum VALUES (?,?)',('500',None))
+        self.mutate('UPDATE djmdContent SET AlbumID=?,rb_local_synced=1 WHERE ID=?',('500','1'))
+        request=self.request(value='é'*255);before=self.state();writer=self.unicode_writer()
+        for profile in (metadata.PROFILE,metadata.SYNCED_PROFILE):
+            old=metadata.SourceMetadataStore(replace(self.authority,profile=profile),self.root/'data')
+            with self.assertRaises(WriteProofError):old.apply(request)
+            self.assertEqual(self.state(),before)
+        saved=writer.apply(request)
+        self.assertEqual((saved['Title'],saved['AlbumID'],saved['TrackInfoUpdated'],saved['rb_local_usn']),
+                         ('é'*255,'500','3',42))
+        self.assertEqual(self.mutate('SELECT * FROM djmdAlbum'),[('500',None)])
+        self.assertEqual({t for t in before['tables'] if before['tables'][t]!=self.state()['tables'][t]},
+                         {'djmdContent','agentRegistry'})
+
+    def test_unicode_profile_reuses_synced_artist_without_modifying_its_identity_flags_or_clock(self):
+        actor=('600','Björk 東京',None,'00000000-0000-4000-8000-000000000600',0,0,0,1,None,12,CLOCK,CLOCK)
+        self.mutate('INSERT INTO djmdArtist VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',actor)
+        writer=self.unicode_writer();request=writer.capture_request('1',UUID,'/synthetic/song.wav','artist',actor[1],'')
+        self.assertIsNone(request['artist_seed']);before=self.state()
+        with self.assertRaises(WriteProofError):self.writer.apply(request)
+        self.assertEqual(self.state(),before)
+        saved=writer.apply(request)
+        self.assertEqual((saved['ArtistID'],saved['TrackInfoUpdated'],saved['rb_local_usn']),('600','3',42))
+        self.assertEqual(self.mutate('SELECT * FROM djmdArtist WHERE ID=?',('600',)),[actor])
+        self.assertEqual({t for t in before['tables'] if before['tables'][t]!=self.state()['tables'][t]},
+                         {'djmdContent','agentRegistry'})
+
+    def test_unicode_profile_recovery_and_compact_ack_remain_profile_bound(self):
+        writer=self.unicode_writer();request=self.request(value='東京 e\u0301')
+        def interrupt(phase):
+            if phase=='after-commit':raise OSError('lost unicode metadata delivery')
+        with mock.patch.object(metadata,'_fault',side_effect=interrupt),self.assertRaises(OSError):writer.apply(request)
+        committed=self.state()
+        with self.assertRaises(RecoveryRequired):self.writer.recover()
+        self.assertEqual(self.state(),committed)
+        writer=self.unicode_writer();self.assertEqual(writer.recover(),'committed')
+        writer.apply(request);self.assertEqual(self.state(),committed)
+        entry=writer.retirement_entry(request);metadata.retire_acknowledged_receipt(self.root/'data',entry)
+        self.assertEqual(json.loads(writer._receipt_path(request['operation_id']).read_bytes())['profile'],metadata.UNICODE_PROFILE)
+        with self.assertRaises(RecoveryRequired):self.writer.apply(request)
+        writer.apply(request);self.assertEqual(self.state(),committed)
+
+    def test_unicode_profile_first_legacy_metadata_save_uses_native_zero_revision_without_analysis(self):
+        writer=self.unicode_writer()
+        for analysed in (0,105):
+            for revision in (None,'0','1'):
+                with self.subTest(analysed=analysed,revision=revision):
+                    self.mutate('UPDATE djmdContent SET Title=?,Analysed=?,TrackInfoUpdated=? WHERE ID=?',
+                                ('Before',analysed,revision,'1'))
+                    before=self.state();counter=self.mutate("SELECT int_1 FROM agentRegistry WHERE registry_id='localUpdateCount'")[0][0]
+                    request=self.request(value='東京 e\u0301')
+                    for profile in (metadata.PROFILE,metadata.SYNCED_PROFILE):
+                        old=metadata.SourceMetadataStore(replace(self.authority,profile=profile),self.root/'data')
+                        with self.assertRaises(WriteProofError):old.apply(request)
+                        self.assertEqual(self.state(),before)
+                    saved=writer.apply(request)
+                    self.assertEqual((saved['Title'],saved['Analysed'],saved['TrackInfoUpdated'],saved['rb_local_usn']),
+                                     ('東京 e\u0301',analysed,str(int(revision or '0')+1),counter+2))
+                    self.assertEqual({t for t in before['tables'] if before['tables'][t]!=self.state()['tables'][t]},
+                                     {'djmdContent','agentRegistry'})
+                    committed=self.state();writer.apply(request);self.assertEqual(self.state(),committed)
+
+    def test_unicode_bare_paired_save_lost_delivery_recovery_and_retirement_preserve_first_revision(self):
+        self.mutate('UPDATE djmdContent SET Analysed=0,TrackInfoUpdated=NULL WHERE ID=?',('1',))
+        writer=self.unicode_writer();xml=writer.xml.read_bytes()
+        artist=writer.capture_request('1',UUID,'/synthetic/song.wav','artist','東京 e\u0301','')
+        def interrupt(phase):
+            if phase=='after-commit':raise OSError('lost first bare metadata delivery')
+        with mock.patch.object(metadata,'_fault',side_effect=interrupt),self.assertRaises(OSError):writer.apply(artist)
+        committed=self.state();writer=self.unicode_writer();self.assertEqual(writer.recover(),'committed')
+        writer.apply(artist);self.assertEqual(self.state(),committed)
+        row=self.mutate('SELECT Analysed,TrackInfoUpdated,rb_local_usn FROM djmdContent WHERE ID=?',('1',))
+        self.assertEqual(row,[(0,'1',43)])
+        title=self.request(value='Bare title 東京');saved=writer.apply(title)
+        self.assertEqual((saved['Analysed'],saved['TrackInfoUpdated'],saved['rb_local_usn']),(0,'2',45))
+        for request in (artist,title):
+            metadata.retire_acknowledged_receipt(self.root/'data',writer.retirement_entry(request))
+        committed=self.state();writer.apply(artist);writer.apply(title);self.assertEqual(self.state(),committed)
+        self.assertEqual(writer.xml.read_bytes(),xml)
+
+    def test_unicode_profile_read_only_artist_reuse_preserves_null_local_clock(self):
+        actor=('600','Legacy actor',None,'00000000-0000-4000-8000-000000000600',0,0,0,1,None,None,CLOCK,CLOCK)
+        self.mutate('INSERT INTO djmdArtist VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',actor)
+        writer=self.unicode_writer();request=writer.capture_request('1',UUID,'/synthetic/song.wav','artist',actor[1],'')
+        before=self.state()
+        with self.assertRaises(WriteProofError):self.writer.apply(request)
+        self.assertEqual(self.state(),before)
+        saved=writer.apply(request)
+        self.assertEqual((saved['ArtistID'],saved['TrackInfoUpdated'],saved['rb_local_usn']),('600','3',42))
+        self.assertEqual(self.mutate('SELECT * FROM djmdArtist WHERE ID=?',('600',)),[actor])
+        self.assertEqual({t for t in before['tables'] if before['tables'][t]!=self.state()['tables'][t]},
+                         {'djmdContent','agentRegistry'})
+
+    def test_unicode_profile_does_not_guess_cloud_album_artist_or_control_character_protocols(self):
+        writer=self.unicode_writer()
+        for value in ('東京\x00','東京\nline','東京\u200d','\ud800','é'*256):
+            with self.subTest(value=repr(value)):
+                before=self.state()
+                with self.assertRaises(WriteProofError):writer.apply(self.request(value=value))
+                self.assertEqual(self.state(),before)
+        for column,value in (('Analysed',1),('TrackInfoUpdated',''),('TrackInfoUpdated','-1'),
+                             ('TrackInfoUpdated','01'),('TrackInfoUpdated','2147483647'),('TrackInfoUpdated','٢'),('usn',1),
+                             ('rb_local_synced',2),('rb_data_status',257)):
+            with self.subTest(column=column):
+                self.mutate('UPDATE djmdContent SET '+column+'=? WHERE ID=?',(value,'1'));before=self.state()
+                with self.assertRaises(WriteProofError):writer.apply(self.request(value='東京'))
+                self.assertEqual(self.state(),before)
+                self.mutate("UPDATE djmdContent SET Analysed=105,TrackInfoUpdated='2',usn=NULL,rb_local_synced=0,rb_data_status=0 WHERE ID='1'")
+        self.mutate('UPDATE djmdContent SET AlbumID=? WHERE ID=?',('500','1'));before=self.state()
+        with self.assertRaises(WriteProofError):writer.capture_request('1',UUID,'/synthetic/song.wav','artist','東京','')
+        self.assertEqual(self.state(),before)
+
     def test_synced_profile_paired_artist_title_save_preserves_history_and_unrelated_orphans(self):
         writer=self.synced_writer()
         self.mutate('INSERT INTO djmdArtist VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',

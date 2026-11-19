@@ -3,6 +3,83 @@
 Active implementation audit; this is not a completion or native-acceptance receipt.
 [HANDOFF](HANDOFF.md) records the installed app separately from changing source.
 
+## Current boundary and dated metadata checkpoints
+
+Exact-library v5 Title/Artist profiles and general activation were independently
+accepted. The preserved migration remains unfinished until its queue drains and
+full native/curation verification passes; Pause is a scheduling choice, not a
+new permission gate. The later helper/QOL releases passed Sonny's scrolling
+checks. Current source adds selected durable iPod export capture and quiet routine
+metadata status; generic USB keeps its separate source-save contract. HANDOFF
+records actual installation separately from source and failed or completed gates.
+Other native field/artwork/analysis profiles below remain independently gated.
+
+### November17 metadata investigation — dated rolling checkpoints
+
+The independently tested v2/v3/v4/v5 source profiles and bounded manual native
+reopen checks are accepted. Sonny approved general exact-library v5 activation
+and5,090 remaining title/artist fields. The first release repeated complete
+desktop preparation after ACKs; its successor personal172/source9c25e622 passed
+3,491 checks but failed Sonny's Collection scrolling check, worst during
+“Updating songs”. Its temporary authority-file hold explained the old app's
+misleading separate-acceptance footer; no new metadata approval is needed.
+The intermediateed9db9fc passed3,558checks but still stuttered in Sonny's check.
+At that checkpoint, personal172/source4caf9787 was installed after all3,632checks passed, with
+strict package/native parity and isolated/normal startup verification. It keeps
+the same accepted authority. Its launch pause at97/3,121 has since been resumed.
+Sonny rejected its scrolling behavior; acceptance is not pending. Complete plan
+validation and canonical verification run off-thread; immutable revision-bound
+snapshots remove repeated full target copies. Browser/model owners, streamed
+catalog hashing and private canonical record specifications avoid repeated work.
+GUI publication measures~35–42ms versus~99ms; copied-checkpoint scalar commits
+measure~125ms on their ordered worker. A~50ms reachable-heap GC pause remains
+open. A consistent copied current checkpoint with continuous scrollbar input
+records161.5ms maximum timer delay during cache phases plus125–158ms readback gaps,
+despite zero GUI saves and
+unchanged registry semantics. Source-only preference/curation-ACK corrections
+have focused coverage; readback/GIL/GC investigation continues. First verified startup
+retired two already-fulfilled title masks; independent native readback and actual
+registry/engine computation preserve all3,298 effective title/artist pairs.
+Native write guards, readback and ACK durability are unchanged. Shared metadata migration remains
+unfinished until the queue drains and full source/curation verification passes.
+This does not accept the other native field/artwork/analysis profiles below.
+
+## November17 delegated write-path performance audit
+
+Sonny explicitly requested three subagents after reporting Collection scrolling
+choking during metadata backlog processing. Native transactional atomicity and
+complete encrypted recovery proof remain; broad native proof stays in workers.
+The avoidable full desktop/media initialization after an ACK is separate work.
+These corrections were installed in4caf9787; Sonny's scrolling check still failed
+at that checkpoint despite its passing release gate and native readback. Later
+accepted helper/QOL deliveries supersede that interaction result, not its evidence.
+
+| Write path | Native freshness retained | Presentation correction / remaining cost |
+| --- | --- | --- |
+| Title/artist and frozen migration | Exact guarded per-field request, shared journal, fresh full musical readback and durable ACK | Compatible snapshots reuse imports/services, including exact saved local import times. Unchanged Collection/custom rows retain the model. Unstarted frozen work yields during user interaction. |
+| Tag assignments and definition create/delete | Complete fresh tags/cues/intelligent membership readback | Prepared publication avoids media/device/art/prep restart. Missing production default readback is fixed; an injected reader retains its path API. |
+| Ordinary playlist edits and smart deletion | Targeted native catalog and causal revision checks | Already use targeted catalog presentation; repeated schedule signals are coalesced. Projection still scans identity scalars to detect in-place mutations. |
+| Smart creation | Complete fresh intelligent membership readback | Uses the shared production reader and prepared publication; no default-None loader failure. |
+| Cue/grid/prep | Selected native snapshots, independent codec/profile guards, exact recovery | Existing successful ACKs update selected tracks rather than replacing the whole library. |
+| Analysis | Complete worker-side native recovery proof and selected-track readback | Status-only native discovery wakes are filtered by relevant owners/scope. Actual inventory/detection updates still discover. Pending-queue validation and grid-controller reconfiguration remain bounded costs requiring separate measurement. |
+| Registration/import memberships | First registration keeps canonical/alias media resolution and exact binding/CAS | Subsequent membership readbacks avoid resolving all media again; compatible publication reuses prepared services. |
+| Conversion/locator | Exact original bytes/epochs, accepted conversion protocol and worker recovery proof | ACKs already target matching rows. Prepared media-fact/scanner ownership must survive compatible metadata snapshots. |
+| Graveyard/native removal | Complete shared-reference/cascade inventory and exact receipt acknowledgement | Avoid a second durable save and device discovery after the ACK; changed visibility still refreshes artwork universe and Graveyard presentation. |
+
+Canonical state was an additional GUI bottleneck independent of native SQL:
+6,433 referenced files and a3.19MB manifest produced about51,474 lstat calls per
+profiled scalar save. Reusing the already-checked inventory for an internal
+recent-backup no-op and pinning the plain record directory once per validation
+pass reduced this to25,746 calls. Unprofiled scratch saves measured0.511–0.514s
+before and0.278–0.283s afterward. Public backup still validates records, drift
+still hashes exact bytes, and the fresh prepublication sweep remains. This is
+a measured reduction, not a claim that synchronous persistence has zero latency.
+The installed successor now performs repeated metadata commits on an ordered
+worker while retaining these exact checks. Actual full-size controller proof has
+zero ordinary GUI saves per pair. Other gesture/preference saves were synchronous
+at that profiling checkpoint; later ordered preference and My Tags ACK work is
+described in [architecture](ARCHITECTURE.md). Remaining paths need their own measurements.
+
 ## November16 reboot handoff
 
 The installed839fc142 candidate passed3,426 cases and actual normal quit/reopen;
@@ -33,8 +110,8 @@ Device ownership and application preferences remain application-specific.
 
 | Existing feature | Finding and work required |
 | --- | --- |
-| Inline title and artist | Durable paired intentions, exact readback, counterpart preservation and automatic-value resets are implemented in source and tested through encrypted TEMP SQL/restart. Metadata authority remains independently default-off; the measured profile is too narrow for the full collection. |
-| Automatic title cleaning and artist derivation/merges | Frozen paired migration, raw scalar provenance, durable merge/unmerge and cleanup-rule/drop-word successor plans are implemented in source. Dirty native refreshes feed background derivation; only changed global trust/canonical context expands the row set. Native metadata profile/activation and delivery remain incomplete. |
+| Inline title and artist | Durable paired intentions, exact readback, counterpart preservation and automatic-value resets are implemented. Exact-library v5 native acceptance and general activation are approved; preserved backlog completion still requires queue drain/full verification. Later helper/QOL scrolling acceptance is recorded in HANDOFF. |
+| Automatic title cleaning and artist derivation/merges | Frozen paired migration, raw scalar provenance, durable merge/unmerge and cleanup-rule/drop-word successor plans are implemented. Dirty native refreshes feed background derivation; changed global trust/canonical context expands the row set. Approved native backfill is in progress; queue drain and full verification remain required. |
 | Track Info | Title/Artist saves include only changed controls and reject stale dialog identities. Album, genre, year, release date, comments, play count, rating, label, color and hot-cue autoload still lack their native field/related-row protocols. Refusal is not completion. |
 | Curated track artwork | Art cache and exported derivatives do not update native ImagePath/artwork. Inventory native counterpart, image lifecycle and identity before adding a publisher; preserve curated originals and audio. Artist-profile fallback remains distinct from a real track cover. |
 | My Tag assignment | Durable single-flight intentions, exact selected identities/readback and restart acknowledgement are implemented and source-tested. Historical/synced deletion and unsupported native row-state envelopes remain separate open work. |
@@ -149,7 +226,13 @@ checked the shared successor and ownership paths. This is source-only evidence:
 the integrated gate, package and runtime handoff are separate; HANDOFF records
 their actual status, including interrupted checks that grant no acceptance.
 
-Metadata publication still has its own default-off exact-library authority.
+### Historical metadata profile pilots and activation sequence
+
+The following absent-authority/pending-install statements describe their exact
+v2–v5 preparation and pilot checkpoints. Later general v5 activation above
+supersedes those statuses, without widening any original approval or profile.
+
+Metadata publication has its own default-off exact-library authority.
 The original setter windows cover printable ASCII, local analysed rows with an
 empty album and separate artist creation/reuse/clear/local-orphan retirement.
 A separately admitted v2 candidate also preserves synced0/1 Content without a
@@ -157,15 +240,88 @@ remote USN. Profile-bound recovery/replay, four new regressions and an encrypted
 copy of the selected older DESIGNER row pass; its paired title/artist save advances
 the counter5 with unrelated rows/schema/XML exact. Ten generated shipped-Agent
 business-component cases support the observed updates; transport/Main/UI and
-source reopen remain unproven. No live metadata authority was enabled. Static
+source reopen were unproven in that earlier proof. The separately approved
+DESIGNER v2 pair has now saved to the real source with full unrelated-state parity;
+Sonny confirmed both fields after reopening rekordbox himself. No general
+metadata authority is enabled. Static
 Main inspection finds global unused Artist/Album cleanup; the candidate preserves
-unrelated orphans. Installed171 lacks the new record/recovery routing, so a live
-pilot requires compatible validated delivery first. Other older/history states,
-Unicode and other text profiles, nonempty albums, and
+unrelated orphans. Installed839fc142 includes the compatible record/recovery
+routing. New v3 source covers component-proven Unicode, title-only existing albums
+and unchanged synced-artist reuse, including NULL local clocks. Its bare/legacy
+NULL/0/1 revision and Analysed0/105 path now has static Main integer-conversion
+evidence plus complete generated content/revision matrices. Encrypted TEMP tests
+cover lost commits, profile-bound recovery, compact ACKs and unchanged old-profile
+journal reconstruction. The earlier full gate was interrupted; a fresh bare
+render gate passes all3,435 cases with780 unchanged frozen inputs. The signed
+personal build172, source742874e3, passes Python/native code parity and isolated
+native/SQL startup; it is not installed. Sonny separately approved four actual
+records/six field saves. They complete through v3 with counter+13, one new artist
+and exact unrelated native/curated state. His four manual native screenshots
+confirm all pairs, including the Unicode title and bare/NULL revision records;
+fresh readback confirms identities/pairs and unchanged SoundBox curation.
+General metadata authority remains absent. Other older/history
+states, remote/status257 rows, synced orphan retirement, artist edits
+with nonempty albums, and
 combined new-artist creation plus old-orphan retirement need further native
 proof. All ten extra Track Info editors and native artwork persistence remain
 unfinished; saved extra Track Info fields can still block migration of that
 pair. Guarded refusal and fixture coverage do not complete those features.
+
+The newer v4 candidate now covers bounded local/synced old-artist retirement and
+combined creation. Explicit retirement clocks, exact actor UPDATE columns and
+profile-bound recovery/compact ACKs keep v1/v2/v3 semantics unchanged. Forty-four
+focused tests and copied current-queue checks pass;43 more artist changes are
+admitted,45 fields remain guarded (35 album transitions,8 cloud Content fields,
+2 actor-reuse states). The fresh3,445-case render gate and signed5e42fab8 package/
+native startup pass. Two concrete source checks were rehearsed on an encrypted
+TEMP copy, then separately approved with “yes you are good”. Both artist saves
+and exact unshared prior-definition cleanup complete with counter+7 and one new
+artist; unrelated native and curated state remain exact. Both manual native
+checks pass, with fresh pairs/identities and prior-artist history verified after
+reopen. No general source authority or actual app installation
+follows from these results. HANDOFF records
+the rejected12-hour reference and separate corrected UTC proof without weakened
+clock guards or substituted required fixtures.
+
+The subsequent v5 source candidate implements those45 remaining current-queue
+fields:35 Album artist transitions,8 cloud Content fields and2 active artist
+lookups with same-name deleted history. The last two are not remote actors;
+CROMATIK has one active definition and one retained deleted definition. Generated
+primary components/static Main tracing support24 album compositions and16 cloud
+update stages, with exact large-USN SQL TEXT casts. Fifty-three focused tests
+pass after correcting the generic synthetic fixture's TEXT affinity to native
+BIGINT for these new cloud cases; the integer guard remains strict.
+
+A fresh audit of all3,121 frozen current queued pairs finds1,147 already-equal
+fields and5,095 candidate saves (2,112 titles/2,983 artists), with no profile
+refusals in that cohort. All41 formerly guarded records pass56 field saves on
+one encrypted TEMP copy, including their paired title changes, counter+183,
+complete exact Content/Artist/Album rows, all other tables/schema/XML and compact
+ACK replay. Original musical data and full logical SoundBox curation remain
+unchanged; the copy/recovery are removed. This is copy-only proof, not live v5
+acceptance or general authority. The complete3,454-case render gate passes with
+783 exact frozen inputs and zero skips/expected failures. The signed72d6b1d7
+personal package,185-module/25-native-section parity and isolated Cocoa native/
+SQL startup pass. The exact next three-record/five-field helpers pass a TEMP
+rehearsal with counter+14, two new artists and complete unrelated-state parity;
+Sonny then approved only those three records/five fields and related bookkeeping
+with “yesssirrrr”. The five actual guarded saves complete with counter+14 and two
+new artists, full unrelated native/curated parity, preserved WAVELENGTH name/
+album artist and exact CROMATIK active/deleted history. All three manual native reopen checks now pass. Fresh readback preserves complete
+song/artist/album/history/counter/schema/XML and logical SoundBox state. A native
+promotional notification refresh changes only row329's URL/updated_at, separately
+pinned after the first strict comparison stopped; agentRegistry is the only other
+native-open table delta. The source writer did not modify that notification, and
+its SQL/profile limits remain strict. Completed full pilot payloads are retired
+after independent TEMP verification and compact exact proof. Do not replay the
+completed helpers.
+
+The then-new read-only proposal found5,090 remaining title/artist changes,
+1,152 already-equal fields and no profile refusals or extra Track Info overlays in
+this cohort. At that proposal checkpoint, the private authority draft was not
+activated, install/relaunch/backfill permission was pending, and installed839fc142
+was unchanged. The later accepted general activation and current handoff supersede
+that status; the exact completed pilot helpers must never be replayed.
 
 ## Validation requirements
 

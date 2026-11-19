@@ -335,6 +335,44 @@ class NativePlaylistGestures(unittest.TestCase):
         self.assertEqual(self.controller.pending,[]);self.assertEqual(self.calls,[])
         self.assertEqual(self.window.lib.playlists[0].name,'List');self.assertEqual(self.window.removals,{})
 
+    def test_discard_cannot_erase_the_head_admitted_inside_confirmation(self):
+        import threading
+        from desktop.rekordbox_playlists import QMessageBox
+        release=threading.Event();apply=self.backend.apply
+        def held(request):
+            if not release.wait(2):raise AssertionError('Disposable writer was not released')
+            return apply(request)
+        self.backend.apply=held
+        self.assertTrue(self.controller.enqueue(self.rename('Saved after confirmation')))
+        self.controller.timer.stop();before=copy.deepcopy(self.controller.pending)
+        self.window._save_state.reset_mock()
+        def confirm(*_args):
+            self.controller.not_before=0;self.controller.pump()
+            self.assertTrue(self.window.tag_controller.owned)
+            return QMessageBox.Yes
+        try:
+            with mock.patch.object(QMessageBox,'question',side_effect=confirm):
+                self.assertFalse(self.controller.discard())
+            self.assertEqual(self.controller.pending,before)
+            self.window._save_state.assert_not_called()
+        finally:release.set()
+        self.wait(lambda:not self.controller.pending and not self.window.tag_controller.owned)
+        self.assertEqual(len(self.calls),1)
+        self.assertEqual(self.window.lib.playlists[0].name,'Saved after confirmation')
+
+    def test_discard_confirmation_cannot_absorb_an_unreviewed_tail(self):
+        from desktop.rekordbox_playlists import QMessageBox
+        self.assertTrue(self.controller.enqueue(self.rename('Reviewed')))
+        self.controller.timer.stop();captured=[]
+        def confirm(*_args):
+            self.assertTrue(self.controller.enqueue(self.rename('Newer')))
+            self.controller.timer.stop();captured.extend(copy.deepcopy(self.controller.pending))
+            return QMessageBox.Yes
+        with mock.patch.object(QMessageBox,'question',side_effect=confirm):
+            self.assertFalse(self.controller.discard())
+        self.assertEqual(self.controller.pending,captured)
+        self.assertEqual(len(captured),2);self.assertEqual(self.calls,[])
+
     def test_invalid_saved_queue_is_preserved_and_cannot_admit_a_worker(self):
         self.window.settings[QUEUE]=[{'request':{'operation_id':'../../foreign'}}]
         before=copy.deepcopy(self.window.settings)

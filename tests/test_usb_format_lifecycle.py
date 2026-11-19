@@ -11,10 +11,12 @@ from desktop.app import MainWindow
 from desktop.cdj import CdjDeviceMixin
 from desktop.device_browser import DeviceBrowserMixin
 from soundbox.device_operations import DeviceOperationCoordinator, DeviceCommand, DeviceSessionIdentity, Phase
+from soundbox.library import Library
 
 
 class FormatHost(CdjDeviceMixin, QWidget):
     _device_operation_owned = MainWindow._device_operation_owned
+    _stock_has_sync_source = MainWindow._stock_has_sync_source
     _EJECT_BLOCKING_WORKERS = DeviceBrowserMixin._EJECT_BLOCKING_WORKERS
 
     def __init__(self, root):
@@ -25,6 +27,7 @@ class FormatHost(CdjDeviceMixin, QWidget):
         self._deleting=False
         self._stock_view_warming=set()
         self._stock_view_pending={}
+        self._stock_view_cache={}
         self._pending_device_operation=None
         self._device_coordinator=DeviceOperationCoordinator()
         self._usb_format_worker=None
@@ -155,7 +158,7 @@ class FormatLifecycleTests(unittest.TestCase):
                 host=SimpleNamespace(_dev_scan_worker=worker,
                     _pending_device_operation=None,_device_mount_tokens={'/fixture/USB':1,'/fixture/OTHER':2},
                     _device_profiles={'/fixture/USB':SimpleNamespace(kind='generic_usb')},
-                    _device_coordinator=SimpleNamespace(eject_pending=False),
+                    _device_coordinator=DeviceOperationCoordinator(),
                     _shutting_down=False,progress=mock.Mock(),cancel_btn=mock.Mock(),
                     _start_pulse=mock.Mock(),_stop_pulse=mock.Mock())
                 self.assertTrue(MainWindow._defer_device_operation_until_scan_finishes(host,resume,target='/fixture/USB'))
@@ -168,6 +171,7 @@ class FormatLifecycleTests(unittest.TestCase):
                 self.assertFalse(host._exporting)
 
     def test_export_control_stays_enabled_for_other_usb_during_format(self):
+        self.host.lib=Library({}, [], '/synthetic/library.xml')
         self.host._usb_format_device='/fixture/USB'
         self.host._usb_format_volumes=('/fixture/USB',)
         self.host._usb_format_started=True

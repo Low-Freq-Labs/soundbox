@@ -212,7 +212,8 @@ class NativeOccurrenceContextMenu(unittest.TestCase):
 
     def test_tag_and_created_library_publication_preserve_one_duplicate_occurrence(self):
         win, rows=self.window()
-        def refreshed(library):
+        def refreshed(library,*,prepared_native_ids):
+            self.assertEqual(prepared_native_ids,())
             win.lib=library;win.model.set_rows(deepcopy(rows))
         for name in ('_tag_saved','_publish_created_library'):
             win.model.set_rows(deepcopy(rows));self.select(win,'3')

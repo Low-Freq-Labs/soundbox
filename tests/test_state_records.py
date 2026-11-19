@@ -3,6 +3,7 @@ import copy
 import json
 import os
 from pathlib import Path
+import shutil
 import tempfile
 import unittest
 from unittest import mock
@@ -33,6 +34,80 @@ def files(root):
 
 
 class SongStateRecords(unittest.TestCase):
+    def test_private_scalar_patch_reuses_owned_namespace_specs_rows_and_exact_costs(self):
+        with tempfile.TemporaryDirectory() as td:
+            repo=StateRepository(Path(td)/'library.json');repo.save(values());repo.backup()
+            prior=repo._record_specs['analysis_results'];owned=repo._document['settings']['analysis_results']
+            epochs=dict(repo._record_epochs)
+            with (mock.patch.object(state_records,'entry_cost',side_effect=AssertionError('Private entry rebuilt')),
+                  mock.patch.object(state_records,'capture',side_effect=AssertionError('Untouched epoch recaptured'))):
+                repo.commit_patch(repo.prepare_patch({('settings','waveform_zoom'):184.0}))
+            self.assertIs(repo._record_specs['analysis_results'],prior)
+            self.assertIs(repo._document['settings']['analysis_results'],owned)
+            self.assertEqual(repo._record_epochs,epochs)
+            self.assertEqual(read_state(repo.path)['settings']['waveform_zoom'],184.0)
+            # Loading computes the same exact cost before the private fast path.
+            reloaded=StateRepository(repo.path);reloaded.load()
+            with mock.patch.object(state_records,'entry_cost',side_effect=AssertionError('Loaded entry rebuilt')):
+                reloaded.commit_patch(reloaded.prepare_patch({('settings','waveform_zoom'):92.0}))
+
+    def test_generic_namespace_keeps_exact_entry_rows_but_detaches_changed_caller_records(self):
+        with tempfile.TemporaryDirectory() as td:
+            repo=StateRepository(Path(td)/'library.json');repo.save(values());repo.backup()
+            incoming=repo.load();prior=repo._record_specs['analysis_results']
+            items=list(incoming['settings']['analysis_results'].items())
+            incoming['settings']['analysis_results']=dict(reversed(items))
+            items[0][1]['key']='9A';repo.save(incoming)
+            entries=repo._record_specs['analysis_results']['entries']
+            self.assertIs(entries[0],prior['entries'][1]);self.assertIsNot(entries[1],prior['entries'][0])
+            self.assertEqual([row[0] for row in entries],[items[1][0],items[0][0]])
+            items[0][1]['key']='1A'
+            repo.commit_patch(repo.prepare_patch({('settings','waveform_zoom'):184.0}))
+            saved=read_state(repo.path)['settings']['analysis_results']
+            self.assertEqual(saved[items[0][0]]['key'],'9A')
+            self.assertEqual(list(saved),[items[1][0],items[0][0]])
+
+    def test_postpublication_unrelated_tampering_never_receives_a_fresh_epoch(self):
+        with tempfile.TemporaryDirectory() as td:
+            repo=StateRepository(Path(td)/'library.json');repo.save(values(1));repo.backup()
+            digest=next(iter(repo._record_epochs));record=state_records.record_path(repo.path,digest)
+            prior=repo._record_epochs[digest];publish=repo.area.publish
+            def tamper(changes):
+                publish(changes)
+                old=record.stat();record.write_bytes(record.read_bytes().replace(b'120.0',b'121.0'))
+                os.utime(record,ns=(old.st_atime_ns,old.st_mtime_ns))
+            with mock.patch.object(repo.area,'publish',side_effect=tamper):
+                repo.commit_patch(repo.prepare_patch({('settings','waveform_zoom'):184.0}))
+            self.assertEqual(repo._record_epochs[digest],prior)
+            manifest=repo.path.read_bytes()
+            with self.assertRaises(ValueError):repo.save({'custom':{'Refuse':[]}})
+            self.assertEqual(repo.path.read_bytes(),manifest)
+
+    def test_newly_published_record_requires_stable_bytes_and_matching_digest(self):
+        with tempfile.TemporaryDirectory() as td:
+            repo=StateRepository(Path(td)/'library.json');repo.save(values(1));repo.backup()
+            publish=repo.area.publish;incoming=repo.load()
+            next(iter(incoming['settings']['analysis_results'].values()))['key']='9A'
+            def tamper(changes):
+                publish(changes)
+                for name,value in changes.items():
+                    if name.startswith(state_records.DIRECTORY+'/') and isinstance(value,bytes):
+                        (repo.path.parent/name).write_bytes(value.replace(b'9A',b'1A'))
+            with mock.patch.object(repo.area,'publish',side_effect=tamper):
+                with self.assertRaisesRegex(ValueError,'does not match'):repo.save(incoming)
+            with self.assertRaises(StateChangedError):repo.save({'custom':{'Refuse':[]}})
+
+    def test_private_namespace_cached_cost_still_enforces_size_and_record_count(self):
+        from soundbox import state_repository
+        with tempfile.TemporaryDirectory() as td:
+            repo=StateRepository(Path(td)/'library.json');repo.save(values());repo.backup()
+            before=files(repo.path.parent)
+            for owner,name,budget in ((state_records,'MAX_RECORDS',1),(state_repository,'_MAX_STATE_BYTES',100)):
+                with self.subTest(limit=name),mock.patch.object(owner,name,budget):
+                    with self.assertRaises(ValueError):
+                        repo.commit_patch(repo.prepare_patch({('settings','waveform_zoom'):184.0}))
+                self.assertEqual(files(repo.path.parent),before)
+
     def test_alias_origins_and_next_pairs_survive_progress_backup_and_restore_without_rewriting(self):
         with tempfile.TemporaryDirectory() as td:
             root=Path(td);path=root/'library.json';repo=StateRepository(path)
@@ -190,6 +265,39 @@ class SongStateRecords(unittest.TestCase):
             self.assertEqual(restored.load(), values(1))
             self.assertIsNotNone(restored.recovery)
             self.assertEqual(target.read_bytes(), bad)
+
+    def test_epoch_inventory_rejects_record_directory_replacement_or_symlink_midpass(self):
+        for redirect in (False,True):
+            with self.subTest(redirect=redirect), tempfile.TemporaryDirectory() as td:
+                root=Path(td);path=root/'library.json';repo=StateRepository(path)
+                repo.save(values())
+                folder=root/state_records.DIRECTORY
+                prior=dict(repo._record_epochs);observed=state_records.identity;swapped=False
+                def identity(record):
+                    nonlocal swapped
+                    result_value=observed(record)
+                    if not swapped:
+                        swapped=True;folder.rename(root/'old-records')
+                        if redirect:folder.symlink_to(root/'old-records',target_is_directory=True)
+                        else:shutil.copytree(root/'old-records',folder)
+                    return result_value
+                with mock.patch.object(state_records,'identity',side_effect=identity):
+                    with self.assertRaisesRegex(ValueError,'directory changed'):
+                        state_records.validate_epochs(path,prior)
+
+    def test_internal_backup_reuse_cannot_hide_record_drift_before_publication(self):
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td);path=root/'library.json';repo=StateRepository(path)
+            repo.save(values(1));repo.backup()
+            manifest=path.read_bytes();record=next((root/state_records.DIRECTORY).glob('*.json'))
+            original=repo._backup
+            def corrupt(**kwargs):
+                original(**kwargs)
+                record.write_bytes(record.read_bytes().replace(b'120.0',b'121.0'))
+            with mock.patch.object(repo,'_backup',side_effect=corrupt):
+                with self.assertRaises(ValueError):repo.save({'custom':{'Unsafe':[]}})
+            self.assertEqual(path.read_bytes(),manifest)
+            self.assertFalse((root/'.state-transaction').exists())
 
     def test_publication_failure_rolls_back_changed_retired_records_and_manifest(self):
         for fail_at in range(1, 3):

@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 import threading
 import time
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -75,6 +76,19 @@ class ImportAnalysisFlow(unittest.TestCase):
         pb.cue_panel._loaded = True
         pb._analysis_parts = analysis.playback_data({}, record, track.path)
         return pb
+
+    def completed_analysis(self, track, record):
+        prefs=analysis.options(dict(bpm=True,key=False,first_cue=False))
+        self.win.settings[analysis_jobs.KEY]=analysis_jobs.admit([],self.win.lib,[track],prefs)
+        self.assertTrue(self.win._save_state())
+        with mock.patch.object(self.win,'_start_next_analysis'):
+            self.win._resume_analysis_jobs()
+        job=self.win.settings[analysis_jobs.KEY][0]
+        self.win._analysis_queue=[entry for entry in self.win._analysis_queue if entry[3]!=job['id']]
+        worker=SimpleNamespace(library=self.win.lib,tracks=[track],preferences=prefs,
+            result={analysis.result_key(track.path):record},job_id=job['id'],stop=threading.Event())
+        self.win._analysis_worker=worker
+        return worker
 
     def waveform_projection(self, track, bpm=140):
         from desktop.workers import WaveformFillWorker
@@ -554,11 +568,16 @@ class ImportAnalysisFlow(unittest.TestCase):
             self.assertTrue(self.win._edit_grid('bpm',12100))
             self.assertTrue(self.win._edit_cue('hot',0,'add'))
             self.assertEqual(pb.cue_panel._cues['hot'][0]['position_ms'],1234)
+            self.wait(lambda:not self.win.prep_controller.admission_pending)
+            self.assertFalse(self.win.prep_controller.admission_error)
             saved = deepcopy(self.win.settings['analysis_results'])
-            with mock.patch.object(self.win, '_save_state', return_value=False):
-                self.assertFalse(self.win._edit_cue('hot',0,'delete'))
+            with mock.patch.object(self.win._state_repository, 'commit_patch', side_effect=OSError('fixture disk full')):
+                self.assertTrue(self.win._edit_cue('hot',0,'delete'))
+                self.assertIsNone(pb.cue_panel._cues['hot'][0])
+                self.wait(lambda:not self.win.prep_controller.admission_pending)
+            self.assertIn('fixture disk full',self.win.prep_controller.admission_error)
             self.assertEqual(self.win.settings['analysis_results'],saved)
-            self.assertIsNotNone(pb.cue_panel._cues['hot'][0])
+            self.assertIsNone(pb.cue_panel._cues['hot'][0])
             reload_audio.assert_not_called()
         restarted = StateRepository(self.win._data_file).load()['settings']['analysis_results'][key]
         self.assertEqual(local_grid.effective_result(restarted)['bpm'],121)
@@ -566,13 +585,22 @@ class ImportAnalysisFlow(unittest.TestCase):
         late = analysis.merge_result(restarted,record,dict(bpm=True,key=True))
         self.assertEqual(local_cues.cues(late),local_cues.cues(restarted))
         self.assertEqual(analysis.playback_data({},late,track.path)['cues'],local_cues.cues(restarted))
+        self.win.prep_controller.retry()
+        self.wait(lambda:not self.win.prep_controller.admission_pending)
+        self.assertFalse(self.win.prep_controller.admission_error)
+        final=StateRepository(self.win._data_file).load()['settings']['analysis_results'][key]
+        self.assertEqual(local_cues.cues(final),[])
+        self.assertEqual(local_grid.effective_result(final)['bpm'],121)
 
     def test_set_cue_uses_first_empty_slot_on_active_page_and_preserves_existing_cues(self):
         track=self.track('next-cue');record=self.result(track);key=analysis.result_key(track.path)
         self.win.settings['analysis_results']={key:record};pb=self.load(track,record)
+        self.assertTrue(self.win._save_state())
         with mock.patch.object(pb.player,'set_cues'),mock.patch.object(pb,'capture_cue_position',side_effect=[1000,2000,3000]),mock.patch.object(pb,'_update_transport'):
             self.win._dispatch_keyboard_action('cues.set');self.win._dispatch_keyboard_action('cues.set')
             pb.cue_panel.memory_tab.click();self.win._dispatch_keyboard_action('cues.set')
+        self.wait(lambda:not self.win.prep_controller.admission_pending)
+        self.assertFalse(self.win.prep_controller.admission_error)
         cues=local_cues.cues(StateRepository(self.win._data_file).load()['settings']['analysis_results'][key])
         self.assertEqual([(c['kind'],c['slot'],c['position_ms']) for c in cues],[('hot',0,1000),('hot',1,2000),('memory',0,3000)])
         pb.cue_panel._cues['memory']=[dict(position_ms=i) for i in range(8)]
@@ -708,6 +736,8 @@ class ImportAnalysisFlow(unittest.TestCase):
             self.assertTrue(self.win._edit_grid('shift',1))
             self.assertTrue(self.win._edit_local_cue(native,'memory',0,'add',500))
             analyze.assert_not_called()
+        self.wait(lambda:not self.win.prep_controller.admission_pending)
+        self.assertFalse(self.win.prep_controller.admission_error)
         after=self.win.settings['analysis_results'][key]
         self.assertEqual(after['sha256'],record['sha256']);self.assertEqual(after['beats'],record['beats'])
         self.assertEqual(local_grid.effective_result(after)['beats'][0][1],1)
@@ -734,7 +764,10 @@ class ImportAnalysisFlow(unittest.TestCase):
             self.assertTrue(pb.cue_panel._editable)
             self.assertTrue(self.win._edit_grid('shift',1))
             self.assertTrue(self.win._edit_cue('hot',0,'add'))
+        self.assertEqual(pb.cue_panel._cues['hot'][0]['position_ms'],1234)
         self.win.tag_controller.busy=False;self.win._refresh_worker=None
+        self.wait(lambda:not self.win.prep_controller.admission_pending)
+        self.assertFalse(self.win.prep_controller.admission_error)
         saved=StateRepository(self.win._data_file).load()['settings']
         self.assertEqual(len(saved['pending_prep_edits'][0]['operations']),2)
         self.assertEqual(saved['pending_prep_edits'][0]['cues'][0]['position_ms'],1234)
@@ -752,12 +785,260 @@ class ImportAnalysisFlow(unittest.TestCase):
         with mock.patch.object(pb.player,'set_grid'),mock.patch.object(pb,'_update_transport'):
             self.assertTrue(self.win._edit_grid('shift',1))
             self.assertTrue(self.win._edit_local_cue(track,'hot',0,'add',777))
+        self.wait(lambda:not self.win.prep_controller.admission_pending)
+        self.assertFalse(self.win.prep_controller.admission_error)
         bound=self.win.prep_controller.attach_result(track,record)
         self.assertEqual(local_grid.effective_result(bound)['beats'][0][1],1)
         self.assertEqual(local_cues.cues(bound)[0]['position_ms'],777)
         self.assertEqual(bound['sha256'],record['sha256'])
         saved=StateRepository(self.win._data_file).load()['settings']['pending_prep_edits']
         self.assertEqual(saved[0]['cues'][0]['position_ms'],777)
+
+    def test_queued_cue_keeps_new_detector_binding_and_exact_operation_ids(self):
+        track=self.track('queued-binding');record=self.result(track);pb=self.load(track,record)
+        key=analysis.result_key(track.path);controller=self.win.prep_controller
+        with mock.patch.object(pb.player,'set_grid'),mock.patch.object(pb,'_update_transport'):
+            self.assertTrue(self.win._edit_grid('shift',1))
+            self.win.tag_controller.busy=True
+            self.assertTrue(self.win._edit_local_cue(track,'hot',0,'add',777))
+        intended=deepcopy(controller.state_lane.queue[-1]['job']['operations'])
+        bound=controller.attach_result(track,record)
+        self.win.settings['analysis_results']={key:bound}
+        self.assertTrue(self.win._save_state())
+        self.assertEqual(controller.job(track.track_id)['sha256'],record['sha256'])
+        self.assertEqual(pb.cue_panel._cues['hot'][0]['position_ms'],777)
+        self.win.tag_controller.busy=False
+        self.wait(lambda:not controller.admission_pending)
+        self.assertFalse(controller.admission_error)
+        saved=StateRepository(self.win._data_file).load()['settings']
+        job=saved['pending_prep_edits'][0]
+        self.assertEqual(job['operations'],intended)
+        self.assertEqual((job['sha256'],job['epoch']),(record['sha256'],record['epoch']))
+        self.assertEqual(local_cues.cues(saved['analysis_results'][key])[0]['position_ms'],777)
+        self.assertEqual(local_grid.effective_result(saved['analysis_results'][key])['beats'][0][1],1)
+
+    def test_queued_cue_keeps_verified_cloud_epoch_and_cleared_identity_hold(self):
+        track=self.track('queued-renewal');record=self.result(track);pb=self.load(track,record)
+        key=analysis.result_key(track.path);controller=self.win.prep_controller
+        self.win.settings['analysis_results']={key:record}
+        self.assertTrue(self.win._save_state())
+        track.path.chmod(0o600)
+        self.assertNotEqual(analysis.identity(track.path.stat()),record['epoch'])
+        with mock.patch.object(pb.player,'set_grid'),mock.patch.object(pb,'_update_transport'):
+            self.assertTrue(self.win._edit_grid('shift',1))
+            self.win.tag_controller.busy=True
+            self.assertTrue(self.win._edit_local_cue(track,'hot',0,'add',777))
+            intended=deepcopy(controller.state_lane.queue[-1]['job']['operations'])
+            self.assertTrue(controller.state_lane.queue[-1]['job']['identity_pending'])
+            def verified(work,completed):
+                completed(SimpleNamespace(result=work(),error=''))
+                return True
+            with mock.patch.object(controller.tags,'run_prep_job',side_effect=verified):
+                controller._check_identity(deepcopy(controller.job(track.track_id)),self.win.lib,track)
+        renewed=deepcopy(controller.job(track.track_id))
+        self.assertNotIn('identity_pending',renewed)
+        self.assertEqual(renewed['epoch'],analysis.identity(track.path.stat()))
+        self.win.tag_controller.busy=False
+        self.wait(lambda:not controller.admission_pending)
+        self.assertFalse(controller.admission_error)
+        job=StateRepository(self.win._data_file).load()['settings']['pending_prep_edits'][0]
+        self.assertEqual(job['operations'],intended)
+        self.assertEqual((job['sha256'],job['epoch']),(renewed['sha256'],renewed['epoch']))
+        self.assertNotIn('identity_pending',job)
+
+    def test_queued_cue_cannot_borrow_identity_from_retargeted_same_job(self):
+        track=self.track('queued-other-binding');record=self.result(track);pb=self.load(track,record)
+        controller=self.win.prep_controller
+        with mock.patch.object(pb.player,'set_grid'),mock.patch.object(pb,'_update_transport'):
+            self.assertTrue(self.win._edit_grid('shift',1))
+            self.win.tag_controller.busy=True
+            self.assertTrue(self.win._edit_local_cue(track,'hot',0,'add',777))
+        before=self.win.settings['pending_prep_edits']
+        changed=deepcopy(before);changed[0].update(path=str(track.path.with_name('foreign.wav')),sha256='b'*64)
+        self.win.settings['pending_prep_edits']=changed
+        row=controller.state_lane.queue[-1]
+        try:
+            with self.assertRaisesRegex(ValueError,'different source'):
+                controller.state_lane._compose(row)
+            self.assertEqual(row['job']['sha256'],'')
+        finally:
+            self.win.settings['pending_prep_edits']=before
+            self.win.tag_controller.busy=False
+        self.wait(lambda:not controller.admission_pending)
+        self.assertFalse(controller.admission_error)
+        self.assertEqual(controller.job(track.track_id)['sha256'],'')
+
+    def test_detector_completion_waits_for_queued_cue_and_preserves_loaded_markers(self):
+        track=self.track('detector-queued');record=self.result(track);pb=self.load(track,record)
+        key=analysis.result_key(track.path);controller=self.win.prep_controller
+        with mock.patch.object(pb.player,'set_grid'),mock.patch.object(pb,'_update_transport'):
+            self.assertTrue(self.win._edit_grid('shift',1))
+        worker=self.completed_analysis(track,record)
+        self.win.tag_controller.busy=True
+        self.assertTrue(self.win._edit_local_cue(track,'hot',0,'add',777))
+        intended=deepcopy(controller.state_lane.queue[-1]['job']['operations'])
+        with mock.patch.object(self.win.native_analysis_controller,'discover'), \
+                mock.patch('desktop.analysis.analysis.analyze') as detect:
+            self.win._analysis_retired(worker)
+            self.assertIsNotNone(self.win._analysis_worker)
+            self.assertNotIn(key,self.win.settings.get('analysis_results',{}))
+            self.assertEqual(pb.cue_panel._cues['hot'][0]['position_ms'],777)
+            self.win.tag_controller.busy=False
+            self.wait(lambda:self.win._analysis_worker is None and not controller.admission_pending)
+            detect.assert_not_called()
+        saved=StateRepository(self.win._data_file).load()['settings']
+        self.assertEqual(saved[analysis_jobs.KEY],[])
+        self.assertEqual(saved['pending_prep_edits'][0]['operations'],intended)
+        self.assertEqual(saved['pending_prep_edits'][0]['sha256'],record['sha256'])
+        self.assertEqual(local_grid.effective_result(saved['analysis_results'][key])['beats'][0][1],1)
+        self.assertEqual(local_cues.cues(saved['analysis_results'][key])[0]['position_ms'],777)
+        self.assertEqual(pb.cue_panel._cues['hot'][0]['position_ms'],777)
+
+    def test_detector_completion_waits_for_active_cue_ack_without_redetection(self):
+        track=self.track('detector-active');record=self.result(track);pb=self.load(track,record)
+        key=analysis.result_key(track.path);controller=self.win.prep_controller
+        with mock.patch.object(pb.player,'set_grid'),mock.patch.object(pb,'_update_transport'):
+            self.assertTrue(self.win._edit_grid('shift',1))
+        worker=self.completed_analysis(track,record)
+        entered,release=threading.Event(),threading.Event();self.addCleanup(release.set)
+        commit=self.win._state_repository.commit_patch
+        def held(patch):
+            entered.set()
+            if not release.wait(5):raise RuntimeError('held canonical fixture timed out')
+            return commit(patch)
+        with mock.patch.object(self.win._state_repository,'commit_patch',side_effect=held), \
+                mock.patch.object(self.win.native_analysis_controller,'discover'), \
+                mock.patch('desktop.analysis.analysis.analyze') as detect:
+            self.assertTrue(self.win._edit_local_cue(track,'hot',0,'add',777))
+            self.wait(entered.is_set)
+            self.assertTrue(self.win._state_publication)
+            self.win._analysis_retired(worker)
+            self.assertIsNotNone(self.win._analysis_worker)
+            self.assertNotIn(key,self.win.settings.get('analysis_results',{}))
+            self.assertEqual(pb.cue_panel._cues['hot'][0]['position_ms'],777)
+            release.set()
+            self.wait(lambda:self.win._analysis_worker is None and not controller.admission_pending)
+            detect.assert_not_called()
+        saved=StateRepository(self.win._data_file).load()['settings']
+        self.assertEqual(saved[analysis_jobs.KEY],[])
+        self.assertFalse(controller.admission_error)
+        self.assertEqual(len(saved['pending_prep_edits'][0]['operations']),2)
+        self.assertEqual(saved['pending_prep_edits'][0]['sha256'],record['sha256'])
+        self.assertEqual(local_grid.effective_result(saved['analysis_results'][key])['beats'][0][1],1)
+        self.assertEqual(local_cues.cues(saved['analysis_results'][key])[0]['position_ms'],777)
+
+    def test_real_detector_thread_retires_before_deferred_result_publication(self):
+        from desktop.analysis import _CompletedAnalysis
+        from shiboken6 import isValid
+        track=self.track('detector-retired-thread');record=self.result(track);pb=self.load(track,record)
+        key=analysis.result_key(track.path);controller=self.win.prep_controller
+        detecting,finish_detector,committing,finish_commit=(threading.Event() for _ in range(4))
+        self.addCleanup(finish_detector.set);self.addCleanup(finish_commit.set)
+        calls=[]
+        def detector(*_args,**_kwargs):
+            calls.append(True);detecting.set()
+            if not finish_detector.wait(5):raise RuntimeError('detector fixture timed out')
+            return record
+        commit=self.win._state_repository.commit_patch
+        def held(patch):
+            committing.set()
+            if not finish_commit.wait(5):raise RuntimeError('canonical fixture timed out')
+            return commit(patch)
+        self.win.settings['analysis']=dict(bpm=True,key=False,first_cue=False)
+        with mock.patch('desktop.analysis.analysis.analyze',side_effect=detector), \
+                mock.patch.object(self.win.native_analysis_controller,'discover'), \
+                mock.patch.object(pb.player,'set_grid'),mock.patch.object(pb,'_update_transport'):
+            self.win._analyze_tracks([track.track_id]);self.wait(detecting.is_set)
+            original_thread=self.win._analysis_worker
+            self.assertTrue(self.win._edit_grid('shift',1))
+            with mock.patch.object(self.win._state_repository,'commit_patch',side_effect=held):
+                self.assertTrue(self.win._edit_local_cue(track,'hot',0,'add',777))
+                self.wait(committing.is_set)
+                finish_detector.set()
+                self.wait(lambda:self.win._analysis_owner.pending==0
+                    and isinstance(self.win._analysis_worker,_CompletedAnalysis))
+                self.assertTrue(self.win._state_publication)
+                self.assertNotIn(key,self.win.settings.get('analysis_results',{}))
+                if isValid(original_thread):
+                    self.app.sendPostedEvents(original_thread,QEvent.DeferredDelete)
+                self.assertFalse(isValid(original_thread))
+                # Only the detached Python completion is used from this point.
+                finish_commit.set()
+                self.wait(lambda:self.win._analysis_worker is None and not controller.admission_pending)
+        saved=StateRepository(self.win._data_file).load()['settings']
+        self.assertEqual(len(calls),1)
+        self.assertEqual(saved[analysis_jobs.KEY],[])
+        self.assertEqual(saved['pending_prep_edits'][0]['sha256'],record['sha256'])
+        self.assertEqual(len(saved['pending_prep_edits'][0]['operations']),2)
+        self.assertEqual(local_grid.effective_result(saved['analysis_results'][key])['beats'][0][1],1)
+        self.assertEqual(local_cues.cues(saved['analysis_results'][key])[0]['position_ms'],777)
+        self.assertEqual(pb.cue_panel._cues['hot'][0]['position_ms'],777)
+
+    def deferred_detector_stop(self, *, owner=False):
+        track=self.track('detector-owner-stop' if owner else 'detector-event-stop')
+        record=self.result(track);self.load(track,record)
+        key=analysis.result_key(track.path);controller=self.win.prep_controller
+        worker=self.completed_analysis(track,record)
+        self.win.tag_controller.busy=True
+        self.assertTrue(self.win._edit_local_cue(track,'hot',0,'add',777))
+        self.win._analysis_retired(worker);completion=self.win._analysis_worker
+        before=self.win._data_file.read_bytes()
+        if owner:self.win._analysis_owner.stop()
+        else:completion.stop.set()
+        self.win.tag_controller.busy=False
+        self.wait(lambda:not controller.admission_pending)
+        cue_checkpoint=StateRepository(self.win._data_file).load()
+        self.win._analysis_retired(completion)
+        self.assertIsNone(self.win._analysis_worker)
+        self.assertNotIn(key,self.win.settings.get('analysis_results',{}))
+        self.assertEqual(StateRepository(self.win._data_file).load(),cue_checkpoint)
+        self.assertNotEqual(self.win._data_file.read_bytes(),before)  # accepted cue alone finished
+        self.assertEqual(self.win.settings[analysis_jobs.KEY][0]['state'],'queued')
+
+    def test_deferred_detector_stop_event_retains_restart_intent_without_publication(self):
+        self.deferred_detector_stop()
+
+    def test_deferred_detector_stopping_owner_retains_restart_intent_without_publication(self):
+        self.deferred_detector_stop(owner=True)
+
+    def test_deferred_detector_completion_cannot_publish_into_restored_epoch(self):
+        track=self.track('detector-restored');record=self.result(track);self.load(track,record)
+        key=analysis.result_key(track.path);controller=self.win.prep_controller
+        worker=self.completed_analysis(track,record)
+        self.win.tag_controller.busy=True
+        self.assertTrue(self.win._edit_local_cue(track,'hot',0,'add',777))
+        self.win._analysis_retired(worker);completion=self.win._analysis_worker
+        before=self.win._data_file.read_bytes()
+        self.win._state_maintenance=True
+        self.win._state_repository.generation+=1
+        self.win._analysis_retired(completion)
+        self.assertIsNone(self.win._analysis_worker)
+        self.assertEqual(self.win._data_file.read_bytes(),before)
+        self.assertNotIn(key,self.win.settings.get('analysis_results',{}))
+        self.win._state_maintenance=False;self.win.tag_controller.busy=False
+        self.wait(lambda:not controller.admission_pending)
+        self.assertTrue(controller.admission_error)
+        # The isolated refusal is proved above; undo only the synthetic epoch
+        # increment so normal fixture teardown can save its window preferences.
+        self.win._state_repository.generation-=1
+
+    def test_deferred_detector_completion_cannot_publish_after_shutdown(self):
+        track=self.track('detector-shutdown');record=self.result(track);self.load(track,record)
+        key=analysis.result_key(track.path);controller=self.win.prep_controller
+        worker=self.completed_analysis(track,record)
+        self.win.tag_controller.busy=True
+        self.assertTrue(self.win._edit_local_cue(track,'hot',0,'add',777))
+        self.win._analysis_retired(worker);completion=self.win._analysis_worker
+        before=self.win._data_file.read_bytes();self.win._shutting_down=True
+        self.win._analysis_retired(completion)
+        self.assertIsNone(self.win._analysis_worker)
+        self.assertEqual(self.win._data_file.read_bytes(),before)
+        self.assertNotIn(key,self.win.settings.get('analysis_results',{}))
+        self.win._shutting_down=False;self.win.tag_controller.busy=False
+        self.wait(lambda:not controller.admission_pending)
+        QTest.qWait(35)
+        self.assertNotIn(key,self.win.settings.get('analysis_results',{}))
+        self.assertEqual(self.win.settings[analysis_jobs.KEY][0]['state'],'queued')
 
     def test_failed_prep_persistence_does_not_paint_or_admit_an_unsaved_edit(self):
         track=self.track('disk-full');record=self.result(track);key=analysis.result_key(track.path)

@@ -1,4 +1,5 @@
 """Prepared Artists data remains current without work on first navigation."""
+from dataclasses import replace
 from pathlib import Path
 import tempfile
 from threading import Event
@@ -175,6 +176,64 @@ class LibraryBrowserReadiness(unittest.TestCase):
         self.assertEqual([call.args[0].track_id for call in derive.call_args_list], ['1'])
         self.assertEqual(self.window._artist_children['Ann'][0]['genre'], 'New genre')
 
+    def test_metadata_publication_preserves_prepared_services_and_unrelated_rows(self):
+        self.apply_library(self.library)
+        window=self.window
+        window._show_collection()
+        self.app.processEvents()  # Retire initial-load discovery before observing the ACK.
+        before=window._row_cache['2']
+        incoming=replace(self.library,tracks_by_id={**self.library.tracks_by_id,
+            '1':replace(self.library.tracks_by_id['1'],name='Saved title',source_cues=[{'time':3}])})
+        window.lib=incoming
+        with (mock.patch('desktop.app.imports.inject',side_effect=AssertionError('media reinjection')),
+              mock.patch('desktop.app.browser_cache.load',side_effect=AssertionError('disk row cache')),
+              mock.patch.object(window.grid_controller,'configure',side_effect=AssertionError('grid preparation')),
+              mock.patch.object(window.graveyard_controller,'prepare_library',side_effect=AssertionError('graveyard preparation')),
+              mock.patch.object(window.art_cache,'configure_default_tracks',side_effect=AssertionError('artwork preparation')),
+              mock.patch.object(window.native_analysis_controller,'discover',side_effect=AssertionError('analysis discovery')),
+              mock.patch.object(window.media_controller,'discover',side_effect=AssertionError('media discovery')),
+              mock.patch.object(window,'_default_to_collection',side_effect=AssertionError('navigation reset'))):
+            window._apply_loaded_library(already_projected=True,prepared_native_ids=('1',))
+        self.app.processEvents()
+        self.assertIs(window._row_cache['2'],before)
+        self.assertEqual(window._row_cache['1']['title'],'Saved title')
+        self.assertEqual(window._metadata_native_index['1'][2],'Saved title')
+        self.assertEqual(window._artist_children['Ann'][0]['title'],'Saved title')
+
+    def test_metadata_publication_rebuilds_other_rows_when_artist_context_changes(self):
+        self.apply_library(self.library)
+        window=self.window
+        incoming=replace(self.library,tracks_by_id={**self.library.tracks_by_id,
+            '1':replace(self.library.tracks_by_id['1'],artist='New artist')})
+        window.lib=incoming
+        with mock.patch.object(window,'_invalidate_rows',wraps=window._invalidate_rows) as invalidate:
+            window._apply_loaded_library(already_projected=True,prepared_native_ids=('1',))
+            self.app.processEvents()
+        self.assertEqual(set(invalidate.call_args.args[0]),{'1','2'})
+        self.assertIn('New artist',window._artist_children)
+
+    def test_equal_effective_collection_does_not_reset_sort_filter_selection_or_scroll_on_ack(self):
+        window=self.window
+        window.titles['1']='Saved title'
+        self.apply_library(self.library)
+        window._show_collection()
+        window.model.set_filter('Saved')
+        window.table.selectRow(0)
+        previous=window.model._rows
+        selected=window.table.currentIndex()
+        scrollbar=window.table.verticalScrollBar().value()
+        resets=[]
+        window.model.modelReset.connect(lambda:resets.append(True))
+        window.lib=replace(self.library,tracks_by_id={**self.library.tracks_by_id,
+            '1':replace(self.library.tracks_by_id['1'],name='Saved title')})
+        window._apply_loaded_library(already_projected=True,prepared_native_ids=('1',))
+        self.app.processEvents()
+        self.assertEqual(resets,[])
+        self.assertIs(window.model._rows,previous)
+        self.assertEqual(window.table.currentIndex(),selected)
+        self.assertEqual(window.table.verticalScrollBar().value(),scrollbar)
+        self.assertEqual([r['id'] for r in window.model._rows],['1'])
+
     def test_background_estimate_updates_artists_even_outside_the_current_playlist(self):
         self.library.tracks_by_id['1'].bpm = ''
         self.apply_library(self.library)
@@ -242,7 +301,7 @@ class LibraryBrowserReadiness(unittest.TestCase):
             button=current._theme_color;button._start_edit()
             QTest.keyClicks(button.editor,'12ab34');QTest.keyClick(button.editor,Qt.Key_Return)
             self.assertEqual(current.settings['theme_accent'],'#12ab34')
-            save.assert_called_once_with();picker.assert_not_called()
+            save.assert_called_once_with('theme_accent','theme_text_mode','theme_text_custom');picker.assert_not_called()
         self.assertEqual(stopped.filter_event_count,0)
         self.assertIs(install(self.app),controller)
 

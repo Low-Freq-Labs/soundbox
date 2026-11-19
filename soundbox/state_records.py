@@ -10,6 +10,7 @@ import copy
 import hashlib
 import json
 import os
+import re
 import stat
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,7 @@ MAX_RECORDS = 100_000
 NAMESPACES = {'analysis_results': 'map', 'pending_prep_edits': 'list',
               'native_analysis_jobs': 'list', 'source_truth_targets': 'map',
               'source_truth_alias_targets': 'map', 'source_truth_artist_origins': 'map'}
+_DIGEST = re.compile('[0-9a-f]{64}')
 
 
 def encode(value: Any) -> bytes:
@@ -44,8 +46,7 @@ def identity(path: Path) -> tuple:
 
 
 def record_path(path: Path, digest: str) -> Path:
-    if (type(digest) is not str or len(digest) != 64
-            or any(c not in '0123456789abcdef' for c in digest)):
+    if type(digest) is not str or _DIGEST.fullmatch(digest) is None:
         raise ValueError('Invalid canonical state record digest')
     folder = path.parent / DIRECTORY
     if folder.is_symlink():
@@ -157,11 +158,25 @@ def references(specifications: dict) -> set[str]:
 
 def validate_epochs(path: Path, epochs: dict[str, tuple]) -> dict[str, tuple]:
     """Fresh epochs gate reuse; drift requires exact bytes, never a stat-only proof."""
+    if not epochs:
+        return {}
+    folder = path.parent / DIRECTORY
+    before = folder.lstat()
+    if not stat.S_ISDIR(before.st_mode):
+        raise ValueError('Canonical state records must remain a plain directory')
     current = {}
     for digest, prior in epochs.items():
-        record = record_path(path, digest)
+        if type(digest) is not str or _DIGEST.fullmatch(digest) is None:
+            raise ValueError('Invalid canonical state record digest')
+        record = folder / f'{digest}.json'
         observed = identity(record)
         if observed != prior[:5]:
-            _, observed = capture(path, digest)
+            raw, observed = capture_file(record)
+            if hashlib.sha256(raw).hexdigest() != digest:
+                raise ValueError('Canonical state record content does not match its manifest')
         current[digest] = (*observed, prior[5])
+    after = folder.lstat()
+    if ((before.st_dev, before.st_ino, before.st_mode)
+            != (after.st_dev, after.st_ino, after.st_mode)):
+        raise ValueError('Canonical state record directory changed while validating')
     return current

@@ -1,6 +1,6 @@
 """Independently admitted native title/artist saves; never audio retagging.
 
-The measured ASCII/local/analysed/empty-album profile is deliberately bounded.
+The independently admitted metadata profiles remain deliberately bounded.
 An encrypted current baseline and exact semantic transition protect the common
 writer journal. Completed operation receipts survive subsequent baseline reuse.
 """
@@ -28,6 +28,9 @@ ACK_FORMAT='soundbox-native-metadata-ack-v1'
 AUTHORITY_FORMAT='soundbox-native-metadata-authority-v1'
 PROFILE=planner.LOCAL_PROFILE
 SYNCED_PROFILE=planner.ACTIVE_PROFILE
+UNICODE_PROFILE=planner.UNICODE_PROFILE
+RETIREMENT_PROFILE=planner.RETIREMENT_PROFILE
+ALBUM_PROFILE=planner.ALBUM_PROFILE
 _MAX_RECORD=16*1024**2
 _FIELDS=frozenset(('Title','ArtistID','AlbumID','TrackInfoUpdated','rb_local_usn','updated_at'))
 _REQUEST=frozenset(('operation_id','library_id','track_id','track_uuid','path','field','expected','value','timestamp','artist_seed','artist_pins'))
@@ -63,7 +66,8 @@ def _native_id(value):
 
 
 def validate_request(request):
-    if not isinstance(request,dict) or set(request)!=_REQUEST:
+    if (not isinstance(request,dict) or not _REQUEST<=set(request)
+            or set(request)-_REQUEST-{'retirement_clock','album_context'}):
         raise WriteProofError('Unknown metadata save request')
     _native_id(request['track_id'])
     try:valid_uuid=str(UUID(request['track_uuid']))==request['track_uuid']
@@ -77,6 +81,19 @@ def validate_request(request):
             or request['field']=='title' and not request['value']):
         raise WriteProofError('Invalid desired native metadata value')
     planner._clock(request['timestamp'])
+    if 'retirement_clock' in request:
+        planner._clock(request['retirement_clock'])
+        if request['field']!='artist' or request['retirement_clock']>request['timestamp']:
+            raise WriteProofError('Invalid captured artist retirement clock')
+    context=request.get('album_context')
+    if 'album_context' in request:
+        if request['field']!='artist' or not isinstance(context,dict) or set(context)!={'ID','UUID','timestamp'}:
+            raise WriteProofError('Invalid captured metadata album context')
+        _native_id(context['ID']);planner._clock(context['timestamp'])
+        try:valid=str(UUID(context['UUID']))==context['UUID']
+        except (ValueError,TypeError,AttributeError):valid=False
+        if (not valid or context['timestamp']>request.get('retirement_clock',request['timestamp'])):
+            raise WriteProofError('Invalid captured album identity/clock')
     pins=request['artist_pins']
     if not isinstance(pins,dict) or len(pins)>8 or request['field']=='title' and pins:
         raise WriteProofError('Invalid bounded metadata artist pins')
@@ -95,23 +112,32 @@ def validate_request(request):
             raise WriteProofError('Invalid metadata artist identity/clock')
         if pins.get(seed['ID'])!=seed['UUID']:
             raise WriteProofError('The captured artist seed requires its exact identity pin')
+        if 'retirement_clock' in request and seed['timestamp']>request['retirement_clock']:
+            raise WriteProofError('Artist retirement clock precedes its creation seed')
+        if context and seed['timestamp']>context['timestamp']:
+            raise WriteProofError('Album clock precedes artist creation')
     return request
 
 
-def request_for(library_id,track_id,track_uuid,path,field,value,expected,*,now=None,artist_seed=None,operation_id=None,artist_pins=None):
+def _stamp(now=None):
     clock=now or datetime.now(timezone.utc)
     if clock.tzinfo is None or clock.utcoffset() is None:raise WriteProofError('An aware metadata clock is required')
-    stamp=clock.astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]+' +00:00'
-    return validate_request(dict(operation_id=operation_id or uuid4().hex,library_id=library_id,track_id=track_id,
-        track_uuid=track_uuid,path=str(path),field=field,value=value,expected=expected,timestamp=stamp,
-        artist_seed=deepcopy(artist_seed),artist_pins=deepcopy(artist_pins or {})))
+    return clock.astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]+' +00:00'
+
+
+def request_for(library_id,track_id,track_uuid,path,field,value,expected,*,now=None,artist_seed=None,operation_id=None,artist_pins=None,
+                retirement_clock=None,album_context=None):
+    request=dict(operation_id=operation_id or uuid4().hex,library_id=library_id,track_id=track_id,
+        track_uuid=track_uuid,path=str(path),field=field,value=value,expected=expected,timestamp=_stamp(now),
+        artist_seed=deepcopy(artist_seed),artist_pins=deepcopy(artist_pins or {}))
+    if retirement_clock is not None:request['retirement_clock']=retirement_clock
+    if album_context is not None:request['album_context']=deepcopy(album_context)
+    return validate_request(request)
 
 
 def new_artist_seed(*,now=None):
-    clock=now or datetime.now(timezone.utc)
-    if clock.tzinfo is None or clock.utcoffset() is None:raise WriteProofError('An aware artist clock is required')
     return dict(ID=str(secrets.randbelow(2**32-1)+1),UUID=str(uuid4()),
-                timestamp=clock.astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]+' +00:00')
+                timestamp=_stamp(now))
 
 
 def _read_json(path,limit=_MAX_RECORD):
@@ -166,6 +192,20 @@ def _snapshot(conn,request):
     if request['field']=='title':return dict(target=target,counter=counter,artists=[],references={})
     wanted=set(request['artist_pins'])
     if target and target.get('ArtistID'):wanted.add(target['ArtistID'])
+    extra={}
+    if 'album_context' in request:
+        album=_one(conn,'djmdAlbum',request['album_context']['ID'])
+        extra=dict(album=album,album_matches=[],album_uuid_matches=[],album_artist_matches=[])
+        if album:
+            extra['album_matches']=[row['ID'] for row in _rows(conn,'djmdAlbum',
+                ' WHERE Name=? AND rb_local_deleted=0 ORDER BY ID LIMIT 9',(album['Name'],))]
+            extra['album_uuid_matches']=[row['ID'] for row in _rows(conn,'djmdAlbum',
+                ' WHERE UUID=? ORDER BY ID LIMIT 9',(album['UUID'],))]
+            if album['AlbumArtistID']:
+                wanted.add(album['AlbumArtistID']);role=_one(conn,'djmdArtist',album['AlbumArtistID'])
+                if role:
+                    extra['album_artist_matches']=[row['ID'] for row in _rows(conn,'djmdArtist',
+                        ' WHERE Name=? AND rb_local_deleted=0 ORDER BY ID LIMIT 9',(role['Name'],))]
     criteria=[];args=[]
     if wanted:criteria.append('ID IN ('+','.join('?' for _ in wanted)+')');args.extend(sorted(wanted))
     if request['value']:criteria.append('Name=?');args.append(request['value'])
@@ -188,13 +228,17 @@ def _snapshot(conn,request):
             rows=conn.execute('SELECT '+_quote(column)+',COUNT(*) FROM '+_quote(table)
                 +' WHERE '+_quote(column)+' IN ('+','.join('?' for _ in wanted)+') GROUP BY '+_quote(column),tuple(sorted(wanted)))
             for identity,count in rows:references[identity]=references.get(identity,0)+count
-    return dict(target=target,counter=counter,artists=actors,references=references)
+    return dict(target=target,counter=counter,artists=actors,references=references,**extra)
 
 
 def _plan(snapshot,request,*,profile=PROFILE):
     if type(profile) is not str or profile not in planner.PROFILES:
         raise WriteProofError('Unreferenced native metadata profile')
     validate_request(request);target=snapshot['target']
+    if 'retirement_clock' in request and (profile not in (RETIREMENT_PROFILE,ALBUM_PROFILE) or request['value']==request['expected']):
+        raise WriteProofError('Artist retirement clock exceeds this metadata profile or save')
+    if 'album_context' in request and (profile!=ALBUM_PROFILE or request['value']==request['expected']):
+        raise WriteProofError('Album context exceeds this metadata profile or save')
     if (not target or type(target.get('rb_local_deleted')) is not int or target['rb_local_deleted']!=0
             or target['UUID']!=request['track_uuid'] or target['FolderPath']!=request['path']
             or _value(snapshot,request['field'])!=request['expected']):
@@ -206,30 +250,59 @@ def _plan(snapshot,request,*,profile=PROFILE):
     # Exact already-present values require no publisher/profile extrapolation.
     # In particular, do not normalize NULL artist/album IDs during a no-op.
     if request['value']==request['expected']:return [],deepcopy(snapshot)
+    album=snapshot.get('album')
+    if 'album_context' in request:
+        context=request['album_context']
+        if (not album or target['AlbumID']!=context['ID'] or album['UUID']!=context['UUID']
+                or snapshot.get('album_matches')!=[album['ID']]
+                or snapshot.get('album_uuid_matches')!=[album['ID']]
+                or album['AlbumArtistID'] and snapshot.get('album_artist_matches')!=[album['AlbumArtistID']]):
+            raise ConflictError('Native album identity/name/artist lookup changed or is ambiguous')
+        role=next((row for row in snapshot['artists'] if row['ID']==album['AlbumArtistID']),None)
+        if (type(album.get('Name')) is not str or not album['Name'] or len(album['Name'])>4096 or '\0' in album['Name']
+                or album['AlbumArtistID'] and (not role or type(role.get('Name')) is not str
+                    or not role['Name'] or len(role['Name'])>4096 or '\0' in role['Name'])):
+            raise WriteProofError('Unreferenced existing album or album-artist name')
     if request['field']=='artist':
         if request['artist_seed'] and snapshot['references'].get(request['artist_seed']['ID']):
             raise ConflictError('The new artist identity already has native references')
-        matches=[row for row in snapshot['artists'] if row['Name']==request['value']]
+        matches=[row for row in snapshot['artists'] if row['Name']==request['value']
+                 and (profile!=ALBUM_PROFILE or type(row.get('rb_local_deleted')) is int and row['rb_local_deleted']==0)]
         for actor in matches:
+            if profile==ALBUM_PROFILE:
+                if not planner._sync_state(actor,snapshot['counter']['int_1'],remote=True,nullable_clock=True):
+                    raise WriteProofError('Reusing this artist synchronization profile is not proven')
+                continue
             if (any(type(actor.get(key)) is not int or actor[key]!=0 for key in
-                    ('rb_data_status','rb_local_data_status','rb_local_deleted','rb_local_synced'))
-                    or actor.get('usn') is not None or type(actor.get('rb_local_usn')) is not int
-                    or not 0<=actor['rb_local_usn']<=snapshot['counter']['int_1']):
+                    ('rb_data_status','rb_local_data_status','rb_local_deleted'))
+                    or type(actor.get('rb_local_synced')) is not int
+                    or actor['rb_local_synced'] not in ((0,1) if profile in (UNICODE_PROFILE,RETIREMENT_PROFILE) else (0,))
+                    or actor.get('usn') is not None
+                    or not (profile in (UNICODE_PROFILE,RETIREMENT_PROFILE) and actor.get('rb_local_usn') is None
+                            or type(actor.get('rb_local_usn')) is int
+                            and 0<=actor['rb_local_usn']<=snapshot['counter']['int_1'])):
                 raise WriteProofError('Reusing this artist synchronization profile is not proven')
     proposed=planner.construct(target,snapshot['counter'],snapshot['artists'],snapshot['references'],
         field=request['field'],value=request['value'],timestamp=request['timestamp'],artist_seed=request['artist_seed'],
-        profile=profile)
+        profile=profile,retirement_timestamp=request.get('retirement_clock'),
+        album=album,album_timestamp=request.get('album_context',{}).get('timestamp'))
     changes=[]
     if proposed['artist_created']:
         actor=proposed['artist_created'];changes.append(dict(table='djmdArtist',key=actor['ID'],before=None,after=actor))
     if proposed['artist_removed']:
-        actor=proposed['artist_removed'];changes.append(dict(table='djmdArtist',key=actor['ID'],before=actor,after=None))
+        actor=proposed['artist_removed'];changes.append(dict(table='djmdArtist',key=actor['ID'],before=actor,
+            after=proposed.get('artist_retirement_after')))
+    if 'album_after' in proposed:
+        changes.append(dict(table='djmdAlbum',key=album['ID'],before=album,after=proposed['album_after']))
     if proposed['before']!=proposed['after']:
         changes.append(dict(table='djmdContent',key=target['ID'],before=target,after=proposed['after']))
         changes.append(dict(table='agentRegistry',key='localUpdateCount',before=proposed['counter_before'],after=proposed['counter_after']))
     after=deepcopy(snapshot);after['target']=proposed['after'];after['counter']=proposed['counter_after']
+    if 'album_after' in proposed:after['album']=proposed['album_after']
     if proposed['artist_created']:after['artists'].append(proposed['artist_created'])
-    if proposed['artist_removed']:after['artists']=[row for row in after['artists'] if row['ID']!=proposed['artist_removed']['ID']]
+    if proposed['artist_removed']:
+        after['artists']=[row for row in after['artists'] if row['ID']!=proposed['artist_removed']['ID']]
+        if proposed.get('artist_retirement_after'):after['artists'].append(proposed['artist_retirement_after'])
     after['artists'].sort(key=lambda row:row['ID'])
     old,new=target['ArtistID'],after['target']['ArtistID']
     if old!=new:
@@ -251,21 +324,27 @@ def _require_artist_identity(snapshot):
             raise ConflictError('The selected native artist is inactive or unavailable')
 
 
-def _authorizer(action,table,column,database,trigger,*,field=None):
+def _authorizer(action,table,column,database,trigger,*,field=None,profile=PROFILE):
     if action in (sqlite3.SQLITE_INSERT,sqlite3.SQLITE_UPDATE,sqlite3.SQLITE_DELETE):
         if trigger or database!='main':return sqlite3.SQLITE_DENY
         columns=({'Title','TrackInfoUpdated','rb_local_usn','updated_at'} if field=='title' else
                  _FIELDS-{'Title'} if field=='artist' else frozenset())
         if table=='djmdContent' and action==sqlite3.SQLITE_UPDATE and column in columns:return sqlite3.SQLITE_OK
         if table=='djmdArtist' and field=='artist' and action in (sqlite3.SQLITE_INSERT,sqlite3.SQLITE_DELETE):return sqlite3.SQLITE_OK
+        if (table=='djmdArtist' and field=='artist' and profile in (RETIREMENT_PROFILE,ALBUM_PROFILE)
+                and action==sqlite3.SQLITE_UPDATE and column in ('rb_local_deleted','rb_data_status','rb_local_usn','updated_at')):
+            return sqlite3.SQLITE_OK
+        if (table=='djmdAlbum' and field=='artist' and profile==ALBUM_PROFILE
+                and action==sqlite3.SQLITE_UPDATE and column in ('Compilation','AlbumArtistID','rb_local_usn','updated_at')):
+            return sqlite3.SQLITE_OK
         if table=='agentRegistry' and action==sqlite3.SQLITE_UPDATE and column=='int_1':return sqlite3.SQLITE_OK
         return sqlite3.SQLITE_DENY
     return sqlite3.SQLITE_OK if action in (sqlite3.SQLITE_READ,sqlite3.SQLITE_SELECT,sqlite3.SQLITE_TRANSACTION,
         sqlite3.SQLITE_FUNCTION,sqlite3.SQLITE_SAVEPOINT,sqlite3.SQLITE_RECURSIVE) else sqlite3.SQLITE_DENY
 
 
-def _apply(conn,changes,field):
-    conn.set_authorizer(lambda *args:_authorizer(*args,field=field))
+def _apply(conn,changes,field,*,profile=PROFILE):
+    conn.set_authorizer(lambda *args:_authorizer(*args,field=field,profile=profile))
     try:
         for change in changes:
             table,key=change['table'],change['key'];before,after=change['before'],change['after']
@@ -368,6 +447,10 @@ class SourceMetadataStore:
 
     def _scope(self,request):
         self._accepted();validate_request(request)
+        if 'retirement_clock' in request and self.authority.profile not in (RETIREMENT_PROFILE,ALBUM_PROFILE):
+            raise WriteProofError('Artist retirement clock exceeds this metadata authority')
+        if 'album_context' in request and self.authority.profile!=ALBUM_PROFILE:
+            raise WriteProofError('Album context exceeds this metadata authority')
         if (request['library_id']!=self.authority.library_id or self.authority.pilot_operation_ids
                 and request['operation_id'] not in self.authority.pilot_operation_ids):
             raise WriteProofError('Metadata request exceeds its exact library/pilot authority')
@@ -494,12 +577,27 @@ class SourceMetadataStore:
                 observed=_snapshot(conn,request)
                 if observed['target'] is None:raise ConflictError('The native metadata track is missing')
                 if expected is None:request['expected']=_value(observed,field)
+                if (self.authority.profile==ALBUM_PROFILE and field=='artist' and value!=request['expected']
+                        and observed['target'].get('AlbumID')):
+                    album=_one(conn,'djmdAlbum',observed['target']['AlbumID'])
+                    if album is None:raise ConflictError('The native metadata album is unavailable')
+                    request['album_context']=dict(ID=album['ID'],UUID=album['UUID'],timestamp=_stamp())
+                    request['timestamp']=_stamp();observed=_snapshot(conn,request)
                 if field=='artist':request['artist_pins']={row['ID']:row['UUID'] for row in observed['artists']}
-                if field=='artist' and value and not any(row['Name']==value for row in observed['artists']):
+                if field=='artist' and value and not any(row['Name']==value and
+                        (self.authority.profile!=ALBUM_PROFILE or row['rb_local_deleted']==0) for row in observed['artists']):
                     seed=new_artist_seed();request['artist_pins'][seed['ID']]=seed['UUID']
+                    context=deepcopy(request.get('album_context'))
+                    if context:context['timestamp']=_stamp()
                     request=request_for(self.authority.library_id,track_id,track_uuid,path,field,value,request['expected'],
-                        artist_seed=seed,operation_id=request['operation_id'],artist_pins=request['artist_pins'])
+                        artist_seed=seed,operation_id=request['operation_id'],artist_pins=request['artist_pins'],album_context=context)
                     observed=_snapshot(conn,request)
+                if self.authority.profile in (RETIREMENT_PROFILE,ALBUM_PROFILE) and field=='artist' and value!=request['expected']:
+                    prior=next((row for row in observed['artists'] if row['ID']==observed['target']['ArtistID']),None)
+                    if prior and prior.get('rb_local_synced')==1 and observed['references'].get(prior['ID'])==1:
+                        request=request_for(self.authority.library_id,track_id,track_uuid,path,field,value,request['expected'],
+                            artist_seed=request['artist_seed'],operation_id=request['operation_id'],artist_pins=request['artist_pins'],
+                            retirement_clock=_stamp(),album_context=request.get('album_context'))
                 self._scope(request);_plan(observed,request,profile=self.authority.profile);self.lease._guard()
                 return request
             finally:conn.close()
@@ -563,7 +661,7 @@ class SourceMetadataStore:
                 payload=_json(record)
                 if len(payload)>_MAX_RECORD:raise WriteProofError('Metadata proof exceeds its bounded record size')
                 atomic_bytes(self.journal,payload);_fault('journal-ready');self.lease._guard()
-                _apply(conn,changes,request['field'])
+                _apply(conn,changes,request['field'],profile=self.authority.profile)
                 if _snapshot(conn,request)!=after:raise WriteProofError('Native metadata after-readback differs')
                 if self._xml_sha()!=record['xml_sha256']:raise ConflictError('Metadata XML changed before commit')
                 self.lease._guard();_fault('before-commit');conn.commit();_fault('after-commit')

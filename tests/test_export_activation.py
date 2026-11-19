@@ -55,6 +55,7 @@ with tempfile.TemporaryDirectory(prefix='soundbox-export-standby-') as area:
 
     def test_queued_capture_runs_on_gui_thread_before_first_ready_status(self):
         script = '''
+import json
 from types import SimpleNamespace
 from unittest import mock
 from PySide6.QtCore import QObject, QStandardPaths, QThread, QEventLoop, QTimer, Qt
@@ -62,22 +63,41 @@ from PySide6.QtWidgets import QApplication
 QStandardPaths.setTestModeEnabled(True)
 from desktop.app import MainWindow
 from desktop.workers import DeviceScanWorker
+from soundbox.library import Library, Playlist, Track
+from soundbox.manifest import playlist_key
 app = QApplication([])
-library, playlist = object(), object()
-threads = []
+playlist = Playlist('Fixture', [], keys=['one'], pid='fixture')
+library = Library({'one': Track('one', 'Original', 'Artist', 'file:///generated/one.wav')},
+                  [], '/generated/master.db', source_library_id='fixture')
+manifest = dict(schema=2, playlists={playlist_key(playlist):dict(pid='fixture', name='Fixture', tracks=['one'])}, files={})
+captured = (manifest, json.dumps(manifest).encode())
+row = dict(id='one', title='Title', artist='Artist', album='', genre='', comments='',
+           year='', bpm='', bpm_estimated=False)
+threads, projection_threads, drift_threads, timeline = [], [], [], []
 class Host(QObject):
     _supply_device_scan_playlists = MainWindow._supply_device_scan_playlists
+    _managed_ipod_display_ids = MainWindow._managed_ipod_display_ids
     _shutting_down = False
     lib = library
     overrides = {'one': 'Artist'}
     titles = {'one': 'Title'}
     def _sync_playlists(self):
         threads.append(QThread.currentThread() == app.thread())
+        timeline.append('capture')
         return [playlist]
+    def _row_for(self, track):
+        assert track is library.tracks_by_id['one']
+        projection_threads.append(QThread.currentThread() == app.thread())
+        return row
+def compare(*_args, **_options):
+    drift_threads.append(QThread.currentThread() != app.thread())
+    timeline.append('drift')
+    return SimpleNamespace(count=lambda:3)
 host = Host()
 worker = DeviceScanWorker(None, defer_playlists=True)
 host._dev_scan_worker = worker
 worker.playlists_requested.connect(host._supply_device_scan_playlists, Qt.QueuedConnection)
+worker.done.connect(lambda _result:timeline.append('ready'), Qt.QueuedConnection)
 loop = QEventLoop()
 worker.finished.connect(loop.quit)
 timer = QTimer()
@@ -85,7 +105,8 @@ timer.setSingleShot(True)
 timer.timeout.connect(loop.quit)
 with mock.patch('desktop.workers.list_devices', return_value=[('USB','/synthetic-usb',100)]), \\
      mock.patch('desktop.workers.device_profile', return_value=SimpleNamespace(kind='rockbox', has_stock_ipod=False)), \\
-     mock.patch('desktop.workers.engine.device_drift', return_value=SimpleNamespace(count=lambda:3)) as drift, \\
+     mock.patch('desktop.workers.engine.capture_device_drift_manifest', return_value=captured) as observation, \\
+     mock.patch('desktop.workers.engine.device_drift', side_effect=compare) as drift, \\
      mock.patch('desktop.usb_device_view.read_usb_snapshot', return_value=object()):
     worker.start()
     timer.start(2000)
@@ -93,9 +114,16 @@ with mock.patch('desktop.workers.list_devices', return_value=[('USB','/synthetic
     timer.stop()
     worker.cancel()
     assert worker.wait(1000)
+    app.processEvents()
     assert threads == [True], threads
+    assert projection_threads == [True], projection_threads
+    assert drift_threads == [True], drift_threads
+    assert timeline == ['capture', 'drift', 'ready'], timeline
+    observation.assert_called_once_with('/synthetic-usb')
     assert drift.call_args.args == (library, '/synthetic-usb', [playlist])
-    assert drift.call_args.kwargs == dict(artist_overrides=host.overrides, title_overrides=host.titles)
+    assert drift.call_args.kwargs == dict(artist_overrides=host.overrides, title_overrides=host.titles,
+                                         display_rows={'one':row}, captured_manifest=captured)
+    assert drift.call_args.kwargs['captured_manifest'] is captured
     assert worker.results[0][3] == 3
 '''
         run = subprocess.run([sys.executable, '-c', script],
@@ -185,6 +213,45 @@ with mock.patch('desktop.workers.list_devices', return_value=[('USB','/synthetic
         self.assertIsNone(host._stock_art_worker)
         schedule.assert_called_once_with(0, host._maybe_prepare_stock_artwork)
         worker.deleteLater.assert_called_once_with()
+
+    def test_video_and_classic_warm_only_their_observed_profiles_off_the_gui_thread(self):
+        from desktop.app import MainWindow
+        from soundbox.stock_ipod_format import (ARTWORK_PROFILE, CLASSIC_55_ARTWORK_PROFILE,
+                                                DATABASE_PROFILE, StockWriteFormat)
+        host=self.host();host._stock_art_connected=True
+        host.stock_art_cache=mock.Mock();host._stock_view_cache={}
+        for dev,profile in (('/video',ARTWORK_PROFILE),('/classic',CLASSIC_55_ARTWORK_PROFILE)):
+            host._device_profiles[dev]=SimpleNamespace(has_stock_ipod=True)
+            host._stock_view_cache[dev]=(SimpleNamespace(stock_format=StockWriteFormat(DATABASE_PROFILE,profile)),None)
+        with mock.patch('desktop.app.StockArtworkPrepWorker') as factory:
+            MainWindow._maybe_prepare_stock_artwork(host,images=(Path('/synthetic/selected.jpg'),))
+        host.stock_art_cache.for_profile.assert_not_called()
+        self.assertEqual(set(factory.call_args.kwargs['profiles']),{ARTWORK_PROFILE,CLASSIC_55_ARTWORK_PROFILE})
+        self.assertEqual(factory.call_args.args[3],(Path('/synthetic/selected.jpg'),))
+
+    def test_profile_worker_warms_both_namespaces_and_reuses_without_recoding(self):
+        import tempfile
+        from PIL import Image
+        from desktop.workers import StockArtworkPrepWorker
+        from soundbox.stock_artwork import StockArtworkCache
+        from soundbox.stock_ipod_format import ARTWORK_PROFILE,CLASSIC_55_ARTWORK_PROFILE
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);image=root/'cover.jpg'
+            Image.new('RGB',(64,64),'blue').save(image)
+            original=image.read_bytes();base=StockArtworkCache(root/'cache')
+            profiles=(ARTWORK_PROFILE,CLASSIC_55_ARTWORK_PROFILE)
+            worker=StockArtworkPrepWorker(None,None,base,images=(image,),profiles=profiles)
+            worker.run()
+            for profile,formats in ((ARTWORK_PROFILE,{1028,1029}),(CLASSIC_55_ARTWORK_PROFILE,{1055,1060,1061})):
+                cache=base.for_profile(profile)
+                self.assertEqual({row.format_id for row in cache.prepare(image).payloads},formats)
+            # Cold creation changes the derivative epoch. The next unchanged
+            # pass installs its scheduling receipt; later passes skip prepare.
+            worker.run()
+            for profile in profiles:self.assertTrue(base.for_profile(profile).is_prepared(image))
+            with mock.patch.object(StockArtworkCache,'prepare',side_effect=AssertionError('Recoded warm image')):
+                worker.run()
+            self.assertEqual(image.read_bytes(),original)
 
 
 if __name__ == '__main__':

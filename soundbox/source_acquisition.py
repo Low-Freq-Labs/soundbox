@@ -17,13 +17,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterator
 
-from .operation_control import checkpoint, phase_progress, record_metric
+from .operation_control import OperationCancelled, checkpoint, phase_progress, record_metric
 from .source_read_retry import ProviderReadRetry, source_read_error
 
 LOG = logging.getLogger("soundbox")
 
 
 class SourceAcquisitionError(RuntimeError):
+    pass
+
+
+class SourceAcquisitionCancelled(SourceAcquisitionError, OperationCancelled):
     pass
 
 
@@ -89,7 +93,7 @@ def acquire_source(
                     opened = os.fstat(source.fileno())
                     while True:
                         if should_cancel is not None and should_cancel():
-                            raise SourceAcquisitionError("Source acquisition cancelled")
+                            raise SourceAcquisitionCancelled("Source acquisition cancelled")
                         checkpoint()
                         block = source.read(1024 * 1024)
                         if not block:

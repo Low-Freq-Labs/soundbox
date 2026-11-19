@@ -21,6 +21,7 @@ from .cdj_transaction import CdjPlan, _hash_file, load_manifest, make_plan
 from .cdj_usb import CATALOG_RENDER_POLICY, DATABASE_FILES, digest, read_library, run_renderer
 from .library import Track
 from .source_acquisition import SourceContract, acquire_source
+from .operation_control import OperationCancelled
 
 LOG = logging.getLogger('soundbox')
 
@@ -386,7 +387,7 @@ def plan_incremental(library, playlists, session, previous, *, all_playlists=(),
             request['pre_staged'] = True
         for at,dto in enumerate(request['tracks']):
             if should_cancel():
-                raise RuntimeError('CDJ preparation cancelled')
+                raise OperationCancelled('CDJ preparation cancelled')
             tid = int(dto['id'])
             source = Path(dto['source_path']).resolve(strict=True)
             if source.suffix.lower() not in ('.wav','.mp3','.aif','.aiff','.flac','.m4a'):

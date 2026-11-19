@@ -12,12 +12,12 @@ import logging
 import os
 from pathlib import Path
 
-from PySide6.QtCore import QProcess, QTimer
+from PySide6.QtCore import QProcess
 from PySide6.QtWidgets import QInputDialog, QMessageBox
 from .choices import Menu as QMenu, exec_transient_menu
 
 from soundbox.paths import sanitize_component
-from soundbox.device_operations import DeviceCommand, DeviceSessionIdentity, Phase
+from soundbox.device_operations import DeviceCommand, Phase
 
 from .devices import (
     _external_volume_of, _in_external_product_tree, _on_external_device,
@@ -66,7 +66,7 @@ class DeviceBrowserMixin:
         profile = getattr(self, "_device_profiles", {}).get(dev)
         if profile is not None and getattr(profile, "has_stock_ipod", False):
             QMessageBox.warning(
-                self, "Stock iPod is read-only",
+                self, "iTunes is read-only",
                 "SoundBox will not erase an iTunes/stock-iPod volume.")
             return
         if self._device_operation_owned():
@@ -147,10 +147,18 @@ class DeviceBrowserMixin:
             self._eject(path)
 
     def _eject(self, dev: str):
+        if getattr(self, '_shutting_down', False):return
         if getattr(self,'_export_batch',None):return
+        if self._device_coordinator.eject_pending:return
         if (getattr(self, '_usb_format_device', '') and
                 dev in getattr(self, '_usb_format_volumes', (self._usb_format_device,))):
             QMessageBox.warning(self, 'USB is formatting', 'Wait for macOS to finish formatting this USB.')
+            return
+        if (getattr(self, '_exporting', False)
+                or getattr(self, '_device_finalization_refreshing', False)):
+            QMessageBox.warning(
+                self, "Device busy",
+                "Wait for the current SoundBox device operation to finish.")
             return
         # Never race device work. Finalization owns and finishes its dashboard
         # scan before success; Eject does not cancel or complete that work.
@@ -161,18 +169,27 @@ class DeviceBrowserMixin:
             name for name in self._EJECT_BLOCKING_WORKERS
             if name not in readers
         )
-        if (
-            scan is not None
-            and not any(getattr(self, name, None) is not None
-                        for name in other_blockers)
-            and getattr(self, "_pending_device_operation", None) is None
-        ):
+        if (any(getattr(self, name, None) is not None for name in other_blockers)
+                or getattr(self, '_pending_device_operation', None) is not None
+                or getattr(self, '_eject_verify_worker', None) is not None
+                or self._device_coordinator.active is not None
+                and self._device_coordinator.active.worker is not scan):
+            QMessageBox.warning(
+                self, "Device busy",
+                "Wait for the current SoundBox device operation to finish.")
+            return
+        identity = self._device_coordinator.mounts.get(dev)
+        if identity is None:
+            self._flash_status('The device changed. Select the current device before ejecting.', 10)
+            return
+        owner = object()
+        self._eject_owner = owner
+        self._eject_session = identity
+        self._device_coordinator.eject_pending = dev
+        if scan is not None:
             # A recurring read-only health poll is not a user operation. Queue
             # Eject behind its actual QThread.finished boundary and suppress a
             # replacement poll; never punish a click with a busy modal.
-            if self._device_coordinator.eject_pending:
-                return
-            self._device_coordinator.eject_pending = dev
             # Stop background discovery at its next safe boundary. Eject
             # starts no verification, catalog refresh or source comparison.
             if scan is getattr(self, '_dev_scan_worker', None) and hasattr(scan, 'cancel'):
@@ -181,65 +198,79 @@ class DeviceBrowserMixin:
             self._exporting = True
             self._start_pulse("Waiting to eject")
 
+            resumed = False
             def resume():
-                def after_finished_slots():
-                    self._exporting = False
-                    self._eject(dev)
+                nonlocal resumed
+                if resumed:return
+                resumed = True
+                if self._eject_owner is not owner or self._eject_session != identity:return
+                if (getattr(self, '_shutting_down', False)
+                        or self._device_coordinator.mounts.get(dev) != identity):
+                    if self._finish_eject_attempt(dev, identity=identity, owner=owner):
+                        self._stop_pulse(force=True)
+                        if not getattr(self, '_shutting_down', False):
+                            self._flash_status('The device changed. Select the current device before ejecting.', 10)
+                    return
+                self._begin_macos_eject(dev)
 
-                QTimer.singleShot(0, after_finished_slots)
-
-            scan.finished.connect(resume)
+            callbacks = getattr(scan, '_eject_resume_callbacks', None)
+            if callbacks is None:
+                callbacks = []
+                scan._eject_resume_callbacks = callbacks
+            callbacks.append(resume)
             return
-        if (
-            any(getattr(self, name, None) is not None
-                for name in self._EJECT_BLOCKING_WORKERS)
-            or getattr(self, "_pending_device_operation", None) is not None
-        ):
-            QMessageBox.warning(
-                self, "Device busy",
-                "Wait for the current SoundBox device operation to finish.")
-            return
-        if getattr(self, "_eject_verify_worker", None) is not None:
-            return
-        self._device_coordinator.eject_pending = dev
         self._exporting = True  # suppress every new periodic poll until outcome
         # macOS eject flushes the filesystem. Library integrity is independent
         # of whether an idle mount can be released.
         self._begin_macos_eject(dev)
 
     def _begin_macos_eject(self, dev: str):
+        coordinator = self._device_coordinator
+        identity = getattr(self, '_eject_session', None)
+        owner = getattr(self, '_eject_owner', None)
+        if (owner is None or identity is None or identity.path != dev
+                or coordinator.mounts.get(dev) != identity):
+            if self._finish_eject_attempt(dev, identity=identity, owner=owner):
+                self._stop_pulse(force=True)
+                self._flash_status('The device changed. Select the current device before ejecting.', 10)
+            return
         self.fs_view.setRootIndex(self.fs_model.setRootPath(""))
         self._start_pulse("Ejecting")
-
-        def succeeded():
-            self._stop_pulse()
-            self._finish_eject_attempt(dev)
-            self._retire_ejected_device(dev)
-            self._flash_status("Ejected ✓")
-
-        def run(args, on_fail):
-            p = QProcess(self)
-            self._eject_proc = p  # keep a ref so it isn't GC'd mid-run
-            identity = self._device_coordinator.mounts.get(dev)
-            if identity is None:
-                identity = DeviceSessionIdentity(dev, self._device_mount_tokens.get(dev, 0))
-                self._device_coordinator.observe(identity)
-            self._device_coordinator.begin(DeviceCommand(identity, "eject"), p, Phase.EJECTING)
-            p.finished.connect(lambda code, _s: (succeeded() if code == 0 else on_fail(p)))
-            p.errorOccurred.connect(
-                lambda _error: gave_up(p)
-                if p.state() == QProcess.NotRunning else None)
-            p.start("diskutil", args)
-
-        def gave_up(p):
-            self._stop_pulse()
-            self._finish_eject_attempt(dev)
-            err = bytes(p.readAllStandardError()).decode(errors="replace")
-            QMessageBox.warning(self, "Eject failed",
-                                err or "Could not eject. Close any app using the device.")
-            self._set_status_text("Ready")
-
-        run(["eject", dev], gave_up)
+        process = QProcess(self)
+        self._eject_proc = process
+        command = DeviceCommand(identity, 'eject')
+        terminal = False
+        def finish(success):
+            nonlocal terminal
+            if terminal:return
+            terminal = True
+            current = coordinator.current(command)
+            if not self._finish_eject_attempt(
+                    dev, process=process, identity=identity, owner=owner):return
+            if getattr(self, '_shutting_down', False):return
+            self._stop_pulse(force=True)
+            if not current or coordinator.mounts.get(dev) != identity:
+                self._flash_status('The device changed while ejecting. Select the current device again.', 10)
+                return
+            if success:
+                self._retire_ejected_device(dev)
+                self._flash_status('Ejected ✓')
+            else:
+                error = bytes(process.readAllStandardError()).decode(errors='replace')
+                QMessageBox.warning(self, 'Eject failed',
+                                    error or 'Could not eject. Close any app using the device.')
+                if (coordinator.active is None and getattr(self, '_eject_owner', None) is None
+                        and not self._exporting and not getattr(self, '_device_finalization_refreshing', False)):
+                    self._set_status_text('Ready')
+        try:
+            coordinator.begin(command, process, Phase.EJECTING)
+        except RuntimeError:
+            finish(False)
+            return
+        process.finished.connect(lambda code, _status: finish(code == 0))
+        process.errorOccurred.connect(
+            lambda _error: finish(False) if process.state() == QProcess.NotRunning else None)
+        process.start('diskutil', ['eject', dev])
 
     def _retire_ejected_device(self, dev: str):
         """Remove the ejected row and cached facts in memory; start no scan."""
@@ -252,7 +283,8 @@ class DeviceBrowserMixin:
                 self.device_tree.takeTopLevelItem(index)
         for name in ('_device_profiles', '_device_mount_tokens', '_drift_cache',
                      '_usb_device_rows', '_usb_view_cache', '_stock_view_cache',
-                     '_stock_view_failures', '_stock_view_pending', '_dual_sync_queue'):
+                     '_stock_catalog_witness_cache', '_stock_view_failures',
+                     '_stock_view_pending', '_dual_sync_queue'):
             getattr(self, name).pop(dev, None)
         self._usb_view_requests.discard(dev)
         self._stock_view_warming.discard(dev)
@@ -262,14 +294,31 @@ class DeviceBrowserMixin:
             self.stack.setCurrentIndex(0)
         self._set_device_poll_interval(bool(self._device_profiles))
         self._update_device_action_state()
+        self._discard_stock_view_callbacks(dev, 'The device was ejected before its refresh completed')
 
-    def _finish_eject_attempt(self, dev: str):
-        self._device_coordinator.eject_pending = ""
-        self._device_coordinator.finished(getattr(self, "_eject_proc", None))
-        if getattr(self, "_eject_ready_device", "") == dev:
+    def _finish_eject_attempt(self, dev: str, *, process=None, identity=None, owner=None) -> bool:
+        if process is None:process = getattr(self, '_eject_proc', None)
+        if identity is None:identity = getattr(self, '_eject_session', None)
+        if owner is None:owner = getattr(self, '_eject_owner', None)
+        coordinator = self._device_coordinator
+        active = coordinator.active
+        controls_owned = active is None or active.worker is process
+        if process is not None:coordinator.finished(process)
+        owned = (owner is not None and getattr(self, '_eject_owner', None) is owner
+                 and getattr(self, '_eject_session', None) == identity
+                 and (process is None or getattr(self, '_eject_proc', None) is process))
+        if process is not None:process.deleteLater()
+        if not owned:return False
+        self._eject_owner = None
+        self._eject_session = None
+        if coordinator.eject_pending == dev:coordinator.eject_pending = ''
+        if getattr(self, '_eject_proc', None) is process:self._eject_proc = None
+        if (controls_owned and identity is not None and coordinator.mounts.get(dev) == identity
+                and getattr(self, '_eject_ready_device', '') == dev):
             self._eject_ready_device = ""
-        self._exporting = False
+        if controls_owned:self._exporting = False
         self._update_device_action_state()
+        return controls_owned
 
     # ---------- device browser management ----------
     def _browser_menu(self, pos):

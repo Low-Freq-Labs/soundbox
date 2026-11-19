@@ -121,7 +121,7 @@ class StockPlaylistCapacity(unittest.TestCase):
 
             with mock.patch.object(stock_ipod, "parse_itunesdb", side_effect=parse):
                 plan = plan_stock_ipod_sync(
-                    library, selected, root, model_number="MA446", filesystem="msdos")
+                    library, selected, root, model_number="MA446", filesystem="msdos", usb_family='iPod Video')
             self.assertFalse(plan.requires_commit)
             self.assertEqual(plan.rendered_database, before)
             self.assertEqual(database.read_bytes(), before)
@@ -148,7 +148,7 @@ class StockPlaylistCapacity(unittest.TestCase):
                         Playlist("Repeated", [], [], pid="b")]
             plan = plan_stock_ipod_sync(
                 Library({}, selected, Path(area) / "synthetic-source"), selected,
-                root, model_number="MA446", filesystem="msdos")
+                root, model_number="MA446", filesystem="msdos", usb_family='iPod Video')
             candidate = Path(area) / "candidate"
             candidate.write_bytes(plan.rendered_database)
             result = stock_ipod.parse_itunesdb(str(candidate))
@@ -314,7 +314,7 @@ class StockIpodSync(unittest.TestCase):
         before = self._snapshot(self.ipod)
         plan = plan_stock_ipod_sync(
             self.library, [self.playlist], self.ipod,
-            model_number="MA446LL/A", filesystem="msdos")
+            model_number="MA446LL/A", filesystem="msdos", usb_family='iPod Video')
         self.assertEqual(self._snapshot(self.ipod), before)
         self.assertEqual(plan.model_number, "MA446")
         self.assertEqual(plan.reused_track_count, 1)
@@ -368,7 +368,7 @@ class StockIpodSync(unittest.TestCase):
             self.library, [self.playlist], self.ipod,
             model_number="MA446", filesystem="msdos",
             art_cache=self.art_cache, stock_art_cache=self.stock_art_cache,
-            identity_key=identity, shadow_store=shadow_store)
+            identity_key=identity, shadow_store=shadow_store, usb_family='iPod Video')
         commit_stock_ipod_sync(plan)
         root = self.ipod.resolve()
         database = root / "iPod_Control/iTunes/iTunesDB"
@@ -511,7 +511,7 @@ class StockIpodSync(unittest.TestCase):
         source_hashes = (_hash(self.existing_source), _hash(self.new_source))
         plan = plan_stock_ipod_sync(
             self.library, [self.playlist], self.ipod,
-            model_number="MA446", filesystem="msdos")
+            model_number="MA446", filesystem="msdos", usb_family='iPod Video')
         result = commit_stock_ipod_sync(plan)
 
         self.assertEqual(result.copied_tracks, 1)
@@ -546,7 +546,7 @@ class StockIpodSync(unittest.TestCase):
     def test_commit_refuses_same_name_target_replacement_after_plan(self):
         plan = plan_stock_ipod_sync(
             self.library, [self.playlist], self.ipod,
-            model_number="MA446", filesystem="msdos")
+            model_number="MA446", filesystem="msdos", usb_family='iPod Video')
         original = self.base / "original-ipod"
         self.ipod.rename(original)
         self.ipod.mkdir()
@@ -578,6 +578,7 @@ class StockIpodSync(unittest.TestCase):
             allow_dual_boot=True,
             identity_key=identity,
             shadow_store=shadow_store,
+            usb_family='iPod Video',
         )
 
         self.assertEqual(self._snapshot(self.ipod), before)
@@ -635,6 +636,7 @@ class StockIpodSync(unittest.TestCase):
             filesystem="msdos",
             media_payloads={self.existing_source.resolve(): payload.resolve()},
             allow_dual_boot=True,
+            usb_family='iPod Video',
         )
         new_destination = self.ipod / plan.copies[0].relative_path
         real_write = DeviceSession.atomic_write
@@ -667,6 +669,7 @@ class StockIpodSync(unittest.TestCase):
             filesystem="msdos",
             media_payloads={self.existing_source.resolve(): payload.resolve()},
             allow_dual_boot=True,
+            usb_family='iPod Video',
         )
         result = commit_stock_ipod_sync(plan)
         self.assertNotEqual(self._snapshot(self.ipod), before)
@@ -695,6 +698,7 @@ class StockIpodSync(unittest.TestCase):
         plan = plan_stock_ipod_sync(
             library, [playlist], self.ipod,
             model_number="MA446", filesystem="msdos",
+            usb_family='iPod Video',
         )
         self.assertEqual(len(plan.copies), 0)
         self.assertEqual(len(plan.metadata_updates), 1)
@@ -743,6 +747,7 @@ class StockIpodSync(unittest.TestCase):
         plan = plan_stock_ipod_sync(
             library, [playlist], self.ipod,
             model_number="MA446", filesystem="msdos",
+            usb_family='iPod Video',
         )
 
         self.assertEqual(plan.reused_track_count, 1)
@@ -782,10 +787,10 @@ class StockIpodSync(unittest.TestCase):
         operations = (
             lambda: plan_stock_ipod_sync(
                 self.library, [self.playlist], self.ipod,
-                model_number="MA446", filesystem="msdos"),
+                model_number="MA446", filesystem="msdos", usb_family='iPod Video'),
             lambda: plan_stock_ipod_playlist_delete(
                 self.ipod, [202], model_number="MA446", filesystem="msdos",
-                stock_art_cache=self.stock_art_cache),
+                stock_art_cache=self.stock_art_cache, usb_family='iPod Video'),
         )
         for operation in operations:
             with self.subTest(operation=operation), mock.patch.object(
@@ -808,7 +813,7 @@ class StockIpodSync(unittest.TestCase):
         with mock.patch.object(Path, "is_file", is_file):
             plan = plan_stock_ipod_sync(
                 self.library, selected, self.ipod,
-                model_number="MA446", filesystem="msdos")
+                model_number="MA446", filesystem="msdos", usb_family='iPod Video')
         # Acquisition, hashes and commit guards are separate. Membership
         # observation itself scales with two unique paths and two phases.
         self.assertEqual(checks.count(self.existing_source), 2)
@@ -842,7 +847,7 @@ class StockIpodSync(unittest.TestCase):
                         with self.assertRaisesRegex(StockIpodError, "source identity changed"):
                             plan_stock_ipod_sync(
                                 self.library, [self.playlist], self.ipod,
-                                model_number="MA446", filesystem="msdos")
+                                model_number="MA446", filesystem="msdos", usb_family='iPod Video')
                     self.assertEqual(self._snapshot(self.ipod), before)
                 finally:
                     self.new_source.unlink(missing_ok=True)
@@ -852,6 +857,7 @@ class StockIpodSync(unittest.TestCase):
         sync_plan = plan_stock_ipod_sync(
             self.library, [self.playlist], self.ipod,
             model_number="MA446", filesystem="msdos",
+            usb_family='iPod Video',
         )
         new_media = self.ipod / sync_plan.copies[0].relative_path
         commit_stock_ipod_sync(sync_plan)
@@ -867,6 +873,7 @@ class StockIpodSync(unittest.TestCase):
             model_number="MA446",
             filesystem="msdos",
             stock_art_cache=self.stock_art_cache,
+            usb_family='iPod Video',
         )
         self.assertEqual(
             plan.playlist_ids, (int(target_playlist["playlistID"]),))
@@ -897,6 +904,7 @@ class StockIpodSync(unittest.TestCase):
         sync_plan = plan_stock_ipod_sync(
             self.library, [self.playlist, collection], self.ipod,
             model_number="MA446", filesystem="msdos",
+            usb_family='iPod Video',
         )
         commit_stock_ipod_sync(sync_plan)
         database = read_ipod(self.ipod)
@@ -915,6 +923,7 @@ class StockIpodSync(unittest.TestCase):
             model_number="MA446",
             filesystem="msdos",
             stock_art_cache=self.stock_art_cache,
+            usb_family='iPod Video',
         )
         self.assertEqual(plan.playlist_ids, selected_ids)
         self.assertEqual(
@@ -938,6 +947,7 @@ class StockIpodSync(unittest.TestCase):
             model_number="MA446", filesystem="msdos",
             art_cache=self.art_cache,
             stock_art_cache=self.stock_art_cache,
+            usb_family='iPod Video',
         )
         new_media = self.ipod / sync_plan.copies[0].relative_path
         old_media = self.ipod / "iPod_Control/Music/F00/AAAA.wav"
@@ -959,6 +969,7 @@ class StockIpodSync(unittest.TestCase):
                 model_number="MA446",
                 filesystem="msdos",
                 stock_art_cache=self.stock_art_cache,
+                usb_family='iPod Video',
             )
 
         plan = plan_stock_ipod_playlist_delete(
@@ -968,6 +979,7 @@ class StockIpodSync(unittest.TestCase):
             filesystem="msdos",
             stock_art_cache=self.stock_art_cache,
             allow_dual_boot=True,
+            usb_family='iPod Video',
         )
         self.assertTrue(plan.dual_boot)
         self.assertEqual(plan.deleted_track_count, 1)
@@ -1023,6 +1035,7 @@ class StockIpodSync(unittest.TestCase):
             filesystem="msdos",
             allow_dual_boot=True,
             repair_empty_playlist_index=True,
+            usb_family='iPod Video',
         )
 
         self.assertTrue(plan.repair_empty_playlist_index)
@@ -1051,6 +1064,7 @@ class StockIpodSync(unittest.TestCase):
                 filesystem="msdos",
                 allow_dual_boot=True,
                 repair_empty_playlist_index=True,
+                usb_family='iPod Video',
             )
 
     def test_videos_system_playlist_is_narrowly_deletable_without_media(self):
@@ -1077,6 +1091,7 @@ class StockIpodSync(unittest.TestCase):
             model_number="MA446",
             filesystem="msdos",
             stock_art_cache=self.stock_art_cache,
+            usb_family='iPod Video',
         )
 
         self.assertEqual(plan.playlist_names, ("Videos",))
@@ -1106,6 +1121,7 @@ class StockIpodSync(unittest.TestCase):
                 model_number="MA446",
                 filesystem="msdos",
                 stock_art_cache=self.stock_art_cache,
+                usb_family='iPod Video',
             )
 
     def test_collection_playlist_retains_every_track_when_other_playlist_deleted(self):
@@ -1113,6 +1129,7 @@ class StockIpodSync(unittest.TestCase):
         plan = plan_stock_ipod_sync(
             self.library, [self.playlist, collection], self.ipod,
             model_number="MA446", filesystem="msdos",
+            usb_family='iPod Video',
         )
         new_media = self.ipod / plan.copies[0].relative_path
         commit_stock_ipod_sync(plan)
@@ -1128,6 +1145,7 @@ class StockIpodSync(unittest.TestCase):
             model_number="MA446",
             filesystem="msdos",
             stock_art_cache=self.stock_art_cache,
+            usb_family='iPod Video',
         )
         self.assertEqual(delete.deleted_track_count, 0)
         self.assertEqual(delete.media_deletes, ())
@@ -1148,6 +1166,7 @@ class StockIpodSync(unittest.TestCase):
             model_number="MA446",
             filesystem="msdos",
             stock_art_cache=self.stock_art_cache,
+            usb_family='iPod Video',
         )
         original = self.base / "original-ipod"
         self.ipod.rename(original)
@@ -1165,6 +1184,7 @@ class StockIpodSync(unittest.TestCase):
             model_number="MA446", filesystem="msdos",
             art_cache=self.art_cache,
             stock_art_cache=self.stock_art_cache,
+            usb_family='iPod Video',
         )
         commit_stock_ipod_sync(sync_plan)
         database = read_ipod(self.ipod)
@@ -1183,6 +1203,7 @@ class StockIpodSync(unittest.TestCase):
             model_number="MA446",
             filesystem="msdos",
             stock_art_cache=self.stock_art_cache,
+            usb_family='iPod Video',
         )
         self.assertIsNotNone(compact.rendered_artwork)
         assert compact.rendered_artwork is not None
@@ -1198,6 +1219,7 @@ class StockIpodSync(unittest.TestCase):
             model_number="MA446",
             filesystem="msdos",
             stock_art_cache=self.stock_art_cache,
+            usb_family='iPod Video',
         )
         self.assertIsNone(empty.rendered_artwork)
         self.assertEqual(len(empty.artwork_delete_paths), 3)
@@ -1211,6 +1233,7 @@ class StockIpodSync(unittest.TestCase):
         sync_plan = plan_stock_ipod_sync(
             self.library, [self.playlist], self.ipod,
             model_number="MA446", filesystem="msdos",
+            usb_family='iPod Video',
         )
         new_media = self.ipod / sync_plan.copies[0].relative_path
         commit_stock_ipod_sync(sync_plan)
@@ -1225,6 +1248,7 @@ class StockIpodSync(unittest.TestCase):
             model_number="MA446",
             filesystem="msdos",
             stock_art_cache=self.stock_art_cache,
+            usb_family='iPod Video',
         )
         db_path = self.ipod / "iPod_Control/iTunes/iTunesDB"
         db_path.write_bytes(db_path.read_bytes() + b"changed")
@@ -1238,6 +1262,7 @@ class StockIpodSync(unittest.TestCase):
             model_number="MA446", filesystem="msdos",
             art_cache=self.art_cache,
             stock_art_cache=self.stock_art_cache,
+            usb_family='iPod Video',
         )
         new_media = self.ipod / sync_plan.copies[0].relative_path
         commit_stock_ipod_sync(sync_plan)
@@ -1252,6 +1277,7 @@ class StockIpodSync(unittest.TestCase):
             model_number="MA446",
             filesystem="msdos",
             stock_art_cache=self.stock_art_cache,
+            usb_family='iPod Video',
         )
         db_path = self.ipod / "iPod_Control/iTunes/iTunesDB"
         db_before = db_path.read_bytes()
@@ -1286,6 +1312,7 @@ class StockIpodSync(unittest.TestCase):
             model_number="MA446", filesystem="msdos",
             art_cache=self.art_cache,
             stock_art_cache=self.stock_art_cache,
+            usb_family='iPod Video',
         )
         self.assertEqual(self._snapshot(self.ipod), before)
         self.assertIsNotNone(plan.rendered_artwork)
@@ -1316,6 +1343,7 @@ class StockIpodSync(unittest.TestCase):
         shadow_store = StockIpodShadowStore(self.base / "stock-state")
         common = {
             "model_number": "MA446",
+            "usb_family": "iPod Video",
             "filesystem": "msdos",
             "art_cache": self.art_cache,
             "stock_art_cache": self.stock_art_cache,
@@ -1399,6 +1427,7 @@ class StockIpodSync(unittest.TestCase):
             self.library, [self.playlist], self.ipod,
             model_number="MA446", filesystem="msdos",
             art_cache=self.art_cache, stock_art_cache=self.stock_art_cache,
+            usb_family='iPod Video',
         ))
         only_new = Playlist("Only New", [], ["new"], pid="only-new")
         only_old = Playlist("Only Old", [], ["old"], pid="only-old")
@@ -1407,6 +1436,7 @@ class StockIpodSync(unittest.TestCase):
         shadow_store = StockIpodShadowStore(self.base / "stock-state")
         common = {
             "model_number": "MA446",
+            "usb_family": "iPod Video",
             "filesystem": "msdos",
             "art_cache": self.art_cache,
             "stock_art_cache": self.stock_art_cache,
@@ -1445,6 +1475,7 @@ class StockIpodSync(unittest.TestCase):
         identity_key = "stock-ipod-v1:fixture:collection-delete"
         common = {
             "model_number": "MA446",
+            "usb_family": "iPod Video",
             "filesystem": "msdos",
             "art_cache": self.art_cache,
             "stock_art_cache": self.stock_art_cache,
@@ -1518,6 +1549,7 @@ class StockIpodSync(unittest.TestCase):
         shadow_store = StockIpodShadowStore(self.base / "stock-state")
         common = {
             "model_number": "MA446",
+            "usb_family": "iPod Video",
             "filesystem": "msdos",
             "art_cache": self.art_cache,
             "stock_art_cache": self.stock_art_cache,
@@ -1567,6 +1599,7 @@ class StockIpodSync(unittest.TestCase):
         shadow_store = StockIpodShadowStore(self.base / "stock-state")
         common = {
             "model_number": "MA446",
+            "usb_family": "iPod Video",
             "filesystem": "msdos",
             "art_cache": self.art_cache,
             "stock_art_cache": self.stock_art_cache,
@@ -1611,6 +1644,7 @@ class StockIpodSync(unittest.TestCase):
             model_number="MA446", filesystem="msdos",
             identity_key="stock-ipod-v1:fixture",
             shadow_store=shadow_store,
+            usb_family='iPod Video',
         )
         with mock.patch.object(
                 shadow_store, "save", side_effect=OSError("Mac disk full")):
@@ -1627,6 +1661,7 @@ class StockIpodSync(unittest.TestCase):
             model_number="MA446", filesystem="msdos",
             art_cache=self.art_cache, stock_art_cache=self.stock_art_cache,
             identity_key=identity, shadow_store=shadow_store,
+            usb_family='iPod Video',
         )
         commit_stock_ipod_sync(plan)
         before = self._snapshot(self.ipod)
@@ -1667,6 +1702,7 @@ class StockIpodSync(unittest.TestCase):
             model_number="MA446", filesystem="msdos",
             art_cache=self.art_cache,
             stock_art_cache=self.stock_art_cache,
+            usb_family='iPod Video',
         )
         database = self.ipod / "iPod_Control/iTunes/iTunesDB"
         before = database.read_bytes()
@@ -1693,6 +1729,7 @@ class StockIpodSync(unittest.TestCase):
             model_number="MA446", filesystem="msdos",
             art_cache=self.art_cache,
             stock_art_cache=self.stock_art_cache,
+            usb_family='iPod Video',
         )
         commit_stock_ipod_sync(first)
         artwork = self.ipod / "iPod_Control/Artwork"
@@ -1707,6 +1744,7 @@ class StockIpodSync(unittest.TestCase):
             model_number="MA446", filesystem="msdos",
             art_cache=self.art_cache,
             stock_art_cache=self.stock_art_cache,
+            usb_family='iPod Video',
         )
         database = self.ipod / "iPod_Control/iTunes/iTunesDB"
         database_before = database.read_bytes()
@@ -1738,6 +1776,7 @@ class StockIpodSync(unittest.TestCase):
             model_number="MA446", filesystem="msdos",
             art_cache=self.art_cache,
             stock_art_cache=self.stock_art_cache,
+            usb_family='iPod Video',
         )
         commit_stock_ipod_sync(first)
         (self.ipod / "iPod_Control/Artwork/F1029_1.ithmb").unlink()
@@ -1746,12 +1785,13 @@ class StockIpodSync(unittest.TestCase):
                 self.library, [self.playlist], self.ipod,
                 model_number="MA446", filesystem="msdos",
                 stock_art_cache=self.stock_art_cache,
+                usb_family='iPod Video',
             )
 
     def test_stale_database_refuses_before_copy(self):
         plan = plan_stock_ipod_sync(
             self.library, [self.playlist], self.ipod,
-            model_number="MA446", filesystem="msdos")
+            model_number="MA446", filesystem="msdos", usb_family='iPod Video')
         db = self.ipod / "iPod_Control/iTunes/iTunesDB"
         db.write_bytes(db.read_bytes() + b"changed")
         with self.assertRaisesRegex(StockIpodError, "changed after dry-run"):
@@ -1762,7 +1802,7 @@ class StockIpodSync(unittest.TestCase):
     def test_database_write_failure_removes_only_new_media(self):
         plan = plan_stock_ipod_sync(
             self.library, [self.playlist], self.ipod,
-            model_number="MA446", filesystem="msdos")
+            model_number="MA446", filesystem="msdos", usb_family='iPod Video')
         database = self.ipod / "iPod_Control/iTunes/iTunesDB"
         before = database.read_bytes()
         real_write = DeviceSession.atomic_write
@@ -1780,11 +1820,12 @@ class StockIpodSync(unittest.TestCase):
         self.assertFalse((self.ipod / plan.copies[0].relative_path).exists())
         self.assertTrue((self.ipod / ".soundbox/stock-ipod-recovery").is_dir())
 
-    def test_unknown_model_fails_and_non_stock_format_is_explicitly_omitted(self):
-        with self.assertRaisesRegex(StockIpodError, "allowlist"):
-            plan_stock_ipod_sync(
-                self.library, [self.playlist], self.ipod,
-                model_number="MA450", filesystem="msdos")
+    def test_observed_format_allows_other_model_and_non_stock_new_audio_is_omitted(self):
+        compatible = plan_stock_ipod_sync(
+            self.library, [self.playlist], self.ipod,
+            model_number="MA450", filesystem="msdos", usb_family='iPod Video')
+        self.assertTrue(compatible.stock_format.writable)
+        self.assertEqual(compatible.model_number, 'MA450')
         bad = self.sources / "bad.flac"
         bad.write_bytes(b"not audio")
         track = Track("bad", "Bad", "", bad.as_uri())
@@ -1792,7 +1833,7 @@ class StockIpodSync(unittest.TestCase):
         library = Library({"bad": track}, [playlist], self.sources)
         plan = plan_stock_ipod_sync(
             library, [playlist], self.ipod, model_number="MA446",
-            filesystem="msdos")
+            filesystem="msdos", usb_family='iPod Video')
         self.assertEqual(len(plan.omissions), 1)
         self.assertIn("FLAC is not a stock-iPod", plan.omissions[0].reason)
         self.assertEqual(plan.source_track_count, 0)
@@ -1812,6 +1853,7 @@ class StockIpodSync(unittest.TestCase):
         plan = plan_stock_ipod_sync(
             library, [playlist], self.ipod,
             model_number="MA446", filesystem="msdos",
+            usb_family='iPod Video',
         )
         self.assertEqual(len(plan.omissions), 1)
         self.assertEqual(plan.omissions[0].track_id, "loot")
@@ -1833,6 +1875,74 @@ class StockIpodSync(unittest.TestCase):
             output_by_id[house["items"][0]["trackID"]],
             plan.copies[0].dbid,
         )
+
+    def test_unsupported_stock_suffixes_do_not_acquire_audio_before_omission(self):
+        tracks = {"new": self.library.tracks_by_id["new"]}
+        unsupported = {}
+        for suffix in (".m4a", ".FLAC", ".aiff", ".xyz"):
+            path = self.sources / ("unsupported" + suffix)
+            path.write_bytes(b"Source bytes must not be acquired for a rejected suffix")
+            unsupported[suffix] = path.resolve()
+            tracks[suffix] = Track(suffix, suffix, "", path.as_uri())
+        playlist = Playlist("Mixed formats", [], [*tracks, ".m4a"])
+        library = Library(tracks, [playlist], self.sources)
+        before = self._snapshot(self.ipod)
+        original_acquire = stock_ipod.acquire_source
+        acquired = []
+
+        def acquire(contract, *args, **kwargs):
+            self.assertNotIn(contract.canonical, unsupported.values())
+            acquired.append(contract.canonical)
+            return original_acquire(contract, *args, **kwargs)
+
+        with mock.patch.object(stock_ipod, "acquire_source", side_effect=acquire):
+            plan = plan_stock_ipod_sync(library, [playlist], self.ipod,
+                model_number="MA446", filesystem="msdos", usb_family='iPod Video')
+        self.assertEqual(acquired, [self.new_source.resolve()])
+        self.assertEqual([row.track_id for row in plan.omissions],
+                         [".m4a", ".FLAC", ".aiff", ".xyz", ".m4a"])
+        self.assertTrue(all("is not a stock-iPod MP3/WAV" in row.reason
+                            for row in plan.omissions))
+        self.assertEqual(plan.source_track_count, 1)
+        self.assertEqual(len(plan.copies), 1)
+        self.assertEqual(plan.summary()["omitted_tracks"], 5)
+        self.assertEqual(self._snapshot(self.ipod), before)
+
+    def test_incremental_stock_unsupported_addition_does_not_acquire_audio(self):
+        self.library.source = self.sources / 'generated-native.db'
+        self.library.source_kind = 'rekordbox-db'
+        self.library.source_library_id = 'generated-library'
+        self.library.source_playlist_catalog = {'nodes': [dict(
+            ID=self.playlist.pid, UUID='generated-playlist', rb_local_deleted=0)]}
+        for key, track in self.library.tracks_by_id.items():
+            track.source_native_id = 'native-' + key
+            track.source_uuid = 'uuid-' + key
+            track.source_native_path = str(track.path)
+        identity = read_stock_ipod_snapshot(self.ipod,
+            volume_uuid='generated-volume').identity_key
+        first = commit_stock_ipod_sync(plan_stock_ipod_sync(
+            self.library, [self.playlist], self.ipod, model_number="MA446",
+            filesystem="msdos", usb_family='iPod Video', identity_key=identity,
+            display_rows={key: dict(title=track.name, artist=track.artist)
+                          for key, track in self.library.tracks_by_id.items()}))
+        self.assertIsNotNone(first.catalog_witness, first.catalog_warning)
+        source = self.sources / 'large-set.m4a'
+        source.write_bytes(b"Unsupported stock source must not be opened")
+        self.library.tracks_by_id['set'] = Track('set', 'Large set', '', source.as_uri(),
+            source_native_id='native-set', source_uuid='uuid-set', source_native_path=str(source))
+        self.playlist.keys.append('set')
+        snapshot = read_stock_ipod_snapshot(self.ipod, volume_uuid='generated-volume')
+        before = self._snapshot(self.ipod)
+        with mock.patch.object(stock_ipod, "acquire_source",
+                side_effect=AssertionError("Unsupported addition acquired source bytes")):
+            plan = stock_ipod.plan_stock_ipod_catalog_update(
+                self.library, [self.playlist], self.ipod, snapshot=snapshot,
+                model_number="MA446", filesystem="msdos", usb_family='iPod Video',
+                catalog_witness=first.catalog_witness, incremental=True)
+        self.assertEqual([row.track_id for row in plan.omissions], ['set'])
+        self.assertIn('M4A is not a stock-iPod', plan.omissions[0].reason)
+        self.assertEqual(plan.copies, ())
+        self.assertEqual(self._snapshot(self.ipod), before)
 
     def test_soundbox_curation_vetoes_precede_stock_format_filter(self):
         unsafe = self.sources / "loot.wav"
@@ -1856,6 +1966,7 @@ class StockIpodSync(unittest.TestCase):
         plan = plan_stock_ipod_sync(
             library, [playlist], self.ipod,
             model_number="MA446", filesystem="msdos",
+            usb_family='iPod Video',
         )
 
         # A Collection delete is global, and a playlist removal is local. Both
@@ -1874,12 +1985,12 @@ class StockIpodSync(unittest.TestCase):
         with self.assertRaisesRegex(StockIpodError, "confirmed FAT32"):
             plan_stock_ipod_sync(
                 self.library, [self.playlist], self.ipod,
-                model_number="MA446", filesystem="")
+                model_number="MA446", filesystem="", usb_family='iPod Video')
         (self.ipod / ".rockbox").mkdir()
         with self.assertRaisesRegex(StockIpodError, "Dual-boot"):
             plan_stock_ipod_sync(
                 self.library, [self.playlist], self.ipod,
-                model_number="MA446", filesystem="msdos")
+                model_number="MA446", filesystem="msdos", usb_family='iPod Video')
 
 
 if __name__ == "__main__":

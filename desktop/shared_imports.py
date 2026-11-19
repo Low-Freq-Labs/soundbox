@@ -25,6 +25,7 @@ class SharedImportController(QObject):
         super().__init__(window)
         self.window=window;self.tags=window.tag_controller;self.closing=False;self.cancelling=False
         self.registration_factory=registration_factory;self.playlist_factory=playlist_factory
+        self._initial_loader=rekordbox_db.load_live;self._default_loader=loader is None
         self.loader=loader or rekordbox_db.load_live
         self.not_before=0.0
         self.conversion_tracks=set()
@@ -78,6 +79,16 @@ class SharedImportController(QObject):
 
     def schedule(self):
         if not self.closing:self._pump_wakeup.schedule()
+
+    def _membership_readback(self,previous):
+        """Fresh catalog/musical state after registration, without reopening media.
+
+        The first registration keeps the full reader for new canonical bindings.
+        Explicitly injected/replaced loaders retain their source-path API.
+        """
+        if self._default_loader and self.loader is self._initial_loader:
+            return rekordbox_db.load_metadata_readback(previous)
+        return self.loader(previous.source)
 
     def _registration(self, lib):
         if self.registration_factory:return self.registration_factory(lib)
@@ -287,7 +298,7 @@ class SharedImportController(QObject):
                 with phase('import_membership_apply'):
                     after=playlist.apply(job['membership'])
                 with phase('import_membership_readback'):
-                    refreshed=self.loader(lib.source)
+                    refreshed=self._membership_readback(lib)
                 # Only this freshly verified operation may rebase app intents
                 # admitted against its own exact prior catalog. A replay after
                 # later native changes supplies no such causal proof.
@@ -301,7 +312,7 @@ class SharedImportController(QObject):
                 return dict(done=True,library=refreshed,catalog_rebase=rebase)
             # Readback is part of completion. A crash/save failure replays the
             # exact stored requests, never a fresh append or new content ID.
-            return dict(done=True,library=self.loader(lib.source))
+            return dict(done=True,library=self._membership_readback(lib))
         def work():
             # Select only facts from this exact validated durable request. The
             # worker-scoped proof handles ctime-only drift; every store guard
@@ -407,7 +418,7 @@ class SharedImportController(QObject):
                 with phase('import_acknowledgement_refresh'):
                     bindings=value.get('bindings',job.get('bindings',[]))
                     w._on_refresh_done(value['library'],metadata_changed_ids=tuple(
-                        binding['native_id'] for binding in bindings))
+                        binding['native_id'] for binding in bindings),prepared_native_ids=())
                 if (not self.tags.verified or any(t['id'] in getattr(w.lib,'source_binding_issues',{})
                                                 for t in job['tracks'])):
                     self.fail('Native identity needs reconciliation; import receipts preserved',job['id']);return
@@ -479,7 +490,8 @@ class SharedImportController(QObject):
             except (WriteProofError,TypeError,ValueError,OSError) as exc:
                 w.settings.clear();w.settings.update(before);self.fail(str(exc));return
             self.timer.stop();self.status('Imports pending' if self.pending else '')
-            if library is not None and not self.closing and not w._shutting_down:w._on_refresh_done(library)
+            if library is not None and not self.closing and not w._shutting_down:
+                w._on_refresh_done(library,prepared_native_ids=())
             if not self.closing and not w._shutting_down:w._native_pending_changed(rebuild=True)
             self.tags.idle.emit();self.schedule()
         if not any(j['request'] is not None for j in pending):finish([]);return

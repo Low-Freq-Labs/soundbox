@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import marshal
 from pathlib import Path
 import plistlib
 import sys
@@ -15,12 +16,13 @@ if str(ROOT) not in sys.path:
 
 from soundbox.providers import profile_path, read_manifest
 
-COMMON_COLLECTIONS = ("pyrekordbox", "sqlcipher3", "PIL", "soundfile", "zstandard")
+COMMON_COLLECTIONS = ("pyrekordbox", "sqlcipher3", "PIL", "soundfile", "zstandard", "Crypto")
 COMMON_SUBMODULES = ("sqlalchemy", "clickwheel.ipod", "PySide6.QtMultimedia")
 PERSONAL_PACKAGES = ("soundbox_personal", "yt_dlp")
 DEVELOPER_PACKAGES = (
     "tests", "research", "sqlalchemy.testing", "sqlalchemy.ext.mypy",
     "mypy", "ast_serialize",
+    "Crypto.SelfTest",
 )
 REQUIRED_RUNTIME_MODULES = (
     "soundbox.providers", "soundbox.artwork", "soundbox.mp3_scan",
@@ -28,6 +30,7 @@ REQUIRED_RUNTIME_MODULES = (
     "soundbox.immutable_plan_proof",
     "desktop.native_timing",
     "soundbox.mac_process",
+    "soundbox.ipod_usb_identity", "soundbox.stock_ipod_identity",
     "desktop.native_analysis", "desktop.tag_controller",
 )
 
@@ -122,6 +125,34 @@ def verify_runtime_code(pyz, *, root: Path = ROOT) -> list[str]:
     return verified
 
 
+def verify_startup_scripts(archive, *, root: Path = ROOT) -> dict:
+    """Check the actual bootloader script order and first-party script code."""
+    scripts = [name for name, entry in archive.toc.items() if entry[-1] == 's']
+    required = {'pyiboot01_bootstrap', 'packaged_worker_hook', 'pyi_rth_pyside6', 'soundbox_app'}
+    missing = sorted(required - set(scripts))
+    if missing:
+        raise ValueError('Startup scripts missing: ' + ', '.join(missing))
+    if (scripts[:2] != ['pyiboot01_bootstrap', 'packaged_worker_hook']
+            or scripts[-1] != 'soundbox_app'):
+        raise ValueError('Worker runtime hook must run first after bootstrap and before Qt and desktop entry')
+    verified = []
+    for name, relative in (
+            ('packaged_worker_hook', 'soundbox/packaged_worker_hook.py'),
+            ('soundbox_app', 'soundbox_app.py')):
+        source = root / relative
+        if not source.is_file():
+            raise ValueError('Bundled startup script has no source: ' + name)
+        try:
+            actual = marshal.loads(archive.extract(name))
+        except (EOFError, TypeError, ValueError) as exc:
+            raise ValueError('Bundled startup script is invalid: ' + name) from exc
+        expected = compile(source.read_bytes(), str(source), 'exec', dont_inherit=True, optimize=0)
+        if not isinstance(actual, CodeType) or not _same_code(actual, expected):
+            raise ValueError('Bundled startup code differs from tested source: ' + name)
+        verified.append(name)
+    return {'order': scripts, 'verified': verified}
+
+
 def inspect_artifact(app: Path, profile: str) -> dict:
     """Inspect actual PYZ modules/files, rather than trusting hidden menus."""
     from PyInstaller.archive.readers import CArchiveReader
@@ -133,10 +164,13 @@ def inspect_artifact(app: Path, profile: str) -> dict:
         raise ValueError('Vector wordmark is missing from the bundle')
     if not (app / 'Contents/Frameworks/native/libsoundbox_process_guard.dylib').is_file():
         raise ValueError('Fresh native process guard is missing from the bundle')
+    if not (app / 'Contents/Frameworks/native/soundbox-ipod-identity').is_file():
+        raise ValueError('Bounded native iPod identity reader is missing from the bundle')
     expected = composition(profile)["manifest"]
     if any(manifest.get(key) != value for key, value in expected.items()):
         raise ValueError("Artifact build manifest differs from selected profile")
     archive = CArchiveReader(str(app / "Contents" / "MacOS" / "Soundbox"))
+    startup_scripts = verify_startup_scripts(archive)
     pyz = archive.open_embedded_archive("PYZ.pyz")
     modules = sorted(pyz.toc)
     verified_runtime = verify_runtime_code(pyz)
@@ -166,6 +200,7 @@ def inspect_artifact(app: Path, profile: str) -> dict:
         raise ValueError("Module provenance mismatch")
     return {"profile": profile, "modules": ids, "python_module_count": len(modules),
             "verified_runtime_modules": verified_runtime,
+            "startup_scripts": startup_scripts,
             "personal_packages": present, "source_sha256": manifest["source_sha256"]}
 
 

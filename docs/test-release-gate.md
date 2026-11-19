@@ -1,6 +1,8 @@
 # Release test gate
 
-Updated November8, 2026. `./check.sh` checks authored-folder guides, local links
+Release procedure reviewed November18, 2026; dated results below retain their
+original scope. [HANDOFF](HANDOFF.md) records the latest source and installed
+validation separately. `./check.sh` checks authored-folder guides, local links
 and static dependency directions, builds native deck/process-guard/CDJ code, runs lint/types, validates the
 required offline fixtures, then executes every discovered test exactly once.
 Ordinary/UI/GPU modules use three isolated offscreen Qt processes; module fixtures
@@ -17,12 +19,19 @@ release result. The supported release host is arm64 macOS 14+ with the project's
 pinned developer requirements and native build tools; fixture AAC/MP3 encoding
 also requires FFmpeg and LAME on PATH.
 
+Device staging additionally exercises real FAT32 and exFAT through disposable
+disk images using macOS `hdiutil`. Mounts are private temporary paths with
+`nobrowse`; fixtures never enumerate or write connected physical devices.
+Their cleanup detaches only the captured image session without force, preserving
+the backing image if detach fails. Image setup/cleanup failures fail the gate;
+APFS-only tests and skipped filesystem cases cannot substitute for this proof.
+
 The [November2 runtime audit](testing-runtime-audit.md) records the complete
 timing review, isolation checks and a controlled encrypted-subset comparison.
 Each case still runs with its existing cipher/recovery settings. Module weights
 affect scheduling only; new tests cannot be excluded by missing timing hints.
 
-## Offline shared-library source gate — November13
+## Historical offline shared-library source gate — November13
 
 The final bare `./check.sh --render` passes3325 discovered cases:3259 offscreen
 in537.626s and66 Cocoa in69.070s, with exact inventories and zero skips or
@@ -41,8 +50,8 @@ and retain all data/permission assertions. Production behavior and native timing
 thresholds were unchanged. The corrected helper has independent review.
 
 Compact receipts: `~/Library/Logs/Soundbox/tag-smart-deletion-2026-11-12/` under
-`offline-followup-gate/` and `prep-domain-completion-review.json`. This validates
-current source, not native rekordbox business-profile acceptance or installation.
+`offline-followup-gate/` and `prep-domain-completion-review.json`. This validated
+that source checkpoint, not native rekordbox business-profile acceptance or installation.
 The [feature audit](shared-library-audit-2026-11.md) retains older-record, metadata,
 artwork, analysis and ongoing-parity gaps; [HANDOFF](HANDOFF.md) records build171
 separately. No live-source writes, authority activation or runtime handoff occurred.

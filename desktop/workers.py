@@ -15,6 +15,7 @@ import threading
 import time
 import weakref
 from collections import deque
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -25,7 +26,8 @@ from soundbox import engine, metadata, rekordbox_db
 from soundbox.library import Playlist
 from soundbox.export_snapshot import ExportSnapshot, capture_export
 from soundbox.providers import ArtworkProvider, provider_operation
-from soundbox.operation_control import checkpoint, operation_scope
+from soundbox.operation_control import OperationCancelled, checkpoint, operation_scope
+from soundbox.report import SyncReport
 if TYPE_CHECKING:
     from soundbox import sync as sync_mod
     from soundbox.stock_artwork import StockArtworkCache
@@ -61,27 +63,38 @@ class ExportWorker(QThread):
         self.rockbox_media_cache = rockbox_media_cache
         self.rockbox_art_cache = rockbox_art_cache
         self._lock = threading.Lock()
-        self._jobs: deque[tuple[str, ExportSnapshot, int, int]] = deque()
+        self._jobs: deque[tuple[str, ExportSnapshot, int, int,
+            Callable[[],None] | None,Callable[[str],None] | None,bytes | None,bool]] = deque()
         self._total = 0
         self._base_done = 0
         self._stop = False
+        self.cancellation = threading.Event()
+        self._cancelled_targets: dict[str, None] = {}
         self._reports: list[tuple[str, object]] = []
         self.result: list[tuple[str, object]] | None = None
 
     def add(self, device: str, playlists: list[Playlist], *, mount_token: int = 0,
-            library=None, titles=None, overrides=None):
-        lib = library if library is not None else self._capture_library()
-        if lib is None:
-            raise RuntimeError('Export source library is no longer available')
-        captured = capture_export(lib, playlists,
-            titles=self.titles if titles is None else titles,
-            artists=self.overrides if overrides is None else overrides)
-        estimate = sum(max(1, len(lib.resolve(playlist))) for playlist in playlists)
+            library=None, titles=None, overrides=None, snapshot=None, estimate=None,
+            validate_inputs=None,validate_artwork=None,expected_manifest_payload=None,expected_manifest_absent=False):
+        if snapshot is None:
+            lib = library if library is not None else self._capture_library()
+            if lib is None:
+                raise RuntimeError('Export source library is no longer available')
+            captured = capture_export(lib, playlists,
+                titles=self.titles if titles is None else titles,
+                artists=self.overrides if overrides is None else overrides)
+            estimate = sum(max(1, len(lib.resolve(playlist))) for playlist in playlists)
+        else:
+            if not isinstance(snapshot, ExportSnapshot) or type(estimate) is not int or estimate < 0:
+                raise ValueError('A captured iPod export needs its immutable snapshot and entry count')
+            captured = snapshot
+            estimate = max(1, estimate)
         with self._lock:
-            if self._stop:
+            if self._should_cancel():
                 return
             if playlists:
-                self._jobs.append((device, captured, mount_token, estimate))
+                self._jobs.append((device, captured, mount_token, estimate,validate_inputs,validate_artwork,
+                                   expected_manifest_payload,expected_manifest_absent))
                 self._total += estimate
         # No emit here: the next per-file progress tick updates the bar at the
         # real current position with the new total, so adding a playlist mid-export
@@ -90,19 +103,39 @@ class ExportWorker(QThread):
     def cancel(self):
         with self._lock:
             self._stop = True
+            self.cancellation.set()
+            self._cancelled_targets.update((device, None) for device, *_ in self._jobs)
             self._jobs.clear()
 
+    @property
+    def cancellation(self):
+        return self._cancellation
+
+    @cancellation.setter
+    def cancellation(self, event):
+        self._cancellation = event
+        if self._stop:
+            event.set()
+
+    def _should_cancel(self):
+        return self._stop or self.cancellation.is_set()
+
     def run(self):
-        with operation_scope(None, self.phase_progress.emit):
+        with operation_scope(self.cancellation, self.phase_progress.emit):
             self._run_export()
 
     def _run_export(self):
         try:
             while True:
                 with self._lock:
-                    if self._stop or not self._jobs:
+                    if self._should_cancel():
+                        self._cancelled_targets.update((device, None) for device, *_ in self._jobs)
+                        self._jobs.clear()
                         break
-                    device, captured, mount_token, est = self._jobs.popleft()
+                    if not self._jobs:
+                        break
+                    (device,captured,mount_token,est,validate_inputs,validate_artwork,
+                     expected_manifest_payload,expected_manifest_absent)=self._jobs.popleft()
                     base = self._base_done
                 inputs = captured.materialize()
                 playlists = list(inputs.playlists)
@@ -117,20 +150,32 @@ class ExportWorker(QThread):
                     self.progress.emit(_base + done, tot, f"{_name} — {label}")
 
                 try:
+                    checkpoint()
                     if mount_token and Path(device).stat().st_dev != mount_token:
                         raise RuntimeError("Queued export target was remounted; confirmation expired")
                     # clean=False: scrub AppleDouble once at end, not per playlist.
+                    options={}
+                    if inputs.display_rows is not None:options['display_rows']=inputs.display_rows
+                    if validate_inputs is not None:
+                        validate_inputs()
+                        options['validate_inputs']=validate_inputs
+                    if validate_artwork is not None:options['validate_artwork']=validate_artwork
+                    if expected_manifest_payload is not None:options['expected_manifest_payload']=expected_manifest_payload
+                    if expected_manifest_absent:options['expected_manifest_absent']=True
                     rep = engine.export_playlists(
                         inputs.library, playlists, device, dry_run=False, derive_artists=True,
-                        on_progress=cb, should_cancel=lambda: self._stop, clean=False,
+                        on_progress=cb, should_cancel=self._should_cancel, clean=False,
                         artist_overrides=inputs.artists, title_overrides=inputs.titles,
                         art_cache=self.art_cache,
                         rockbox_media_cache=self.rockbox_media_cache,
-                        rockbox_art_cache=self.rockbox_art_cache)
+                        rockbox_art_cache=self.rockbox_art_cache,**options)
                     self._reports.append((device, rep))
                     if (getattr(rep, "cancelled", False)
                             or any(p.errors for p in getattr(rep, "playlists", []))):
                         self.cancel()
+                except OperationCancelled:
+                    self._reports.append((device, SyncReport(dry_run=False, cancelled=True)))
+                    self.cancel()
                 except Exception as exc:  # noqa: BLE001 - surface failure in report
                     self._reports.append((device, str(exc) or repr(exc)))
                     self.cancel()
@@ -140,16 +185,35 @@ class ExportWorker(QThread):
                 self.progress.emit(self._base_done, total, "")
         except Exception as exc:  # never let the thread take down the app
             self._reports.append(("(worker)", repr(exc)))
+        with self._lock:
+            cancelled_targets = tuple(self._cancelled_targets)
+        for device in cancelled_targets:
+            if not any(dev == device and getattr(report, 'cancelled', False)
+                       for dev, report in self._reports):
+                self._reports.append((device, SyncReport(dry_run=False, cancelled=True)))
         # Scrub AppleDouble clutter ONCE per device touched (not per playlist) — but
         # only in the folders actually written this batch (fast on a full device).
         dev_dirs: dict[str, set] = {}
+        dev_identities: dict[str, set[tuple[int, int]]] = {}
+        unproven: set[str] = set()
         for dev, rep in self._reports:
+            identity = getattr(rep, 'mount_identity', None)
+            if (isinstance(identity, tuple) and len(identity) == 2
+                    and all(type(value) is int for value in identity)):
+                dev_identities.setdefault(dev, set()).add(identity)
+            else:
+                unproven.add(dev)
             wd = getattr(rep, "written_dirs", None)
             if wd:
                 dev_dirs.setdefault(dev, set()).update(wd)
-        for dev in (() if self._stop else dict.fromkeys(d for d, _ in self._reports)):
+        for dev in (() if self._should_cancel() else dict.fromkeys(d for d, _ in self._reports)):
+            identities = dev_identities.get(dev, set())
+            directories = dev_dirs.get(dev)
+            if dev in unproven or len(identities) != 1 or not directories:
+                continue
             try:
-                engine.clean_device(dev, dev_dirs.get(dev))
+                engine.clean_device(dev, directories,
+                                    expected_mount_identity=next(iter(identities)))
             except Exception:  # noqa: BLE001
                 pass
         if self.rockbox_media_cache is not None:
@@ -170,43 +234,77 @@ class ResyncWorker(QThread):
     phase_progress = Signal(str, object, object, str)
 
     def __init__(self, lib, device, overrides=None, titles=None, art_cache=None,
-                 rockbox_media_cache=None, rockbox_art_cache=None, extra=None):
+                 rockbox_media_cache=None, rockbox_art_cache=None, extra=None,*,snapshot=None,
+                 validate_inputs=None,validate_artwork=None,expected_manifest_payload=None,expected_manifest_absent=False):
         super().__init__()
-        self._snapshot = capture_export(lib, extra=extra or (), titles=titles,
-                                        artists=overrides, complete=True)
+        if snapshot is not None and not isinstance(snapshot,ExportSnapshot):
+            raise ValueError('iPod Sync needs an immutable export snapshot')
+        self._snapshot = snapshot if snapshot is not None else capture_export(lib, extra=extra or (), titles=titles,
+                                                                             artists=overrides, complete=True)
+        self._validate_inputs=validate_inputs
+        self._validate_artwork=validate_artwork
+        self._expected_manifest_payload=expected_manifest_payload
+        self._expected_manifest_absent=expected_manifest_absent
         self.device = device
         self.art_cache = art_cache
         self.rockbox_media_cache = rockbox_media_cache
         self.rockbox_art_cache = rockbox_art_cache
         self._stop = False
+        self.cancellation = threading.Event()
         self.result = None
 
     def cancel(self):
         self._stop = True
+        self.cancellation.set()
+
+    @property
+    def cancellation(self):
+        return self._cancellation
+
+    @cancellation.setter
+    def cancellation(self, event):
+        self._cancellation = event
+        if self._stop:
+            event.set()
+
+    def _should_cancel(self):
+        return self._stop or self.cancellation.is_set()
 
     def run(self):
-        with operation_scope(None, self.phase_progress.emit):
+        with operation_scope(self.cancellation, self.phase_progress.emit):
             self._run_export()
 
     def _run_export(self):
         def cb(d, t, label):
             self.progress.emit(d, t, label)
         try:
+            checkpoint()
             inputs = self._snapshot.materialize()
+            options={}
+            if inputs.display_rows is not None:options['display_rows']=inputs.display_rows
+            if self._validate_inputs is not None:
+                self._validate_inputs()
+                options['validate_inputs']=self._validate_inputs
+            if self._validate_artwork is not None:options['validate_artwork']=self._validate_artwork
+            if self._expected_manifest_payload is not None:options['expected_manifest_payload']=self._expected_manifest_payload
+            if self._expected_manifest_absent:options['expected_manifest_absent']=True
             command = getattr(self, "device_command", None)
             if command is not None and command.target.mount_token:
                 if Path(self.device).stat().st_dev != command.target.mount_token:
                     raise RuntimeError("Sync target was remounted; confirmation expired")
             rep = engine.resync_device(
                 inputs.library, self.device, on_progress=cb,
-                should_cancel=lambda: self._stop,
+                should_cancel=self._should_cancel,
                 artist_overrides=inputs.artists, title_overrides=inputs.titles,
                 art_cache=self.art_cache,
                 rockbox_media_cache=self.rockbox_media_cache,
                 rockbox_art_cache=self.rockbox_art_cache,
-                extra=list(inputs.extra))
+                extra=list(inputs.extra),**options)
             self.result = rep
             self.done.emit(self.device, rep)
+        except OperationCancelled:
+            self.result = SyncReport(dry_run=False, cancelled=True)
+            self.done.emit(self.device, self.result)
         except Exception as exc:  # noqa: BLE001 - surface, never crash the app
             self.result = str(exc) or repr(exc)
             self.done.emit(self.device, self.result)
@@ -226,6 +324,7 @@ class RefreshWorker(QThread):
     def __init__(self, database_path=None):
         super().__init__()
         self.database_path = database_path
+        self.native_reader = None
         self.preflight = None
         self.selection_path = None
         self.retained_tracks = {}
@@ -238,7 +337,9 @@ class RefreshWorker(QThread):
         try:
             if self.preflight is not None:
                 self.preflight(self.database_path or rekordbox_db.REKORDBOX_DB)
-            lib = (rekordbox_db.load_live(self.database_path,retain_tracks=self.retained_tracks)
+            lib = (self.native_reader.read_live(self.database_path, retain_tracks=self.retained_tracks)
+                   if self.native_reader is not None else
+                   rekordbox_db.load_live(self.database_path,retain_tracks=self.retained_tracks)
                    if self.retained_tracks else rekordbox_db.load_live(self.database_path))
             if self.metadata_baseline is not None:
                 scope, previous = self.metadata_baseline
@@ -279,7 +380,7 @@ class DeviceScanWorker(QThread):
                  title_overrides=None, stock_shadow_store=None,
                  stock_models=None, known_paths=None,
                  known_mount_tokens=None, usb_views=None, usb_requests=None,
-                 defer_playlists=False):
+                 defer_playlists=False, stock_catalog_witnesses=None, stock_catalog_store=None):
         super().__init__()
         self.lib = lib
         self.extra = extra or []  # custom SoundBox playlists (not in lib.playlists)
@@ -304,9 +405,18 @@ class DeviceScanWorker(QThread):
         self._defer_playlists = defer_playlists
         self._playlists_ready = threading.Event()
         self._playlist_capture_error = None
+        self.drift_captures = {}
+        self._drift_capture_errors = set()
+        self.display_rows = None
+        self.stock_catalog_witnesses = dict(stock_catalog_witnesses or {})
+        self.stock_catalog_store = stock_catalog_store
+        self.stock_status = {}
+        self.captured_source_scope = ((str(lib.source),lib.source_kind,lib.source_library_id)
+                                      if lib is not None and hasattr(lib,'source') else None)
 
     def provide_playlists(self, extra, *, lib, artist_overrides,
-                          title_overrides, error=None, stock_shadow_store=None):
+                          title_overrides, error=None, stock_shadow_store=None,display_rows=None,
+                          stock_catalog_witnesses=None,stock_catalog_store=None):
         """Publish one GUI-captured snapshot before the worker reads drift."""
         if not self.cancellation.is_set():
             self.extra = list(extra or ())
@@ -314,6 +424,12 @@ class DeviceScanWorker(QThread):
             self.artist_overrides = dict(artist_overrides or {})
             self.title_overrides = dict(title_overrides or {})
             self.stock_shadow_store = stock_shadow_store
+            self.stock_catalog_witnesses = dict(stock_catalog_witnesses or {})
+            self.stock_catalog_store = stock_catalog_store
+            self.captured_source_scope = ((str(lib.source),lib.source_kind,lib.source_library_id)
+                                         if lib is not None and hasattr(lib,'source') else None)
+            self.display_rows = ({key:dict(row) for key,row in display_rows.items()}
+                                 if display_rows is not None else None)
             self._playlist_capture_error = error
         self._playlists_ready.set()
 
@@ -330,7 +446,7 @@ class DeviceScanWorker(QThread):
         return not (self.cancellation.is_set() or self.isInterruptionRequested())
 
     def _effective_profile(self, path: str, profile):
-        """Apply a remembered stock model off the UI thread."""
+        """Enrich the display label; remembered models grant no format capability."""
         if not getattr(profile, "has_stock_ipod", False):
             return profile
         from soundbox.stock_ipod import normalize_model_number, supports_stock_write
@@ -347,7 +463,7 @@ class DeviceScanWorker(QThread):
         model = normalize_model_number(self.stock_models.get(identity_key, ""))
         if not supports_stock_write(model):
             return profile
-        return replace(profile, model=model, stock_write=True)
+        return replace(profile, model=model)
 
     def run(self):
         started = time.monotonic()
@@ -393,6 +509,17 @@ class DeviceScanWorker(QThread):
         # CDJ USBs are destinations for explicit playlist exports. Connection
         # never compares the source library against their existing contents.
         needs_playlists = any(profile.kind != 'generic_usb' for _, _, _, profile in raw_profiles)
+        if needs_playlists and self._defer_playlists:
+            for _name,path,_free,profile in raw_profiles:
+                if profile.kind=='generic_usb':continue
+                if self.cancellation.is_set() or self.isInterruptionRequested():
+                    self.results=None;return
+                try:
+                    with operation_scope(self.cancellation):
+                        self.drift_captures[path]=engine.capture_device_drift_manifest(path)
+                except OperationCancelled:
+                    self.results=None;return
+                except Exception:self._drift_capture_errors.add(path)
         if needs_playlists and self._defer_playlists and not self._capture_playlists():
             self.results = None
             return
@@ -408,13 +535,18 @@ class DeviceScanWorker(QThread):
             # not delay the first status check by another full read/pass.
             if profile.kind != 'generic_usb' and self.lib is not None and self._playlist_capture_error is None:
                 try:
-                    dr = engine.device_drift(
+                    if path in self._drift_capture_errors:
+                        raise ValueError('The iPod ownership manifest could not be read')
+                    captured=self.drift_captures.get(path)
+                    dr = (None if path in self.drift_captures and captured is None else engine.device_drift(
                         self.lib,
                         path,
                         self.extra,
                         artist_overrides=self.artist_overrides,
                         title_overrides=self.title_overrides,
-                    )
+                        display_rows=self.display_rows,
+                        captured_manifest=captured,
+                    ))
                     drift = dr.count() if dr else 0
                 except Exception:  # noqa: BLE001 - a bad manifest never breaks the poll
                     drift = None
@@ -426,7 +558,6 @@ class DeviceScanWorker(QThread):
                     try:
                         from soundbox.stock_ipod import (
                             inspect_stock_ipod_sync_status, normalize_model_number,
-                            supports_stock_write,
                         )
                         from soundbox.stock_ipod_info import stock_ipod_device_key
 
@@ -438,18 +569,30 @@ class DeviceScanWorker(QThread):
                         model = normalize_model_number(
                             profile.model
                             or self.stock_models.get(identity_key, ""))
-                        if supports_stock_write(model):
-                            status = inspect_stock_ipod_sync_status(
-                                self.lib,
-                                path,
-                                identity_key=identity_key,
-                                model_number=model,
-                                serial_number=facts.hardware_serial,
-                                shadow_store=self.stock_shadow_store,
-                                extra_playlists=tuple(self.extra),
-                            )
-                            if status.state not in {"up_to_date", "untracked"}:
-                                drift = max(1, status.local_changes)
+                        # This is a read-only comparison, not writer admission.
+                        # A legacy Video model allowlist must not hide Classic
+                        # changes or grant capabilities to an unknown format.
+                        witness = self.stock_catalog_witnesses.get(path)
+                        if witness is None and self.stock_catalog_store is not None:
+                            witness = self.stock_catalog_store.load(identity_key)
+                            if witness is not None:
+                                self.stock_catalog_witnesses[path] = witness
+                        status = inspect_stock_ipod_sync_status(
+                            self.lib,
+                            path,
+                            identity_key=identity_key,
+                            model_number=model,
+                            serial_number=facts.hardware_serial,
+                            shadow_store=self.stock_shadow_store,
+                            extra_playlists=tuple(self.extra),
+                            catalog_witness=witness,
+                            display_rows=self.display_rows,
+                        )
+                        self.stock_status[path] = status
+                        if status.state == 'comparison_pending':
+                            drift = None
+                        elif status.state not in {"up_to_date", "untracked"}:
+                            drift = max(1, status.local_changes)
                     except Exception:  # noqa: BLE001 - keep polling read-only
                         drift = None
             if not getattr(profile, 'has_stock_ipod', False):
@@ -663,7 +806,7 @@ class ArtFillWorker(QThread):
 
 
 class StockArtworkPrepWorker(QThread):
-    """Pre-render disposable MA446 artwork derivatives off the UI thread.
+    """Pre-render attached devices' disposable artwork off the UI thread.
 
     The curated JPEG cache remains canonical. Identical JPEG bytes converge on
     one content-addressed RGB565 entry, so this pass is resumable and cheap on
@@ -677,11 +820,14 @@ class StockArtworkPrepWorker(QThread):
         art_cache,
         stock_cache: StockArtworkCache,
         images: tuple[Path, ...] | None = None,
+        *, additional_caches: tuple[StockArtworkCache, ...] = (), profiles: tuple[str, ...] = (),
     ):
         super().__init__()
         self.lib = lib
         self.art_cache = art_cache
         self.stock_cache = stock_cache
+        self.stock_caches = (stock_cache, *additional_caches)
+        self.profiles = profiles
         self.images = images
         self._stop = False
         self._playback_active = threading.Event()
@@ -700,6 +846,10 @@ class StockArtworkPrepWorker(QThread):
             time.sleep(0.05)
 
     def run(self):
+        # Alternate profile construction loads disposable JSON indexes; keep
+        # that work on this worker, rather than the device-selection thread.
+        caches = (tuple(self.stock_cache.for_profile(profile) for profile in self.profiles)
+                  if self.profiles else self.stock_caches)
         if self.images is not None:
             images = list(dict.fromkeys(self.images))
         else:
@@ -720,38 +870,39 @@ class StockArtworkPrepWorker(QThread):
                     seen_paths.add(canonical)
                     images.append(canonical)
 
-        total = len(images)
+        total = len(images) * len(caches)
         LOG.info("Stock artwork preparation: %d curated image(s)", total)
         prepared = failed = reused = 0
-        for index, image in enumerate(images, 1):
+        from itertools import product
+        for index, (cache, image) in enumerate(product(caches, images), 1):
             if self._stop:
                 break
             try:
-                if self.stock_cache.is_prepared(image):
+                if cache.is_prepared(image):
                     reused += 1
                     continue
                 self._wait_for_playback()
                 if self._stop:
                     break
-                before = self.stock_cache.preparation_signature(image)
+                before = cache.preparation_signature(image)
                 # The low-priority whole-library pass validates manifests and
                 # exact payload sizes. A stock sync rehashes/rebuilds the small
                 # selected set before it can enter a device plan.
-                self.stock_cache.prepare(
+                cache.prepare(
                     image, verify_cache=False, save_index=False)
-                self.stock_cache.remember_prepared(image, before)
+                cache.remember_prepared(image, before)
                 prepared += 1
             except Exception as exc:  # noqa: BLE001 — one bad JPEG cannot end the pass
                 failed += 1
                 if failed <= 3:
                     LOG.warning("Stock artwork preparation failed for %s: %s", image, exc)
             self.progress.emit(index, total)
-        try:
-            # One atomic index publication per batch keeps a full-library warm
-            # pass O(n), instead of rewriting a growing JSON file for every song.
-            self.stock_cache.flush_source_index()
-        except Exception as exc:  # noqa: BLE001 — derivatives remain disposable
-            LOG.warning("Stock artwork source index could not be saved: %s", exc)
+        for cache in caches:
+            try:
+                # One publication per profile, independent of song count.
+                cache.flush_source_index()
+            except Exception as exc:  # noqa: BLE001 — derivatives remain disposable
+                LOG.warning("Stock artwork source index could not be saved: %s", exc)
         LOG.info(
             "Stock artwork preparation ended: %d checked/prepared, %d reused, %d failed",
             prepared, reused, failed,

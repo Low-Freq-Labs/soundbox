@@ -1,7 +1,8 @@
 # MP3 shared-analysis follow-up
 
-Started November 2, 2026 at Sonny's request. **The accepted CBR profile remains
-installed and enabled in accepted personal build169.** Responsiveness build167/
+Started November 2, 2026 at Sonny's request. **The independently accepted CBR
+profile remains supported; current installed identity and exact-library authority
+status are recorded in [HANDOFF](HANDOFF.md).** Personal build169, responsiveness build167/
 runtime `3fb0ff60…`, whole-app build165/runtime `7ffde716…`, build163,
 source release `4a3d29a` and build160 are prior delivery evidence. The cleanup
 changes no MP3 authority.

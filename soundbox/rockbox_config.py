@@ -53,7 +53,9 @@ def _bounded_read(path: Path) -> bytes:
     return payload
 
 
-def theme_album_art_sides(root: str | Path) -> tuple[int, ...]:
+def theme_album_art_sides(
+        root: str | Path, *, session: DeviceSession | None = None,
+) -> tuple[int, ...]:
     """Read exact square album-art sizes requested by the active WPS/SBS.
 
     Theme files are firmware configuration, not SoundBox state. Reads are
@@ -64,7 +66,12 @@ def theme_album_art_sides(root: str | Path) -> tuple[int, ...]:
     rockbox = target / ".rockbox"
     config = target / CONFIG_RELATIVE
     try:
-        session = _device_session(target)
+        if session is None:
+            session = _device_session(target)
+        else:
+            session.revalidate()
+            if target.expanduser().resolve(strict=True) != session.target:
+                raise RuntimeError("Rockbox theme target differs from the captured device")
         session.guard(rockbox)
         session.guard(config)
         values = _setting_values(_bounded_read(config))

@@ -164,7 +164,15 @@ def _cmd_sync(args: argparse.Namespace) -> int:
 
     # Post-sync: scrub macOS AppleDouble (._*) clutter from our folders only.
     if not dry and args.clean:
-        removed = sync_mod.clean_applefiles(target)
+        if report.mount_identity is None:
+            print('Export has no captured device identity for cleanup')
+            return 2
+        try:
+            removed = sync_mod.clean_applefiles(
+                target, expected_mount_identity=report.mount_identity)
+        except RuntimeError as exc:
+            print(f"\n{exc}")
+            return 2
         print(f"\nCleaned {removed} macOS AppleDouble (._*) file(s) from Music/ and Playlists/.")
 
     if dry:

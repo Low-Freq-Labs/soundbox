@@ -25,6 +25,7 @@ QStandardPaths.setTestModeEnabled(True)
 
 from soundbox import engine, manifest as device_manifest, rekordbox_db
 from soundbox.library import Library, Playlist, Track
+from soundbox.device_operations import DeviceSessionIdentity
 from desktop.native_deck import PlaybackState
 
 _app = _win = None
@@ -824,19 +825,24 @@ class DeviceLabels(unittest.TestCase):
             if previous is not None:
                 previous.setChecked(True)
 
-    def test_drift_beats_free_space(self):
+    def test_drift_keeps_capacity_label_and_uses_tooltip(self):
         s = _win._device_label("IPOD", 5_000_000_000, 2)
-        self.assertIn("⚠ Sync needed", s)
+        self.assertEqual(s, 'IPOD · USB · 5.0 GB')
+        self.assertIn('⚠ Sync needed', _win._device_tip('/Volumes/X', 1_000_000_000, drift=2))
         self.assertNotIn("2 changes", s)
 
     def test_non_fat_warning(self):
         s = _win._device_label("IPOD", 5_000_000_000, 0, "exfat")
-        self.assertIn("not FAT32", s)
-        self.assertIn("EXFAT", s)
+        self.assertEqual(s, 'IPOD · USB · 5.0 GB')
+        with mock.patch('desktop.app.device_fs', return_value='exfat'):
+            tip = _win._device_tip('/Volumes/X', 1_000_000_000)
+        self.assertIn('requires FAT32', tip)
+        self.assertIn('exfat', tip)
 
-    def test_fat_shows_free(self):
+    def test_fat_shows_capacity_without_free_label(self):
         s = _win._device_label("IPOD", 5_000_000_000, 0, "msdos")
-        self.assertIn("5.0 GB free", s)
+        self.assertEqual(s, 'IPOD · USB · 5.0 GB')
+        self.assertNotIn('free', s)
 
     def test_tooltip_warns_non_fat(self):
         tip = _win._device_tip("/Volumes/X", 1_000_000_000)
@@ -844,10 +850,10 @@ class DeviceLabels(unittest.TestCase):
 
     def test_dual_boot_label_is_explicit(self):
         from types import SimpleNamespace
-        profile = SimpleNamespace(label="Dual Boot iPod")
+        profile = SimpleNamespace(kind='dual_boot', label="iTunes/Rockbox")
         label = _win._device_label(
             "IPOD", 5_000_000_000, 0, "msdos", profile)
-        self.assertIn("IPOD · Dual Boot iPod", label)
+        self.assertEqual(label, 'IPOD · iTunes/Rockbox iPod · 5.0 GB')
 
     def test_rockbox_membership_persists_custom_playlist_and_refreshes(self):
         from types import SimpleNamespace
@@ -1200,6 +1206,25 @@ class StockIpodUI(unittest.TestCase):
         finally:
             pages.close()
 
+            # Rendering dispatches the shared fixture's accepted preference
+            # timer. Its real ACK must retire before the next idle-status test.
+            from time import monotonic
+            from PySide6.QtTest import QTest
+            self.assertTrue(_win._flush_settings_preferences())
+            def pending_preferences():
+                committer = _win._state_committer
+                return (bool(committer and committer.pending)
+                        or _win._state_publication
+                        or _win.tag_controller.state_commit_owned
+                        or bool(_win._settings_dirty_keys)
+                        or _win._settings_save_timer.isActive()
+                        or bool(_win._prep_update_message))
+            deadline = monotonic() + 5
+            while pending_preferences() and monotonic() < deadline:
+                QTest.qWait(5)
+            self.assertFalse(pending_preferences(),
+                             'USB view preferences did not finish their durable acknowledgement')
+
     def test_stock_view_memory_retains_nested_selection_and_distinct_detail_panels(self):
         from types import SimpleNamespace
         from PySide6.QtWidgets import QTreeWidgetItem
@@ -1216,7 +1241,7 @@ class StockIpodUI(unittest.TestCase):
             _device_profiles={'/not-live':SimpleNamespace(has_stock_ipod=True)},
             _stock_snapshot=SimpleNamespace(target=Path('/not-live'),identity_key='fixture'),
             stock_ipod_pages=pages,settings={},_shutting_down=False,
-            _schedule_settings_save=lambda:None,_set_stock_device_tab=pages.set_page)
+            _schedule_settings_save=lambda *_keys:None,_set_stock_device_tab=pages.set_page)
         try:
             CdjDeviceMixin._remember_stock_device_view(host)
             host.settings = json.loads(json.dumps(host.settings))
@@ -1317,17 +1342,23 @@ class StockIpodUI(unittest.TestCase):
                 button.hide()
 
     def test_device_header_export_opens_selector_for_current_device(self):
+        from types import SimpleNamespace
         old_sync = _win._show_export_dialog
         old_current = _win._current_device_path
+        old_profiles = _win._device_profiles
         calls = []
         try:
             _win._current_device_path = "/Volumes/IPOD"
+            _win._device_profiles = {"/Volumes/IPOD":SimpleNamespace(kind='generic_usb')}
             _win._show_export_dialog = calls.append
+            _win._update_device_action_state()
             self.assertEqual(_win.device_sync_btn.text(),'Export')
             _win.device_sync_btn.click()
         finally:
             _win._show_export_dialog = old_sync
             _win._current_device_path = old_current
+            _win._device_profiles = old_profiles
+            _win._update_device_action_state()
         self.assertEqual(calls, ["/Volumes/IPOD"])
         try:
             _win._start_pulse("Syncing iPod")
@@ -1374,12 +1405,12 @@ class StockIpodUI(unittest.TestCase):
             _win._set_status_text("Ready")
 
     def test_file_phases_do_not_replace_or_resize_overall_sync_status(self):
-        from threading import Event
-        from types import SimpleNamespace
-        from soundbox.device_operations import Phase
+        from soundbox.device_operations import DeviceCommand, DeviceOperationState, Phase
 
         worker = object()
-        active = SimpleNamespace(worker=worker, cancellation=Event(), phase=Phase.EXECUTING)
+        active = DeviceOperationState(
+            DeviceCommand(DeviceSessionIdentity('/fixture/iPod', 1), 'commit-dual'),
+            Phase.EXECUTING, worker)
         try:
             _win._on_dual_ipod_progress(9, 37, "track.wav")
             _win._pulse_tick()
@@ -1571,6 +1602,8 @@ class StockIpodUI(unittest.TestCase):
         from types import SimpleNamespace
 
         dev = "/Volumes/IPOD"
+        self.enterContext(mock.patch.dict(_win._device_coordinator.mounts,
+            {dev: DeviceSessionIdentity(dev, 1)}))
         old_current = _win._current_device_path
         old_profile = _win._device_profiles.get(dev)
         old_reader = _win._read_stock_device_view
@@ -1663,6 +1696,8 @@ class StockIpodUI(unittest.TestCase):
             _win._exporting = old_exporting
 
     def test_finalization_suppresses_poll_through_success_dialog(self):
+        self.enterContext(mock.patch.dict(_win._device_coordinator.mounts,
+            {'/Volumes/IPOD': DeviceSessionIdentity('/Volumes/IPOD', 1)}))
         old_refresh = _win._refresh_device_surfaces
         old_exporting = _win._exporting
         old_ready = _win._eject_ready_device
@@ -1691,6 +1726,8 @@ class StockIpodUI(unittest.TestCase):
             _win._eject_ready_device = old_ready
 
     def test_failed_final_refresh_never_runs_success_callback(self):
+        self.enterContext(mock.patch.dict(_win._device_coordinator.mounts,
+            {'/Volumes/IPOD': DeviceSessionIdentity('/Volumes/IPOD', 1)}))
         old_refresh = _win._refresh_device_surfaces
         old_exporting = _win._exporting
         old_ready = _win._eject_ready_device
@@ -1719,6 +1756,8 @@ class StockIpodUI(unittest.TestCase):
             _win._device_finalization_error = None
 
     def test_multi_device_export_finalizes_every_target_before_done(self):
+        self.enterContext(mock.patch.dict(_win._device_coordinator.mounts,
+            {dev: DeviceSessionIdentity(dev, 1) for dev in ('/Volumes/A', '/Volumes/B')}))
         old_refresh = _win._refresh_device_surfaces
         old_exporting = _win._exporting
         old_ready = _win._eject_ready_device
@@ -1748,7 +1787,7 @@ class StockIpodUI(unittest.TestCase):
             _win._eject_ready_device = old_ready
             _win._device_finalization_error = None
 
-    def test_clean_stock_sync_finalizes_before_up_to_date_dialog(self):
+    def test_clean_stock_sync_finalizes_before_quiet_up_to_date_status(self):
         class CleanPlan:
             requires_commit = False
 
@@ -1770,13 +1809,15 @@ class StockIpodUI(unittest.TestCase):
                 information.assert_not_called()
                 self.assertEqual([device for device, _cb in callbacks], [dev])
                 callbacks[0][1]()
-                information.assert_called_once()
+                information.assert_not_called()
+                self.assertEqual(_win._last_device_completion['title'],'iTunes is up to date')
+                self.assertIn('up to date',_win.status_label.text())
         finally:
             _win._finalize_ipod_operation = old_finalize
             _win._stop_pulse()
             _win.status_label.setText("Ready")
 
-    def test_clean_composite_sync_finalizes_before_up_to_date_dialog(self):
+    def test_clean_composite_sync_finalizes_before_quiet_up_to_date_status(self):
         class CleanPlan:
             requires_commit = False
 
@@ -1814,7 +1855,9 @@ class StockIpodUI(unittest.TestCase):
                 information.assert_not_called()
                 self.assertEqual([device for device, _cb in callbacks], [dev])
                 callbacks[0][1]()
-                information.assert_called_once()
+                information.assert_not_called()
+                self.assertEqual(_win._last_device_completion['title'],'iPod is up to date')
+                self.assertIn('up to date',_win.status_label.text())
         finally:
             _win._finalize_ipod_operation = old_finalize
             _win.rockbox_media_cache.clear = old_clear
@@ -1999,6 +2042,10 @@ class StockIpodUI(unittest.TestCase):
         worker.deleteLater()
 
     def test_idle_eject_ignores_known_missing_media_without_verification(self):
+        self.enterContext(mock.patch.dict(_win._device_coordinator.mounts,
+            {'/Volumes/IPOD': DeviceSessionIdentity('/Volumes/IPOD', 1)}))
+        self.enterContext(mock.patch.object(_win, '_eject_owner', None))
+        self.enterContext(mock.patch.object(_win, '_eject_session', None))
         old_exporting = _win._exporting
         old_pending = _win._device_coordinator.eject_pending
         try:
@@ -2012,6 +2059,10 @@ class StockIpodUI(unittest.TestCase):
             _win._stop_pulse(force=True)
 
     def test_eject_queues_behind_read_only_poll_without_busy_modal(self):
+        self.enterContext(mock.patch.dict(_win._device_coordinator.mounts,
+            {'/Volumes/IPOD': DeviceSessionIdentity('/Volumes/IPOD', 1)}))
+        self.enterContext(mock.patch.object(_win, '_eject_owner', None))
+        self.enterContext(mock.patch.object(_win, '_eject_session', None))
         class FakeSignal:
             def __init__(self):
                 self.slots = []
@@ -2042,7 +2093,8 @@ class StockIpodUI(unittest.TestCase):
             self.assertIsNone(_win._eject_verify_worker)
             self.assertTrue(_win._exporting)
             self.assertEqual(_win._pulse_word, "Waiting to eject")
-            self.assertEqual(len(scan.finished.slots), 1)
+            self.assertEqual(len(scan._eject_resume_callbacks), 1)
+            self.assertEqual(scan.finished.slots, [])
         finally:
             _win._stop_pulse(force=True)
             _win._dev_scan_worker = old_scan
@@ -2053,6 +2105,8 @@ class StockIpodUI(unittest.TestCase):
             _win._update_device_action_state()
 
     def test_eject_still_refuses_live_composite_writer(self):
+        self.enterContext(mock.patch.dict(_win._device_coordinator.mounts,
+            {'/Volumes/IPOD': DeviceSessionIdentity('/Volumes/IPOD', 1)}))
         class FakeWriter:
             def isRunning(self):
                 return True
@@ -2176,26 +2230,46 @@ class StockIpodUI(unittest.TestCase):
                 _win._stock_view_cache[dev] = old_cache
 
     def test_background_dashboard_result_is_cached_before_click(self):
+        from soundbox.stock_ipod_info import (
+            StockIpodPlaylistEntry, StockIpodPlaylistSnapshot,
+            StockIpodSnapshot, StockIpodTrackSnapshot,
+        )
+
         dev = "/Volumes/PRELOAD-CACHE"
         old_current = _win._current_device_path
         old_cache = _win._stock_view_cache.get(dev)
         old_warming = set(_win._stock_view_warming)
 
-        class Snapshot:
-            identity_key = ""
-            tracks = (1, 2)
-            playlists = (1,)
-
-        snapshot = Snapshot()
+        tracks = tuple(StockIpodTrackSnapshot(
+            track_id=i, dbid=i, title=f"Generated song {i}", artist="Generated artist",
+            album="", genre="", filetype="WAV", size=100, length_ms=1000,
+            bitrate_kbps=1411, sample_rate=44100, play_count=0, skip_count=0,
+            rating=0, last_played=0, last_skipped=0,
+            location=f":iPod_Control:Music:F00:{i}.wav", pending_plays=0,
+            pending_skips=0) for i in (1, 2))
+        playlist = StockIpodPlaylistSnapshot(1, "Generated set", "Playlist", False,
+            tuple(StockIpodPlaylistEntry(track.dbid, track.title, track.artist)
+                  for track in tracks))
+        snapshot = StockIpodSnapshot(
+            target=Path(dev), volume_name="PRELOAD-CACHE", volume_uuid="",
+            filesystem="FAT32", protocol="USB", device_identifier="generated-disk",
+            writable=True, capacity_bytes=1000, free_bytes=800, model="",
+            model_source="", family="iPod", generation="Unknown generation",
+            identity_key="", database_id=1, library_persistent_id=0,
+            database_version=0x19, checksum_scheme=0, database_sha256="generated",
+            media_bytes=200, pending_playback_records=0,
+            playback_status="No pending playback records", recovery_count=0,
+            tracks=tracks, playlists=(playlist,))
         try:
             _win._current_device_path = ""
             _win._stock_view_warming.add(dev)
             _win._start_ipod_loading_status()
-            with mock.patch("soundbox.stock_ipod_info.StockIpodSnapshot", Snapshot), \
-                    mock.patch.object(_win, "_refresh_devices") as scan:
+            with mock.patch.object(_win, "_refresh_devices") as scan:
                 _win._on_stock_device_view(dev, (snapshot, None))
                 scan.assert_not_called()
             self.assertEqual(_win._stock_view_cache[dev], (snapshot, None))
+            self.assertEqual(len(_win._stock_view_cache[dev][0].tracks), 2)
+            self.assertEqual(len(_win._stock_view_cache[dev][0].playlists), 1)
             self.assertNotIn(dev, _win._stock_view_warming)
             self.assertEqual(_win.status_label.text(), "Ready")
         finally:
@@ -2257,7 +2331,9 @@ class StockIpodUI(unittest.TestCase):
 
     def test_ipod_row_is_available_while_dashboard_loads(self):
         from types import SimpleNamespace
+        from desktop.devices import DeviceFacts
         from desktop.trees import DEVPATH_ROLE
+        from soundbox.device_profile import DeviceProfile
 
         dev = "/Volumes/PUBLISH-AFTER-PRELOAD"
         old_worker = _win._dev_scan_worker
@@ -2268,8 +2344,9 @@ class StockIpodUI(unittest.TestCase):
         old_cache = dict(_win._stock_view_cache)
         old_current = _win._current_device_path
         old_status = _win.status_label.text()
-        profile = SimpleNamespace(
-            has_stock_ipod=True, kind="dual_boot", label="Dual iPod")
+        profile = DeviceProfile(kind="dual_boot", label="iTunes/Rockbox",
+            filesystem="fat32", has_rockbox=True, has_stock_ipod=True,
+            rockbox_export=True, stock_preview=True, stock_write=True)
         rows = [("PUBLISH-AFTER-PRELOAD", dev, 1000, 3, profile)]
         _win.device_tree.clear()
         try:
@@ -2279,7 +2356,8 @@ class StockIpodUI(unittest.TestCase):
             _win._start_ipod_loading_status()
             with (
                 mock.patch("desktop.app.device_fs", return_value="fat32"),
-                mock.patch.object(_win, "_device_tip", return_value="ready"),
+                mock.patch("desktop.app.device_facts", return_value=DeviceFacts(
+                    capacity_bytes=256_000_000_000)),
             ):
                 _win._on_devices_scanned(rows)
                 self.assertEqual(_win.device_tree.topLevelItemCount(), 1)
@@ -2293,7 +2371,11 @@ class StockIpodUI(unittest.TestCase):
             self.assertEqual(_win.device_tree.topLevelItemCount(), 1)
             item = _win.device_tree.topLevelItem(0)
             self.assertEqual(item.data(0, DEVPATH_ROLE), dev)
-            self.assertIn("Sync needed", item.text(0))
+            self.assertEqual(item.text(0),
+                             "PUBLISH-AFTER-PRELOAD · iTunes/Rockbox iPod · 256.0 GB")
+            self.assertIn("Sync needed", item.toolTip(0))
+            self.assertIn("Capacity: 256.0 GB", item.toolTip(0))
+            self.assertIn("1.0 KB free", item.toolTip(0))
             self.assertNotIn(dev, _win._stock_view_warming)
             self.assertEqual(_win.status_label.text(), "Ready")
             self.assertIsNone(_win._pulse_word)
@@ -2541,6 +2623,7 @@ class StockIpodUI(unittest.TestCase):
             _win._stock_view_callbacks.update(old_callbacks)
 
     def test_stock_device_pages_render_snapshot(self):
+        from soundbox.stock_ipod_format import ARTWORK_PROFILE, DATABASE_PROFILE, StockWriteFormat
         from soundbox.stock_ipod_info import (
             StockIpodPlaylistEntry, StockIpodPlaylistSnapshot,
             StockIpodSnapshot, StockIpodTrackSnapshot,
@@ -2570,7 +2653,7 @@ class StockIpodUI(unittest.TestCase):
             Path("/Volumes/IPOD"), "IPOD", "UUID", "MS-DOS (FAT32)",
             "USB", "disk4s2", True, 256_000_000_000, 255_000_000_000,
             "MA446", "serial suffix V9M", "iPod Video",
-            "5.5th generation", "identity", 4, 5, 0x75, 0, "abc", 14_515_286,
+            "5.5th generation", "identity", 4, 5, 0x19, 0, "abc", 14_515_286,
             0, "No pending playback records", 2, (track,),
             (library_root, playlist, second_playlist, smart_playlist,
              apple_regular_alias, apple_smart_playlist),
@@ -2585,6 +2668,8 @@ class StockIpodUI(unittest.TestCase):
             sync_detail="1 curated cover changed",
             sync_local_changes=1,
             sync_committed_at="2026-08-01T03:55:00-05:00",
+            stock_format=StockWriteFormat(DATABASE_PROFILE,ARTWORK_PROFILE,database_version=0x19),
+            usb_family='iPod Video',
         )
         _win.stock_ipod_pages.set_snapshot(snapshot)
         pages = _win.stock_ipod_pages
@@ -2624,7 +2709,7 @@ class StockIpodUI(unittest.TestCase):
             for index in range(pages.detail_trees["Identity"].topLevelItemCount())
         }
         self.assertEqual(identity["Model"], "MA446")
-        self.assertEqual(identity["Stock firmware"], "1.3")
+        self.assertEqual(identity["iPod firmware"], "1.3")
         self.assertEqual(identity["DAC / codec"], "Wolfson WM8758BG")
         self.assertEqual(identity["Serial number"], "8M650V0HV9M")
         self.assertNotIn("serial suffix", " ".join(identity.values()).casefold())
@@ -2640,7 +2725,7 @@ class StockIpodUI(unittest.TestCase):
         self.assertEqual(soundbox["Sync detail"], "1 curated cover changed")
         self.assertEqual(soundbox["Pending local changes"], "1")
         self.assertEqual(
-            soundbox["Last committed"], "2026-08-01T03:55:00-05:00")
+            soundbox["Last Sync"], "2026-08-01T03:55:00-05:00")
         pages.set_page(2)
         playlist_count = pages.playlist_tree.topLevelItemCount()
         identity_count = pages.detail_trees["Identity"].topLevelItemCount()
@@ -2709,10 +2794,10 @@ class StockIpodUI(unittest.TestCase):
         }
         self.assertEqual(
             dual.detail_trees["Database"].headerItem().text(0),
-            "DUAL LIBRARY",
+            "ITUNES/ROCKBOX",
         )
         self.assertEqual(dual_database["Managed tracks"], "2")
-        self.assertEqual(dual_database["Stock-visible tracks"], "1")
+        self.assertEqual(dual_database["iTunes tracks"], "1")
         self.assertEqual(dual_database["Rockbox-only tracks"], "1")
         self.assertEqual(
             dual_database["Rockbox database"],
@@ -2724,11 +2809,11 @@ class StockIpodUI(unittest.TestCase):
             dual.music_model.index(row, 7).data()
             for row in range(dual.music_model.rowCount())
         }
-        self.assertEqual(dual_types, {"Both", "Rockbox"})
+        self.assertEqual(dual_types, {"iTunes/Rockbox", "Rockbox"})
         self.assertEqual(
             [dual.playlist_tree.topLevelItem(row).text(2)
              for row in range(dual.playlist_tree.topLevelItemCount())],
-            ["Both", "Rockbox", "Stock"],
+            ["iTunes/Rockbox", "Rockbox", "iTunes"],
         )
         self.assertEqual(
             dual.playlist_tree.topLevelItem(0).child(1).text(2), "Rockbox")
@@ -2786,7 +2871,9 @@ class StockIpodUI(unittest.TestCase):
         self.assertEqual(
             drifted.general_tree.topLevelItem(0).text(0), "Name")
         self.assertEqual(
-            drifted.playlist_tree.topLevelItem(0).text(2), "Sync needed")
+            drifted.playlist_tree.topLevelItem(0).text(2), "iTunes/Rockbox")
+        self.assertEqual(
+            drifted.playlist_tree.topLevelItem(0).toolTip(2), "Sync needed")
         self.assertEqual(
             drifted.playlist_tree.topLevelItem(0).childCount(), 0)
         dual_calls = []
@@ -2830,7 +2917,7 @@ class StockIpodUI(unittest.TestCase):
             "1. More Hype")
         self.assertEqual(pages.playlist_tree.topLevelItem(2).text(0), "Videos")
         self.assertEqual(
-            pages.playlist_tree.topLevelItem(2).text(2), "System playlist")
+            pages.playlist_tree.topLevelItem(2).text(2), "iTunes")
         standalone = StockIpodPages()
         calls = []
         standalone.delete_playlists_requested.connect(calls.append)
@@ -3178,6 +3265,8 @@ class StockIpodUI(unittest.TestCase):
         from PySide6.QtWidgets import QMessageBox
 
         dev = "/Volumes/IPOD"
+        self.enterContext(mock.patch.dict(_win._device_coordinator.mounts,
+            {dev: DeviceSessionIdentity(dev, 1)}))
         old_refresh = _win._refresh_device_surfaces
         old_clear = _win.rockbox_media_cache.clear
         old_action = _win._dual_active_action
@@ -3220,10 +3309,10 @@ class StockIpodUI(unittest.TestCase):
 
                 callbacks[0]()
 
-                information.assert_called_once()
+                information.assert_not_called()
                 self.assertIn(
                     "Eject is ready",
-                    information.call_args.args[2],
+                    _win._last_device_completion['text'],
                 )
                 self.assertFalse(_win._exporting)
         finally:
@@ -3289,6 +3378,8 @@ class StockIpodUI(unittest.TestCase):
         from PySide6.QtWidgets import QMessageBox
 
         dev = "/Volumes/IPOD"
+        self.enterContext(mock.patch.dict(_win._device_coordinator.mounts,
+            {dev: DeviceSessionIdentity(dev, 1)}))
         old_refresh = _win._refresh_device_surfaces
         old_flash = _win._flash_status
         refresh_calls = []
@@ -3323,8 +3414,8 @@ class StockIpodUI(unittest.TestCase):
             with mock.patch.object(QMessageBox, "information") as information:
                 _win._start_next_confirmed_dual_job(dev)
 
-            information.assert_called_once()
-            detail = information.call_args.args[2]
+            information.assert_not_called()
+            detail = _win._last_device_completion['text']
             self.assertIn("2 playlist jobs complete", detail)
             self.assertIn("5 queued track entries", detail)
             self.assertEqual(refresh_calls, [dev])
@@ -3427,9 +3518,10 @@ class StockIpodUI(unittest.TestCase):
                 mock.patch.object(
                     _win, "_cached_composite_manifest", return_value=manifest),
                 mock.patch.object(
-                    QMessageBox, "question", return_value=QMessageBox.Yes),
+                    QMessageBox, "question", side_effect=AssertionError("Second Apply Order review")) as question,
             ):
                 _win._apply_composite_playlist_order(tuple(reversed(keys)))
+                question.assert_not_called()
 
             self.assertEqual(len(calls), 1)
             self.assertEqual(calls[0][0], dev)
@@ -3441,6 +3533,23 @@ class StockIpodUI(unittest.TestCase):
             self.assertTrue(calls[0][2]["respect_selected_order"])
             self.assertTrue(calls[0][2]["confirmed"])
             self.assertEqual(calls[0][2]["action"], "order")
+            self.assertIs(calls[0][2]["expected_manifest"],manifest)
+            calls.clear()
+            with mock.patch.object(_win,"_cached_composite_manifest",return_value=manifest), \
+                    mock.patch.object(QMessageBox,"question",side_effect=AssertionError("Order review")), \
+                    mock.patch.object(QMessageBox,"warning") as warning, \
+                    mock.patch.object(_win,"_refresh_device_surfaces") as refresh:
+                for invalid in ((keys[0],keys[0]),(keys[0],),(keys[0],'unknown')):
+                    with self.subTest(invalid=invalid):
+                        warning.reset_mock();refresh.reset_mock()
+                        _win._apply_composite_playlist_order(invalid)
+                        self.assertEqual(calls,[])
+                        warning.assert_called_once();refresh.assert_called_once_with(dev)
+                warning.reset_mock();refresh.reset_mock()
+                with mock.patch('desktop.app.device_manifest.current_playlists_by_key',return_value={}):
+                    _win._apply_composite_playlist_order(tuple(keys))
+                self.assertEqual(calls,[])
+                warning.assert_called_once();refresh.assert_called_once_with(dev)
         finally:
             _win._current_device_path = old_current
             _win._begin_dual_ipod_sync = old_begin
@@ -3475,31 +3584,27 @@ class StockIpodUI(unittest.TestCase):
             else:
                 _win._device_profiles[dev] = old_profile
 
-    def test_sync_routes_managed_stock_playlists_to_stock_reconcile(self):
+    def test_sync_routes_linked_stock_playlists_to_catalog_reconcile(self):
         from types import SimpleNamespace
         from unittest import mock
 
         dev = "/Volumes/IPOD"
-        calls = []
         old_profile = _win._device_profiles.get(dev)
-        real = _win._begin_stock_ipod_sync
         _win._device_profiles[dev] = SimpleNamespace(kind="stock_ipod")
-        _win._begin_stock_ipod_sync = (
-            lambda device, playlists, *, reconcile=False:
-            calls.append((device, playlists, reconcile)))
         try:
             with (
+                mock.patch.object(_win, '_stock_has_sync_source', return_value=True),
+                mock.patch('desktop.stock_catalog_sync.request_device_sync') as sync,
+                mock.patch.object(_win, '_begin_stock_ipod_sync') as full_sync,
                 mock.patch.object(_win, "_stock_device_key", return_value="fixture"),
                 mock.patch.object(
                     _win.stock_ipod_shadow_store, "load",
                     side_effect=AssertionError("GUI read the shadow")),
             ):
                 _win._sync_device(dev)
-            self.assertEqual(calls[0][0], dev)
-            self.assertIsNone(calls[0][1])
-            self.assertTrue(calls[0][2])
+            sync.assert_called_once_with(_win, dev)
+            full_sync.assert_not_called()
         finally:
-            _win._begin_stock_ipod_sync = real
             if old_profile is None:
                 _win._device_profiles.pop(dev, None)
             else:
@@ -3622,19 +3727,29 @@ class StockIpodUI(unittest.TestCase):
         ):
             worker.run()
         self.assertIsNone(worker.results[0][3])
-        self.assertIn("Sync status pending", _win._device_label("IPOD", 1000, None))
+        self.assertIn("Sync status pending", _win._device_tip('/Volumes/IPOD', 1000, drift=None))
 
-    def test_stock_commit_prompt_defaults_to_cancel(self):
-        source = (Path(__file__).parents[1] / "desktop" / "app.py").read_text()
-        self.assertIn('"Commit stock iPod sync?"', source)
-        self.assertIn("QMessageBox.Cancel,\n        )", source)
+    def test_stock_plan_commits_without_a_second_confirmation(self):
+        from desktop.app import MainWindow
+        from tests.test_quiet_device_exports import QuietDeviceExports
+        fixture=QuietDeviceExports()
+        self.addCleanup(lambda:self.assertTrue(fixture.doCleanups()))
+        owner,target,stock,_dual,capture=fixture.generated()
+        with mock.patch('desktop.app.QMessageBox.question',side_effect=AssertionError('Second export review')):
+            MainWindow._on_stock_ipod_plan(owner,str(target),stock,_export_capture=capture)
+        capture.require_current.assert_called_once_with(owner,str(target))
+        owner._commit_stock_ipod_plan.assert_called_once_with(str(target),stock,_export_capture=capture)
 
-    def test_dual_sync_prompt_is_compact_and_defaults_to_cancel(self):
-        source = (Path(__file__).parents[1] / "desktop" / "app.py").read_text()
-        self.assertIn('"Sync iPod?"', source)
-        self.assertIn('"Ready to sync iPod.', source)
-        self.assertNotIn(
-            "The no-write plan passed its stock and Rockbox checks", source)
+    def test_dual_sync_plan_commits_without_a_second_confirmation(self):
+        from desktop.app import MainWindow
+        from tests.test_quiet_device_exports import QuietDeviceExports
+        fixture=QuietDeviceExports()
+        self.addCleanup(lambda:self.assertTrue(fixture.doCleanups()))
+        owner,target,_stock,dual,capture=fixture.generated()
+        with mock.patch('desktop.app.QMessageBox.question',side_effect=AssertionError('Second export review')):
+            MainWindow._on_dual_ipod_plan(owner,str(target),dual,_export_capture=capture)
+        capture.require_current.assert_called_once_with(owner,str(target))
+        owner._commit_dual_ipod_plan.assert_called_once_with(str(target),dual,_export_capture=capture)
 
     def test_stock_playlist_delete_prompt_is_explicit_and_defaults_to_cancel(self):
         source = (Path(__file__).parents[1] / "desktop" / "app.py").read_text()
@@ -4725,7 +4840,7 @@ class PrepEditStatus(unittest.TestCase):
         self.original = (_win._prep_update_message, _win.status_label.text(),
                          _win._preparing_library)
         self.status_patch = mock.patch.object(
-            TagEditController, 'update_status_text', new_callable=mock.PropertyMock)
+            TagEditController, 'footer_status_text', new_callable=mock.PropertyMock)
         self.status = self.status_patch.start()
         self.addCleanup(self.status_patch.stop)
         self.addCleanup(self.restore)
@@ -9143,9 +9258,16 @@ class LibraryInstantPaint(unittest.TestCase):
         import tempfile
         from pathlib import Path
         from soundbox import libcache
+        from soundbox.cache_process import CacheProcess
         with tempfile.TemporaryDirectory() as td:
+            while _win._libcache_worker is not None:
+                _win._libcache_worker.wait(4000)
+                _app.processEvents()
             saved = _win._libcache_path
+            saved_service = _win._cache_process
             _win._libcache_path = Path(td) / "libcache.json"
+            _win._cache_process = CacheProcess(Path(td).resolve())
+            _win._cache_process.start()
             try:
                 _win._cache_library()
                 for w in list(getattr(_win, "_oneshots", [])):
@@ -9154,6 +9276,8 @@ class LibraryInstantPaint(unittest.TestCase):
                 self.assertIsNotNone(got)
                 self.assertEqual(set(got.tracks_by_id), set(_win.lib.tracks_by_id))
             finally:
+                _win._cache_process.close()
+                _win._cache_process = saved_service
                 _win._libcache_path = saved
 
     def test_newer_library_waits_behind_active_cache_write(self):
@@ -9236,7 +9360,7 @@ class RekordboxRefreshOrdering(unittest.TestCase):
                 worker.finished.emit()
                 save.assert_called_once()
                 done.assert_called_once_with(replacement, metadata_changed_ids=(), selection_path=str(path))
-                apply.assert_called_once_with(already_projected=True)
+                apply.assert_called_once_with(already_projected=True, reset_navigation=True)
                 self.assertIs(_win.lib, replacement)
                 self.assertEqual(_win.settings['rekordbox_db_path'], str(path))
         finally:
@@ -9710,9 +9834,10 @@ class RefreshWhileViewingCollection(unittest.TestCase):
             _win._sync_prep_bpm()
             self.assertEqual(_win.bpm_value.text(), '000.00')
 
-    def _refresh_lands(self, fresh):
+    def _refresh_lands(self, fresh, *, prepared_native_ids=None):
         """What _on_refresh_done does with a freshly read library (direct call —
         Qt slots swallow exceptions)."""
+        if prepared_native_ids is not None:self.assertEqual(prepared_native_ids,())
         _win.lib = fresh
         _win._apply_loaded_library()
 

@@ -130,6 +130,69 @@ class CreationController(unittest.TestCase):
         self.assertEqual(self.window.saved[-1][QUEUE], [])
         self.assertEqual(self.window.published[0].source_tags[0].name, 'New Tag')
 
+    def test_discard_retains_an_admitted_head_until_its_normal_durable_ack(self):
+        from desktop.tag_creation_controller import QMessageBox
+        request=self.request();self.assertTrue(self.controller.enqueue(request));self.controller.timer.stop()
+        before=deepcopy(self.controller.pending);saves=len(self.window.saved)
+        def confirm(*_args):
+            self.controller.not_before=0;self.controller.pump()
+            self.assertTrue(self.window.tag_controller.owned)
+            return QMessageBox.Yes
+        with mock.patch.object(QMessageBox,'question',side_effect=confirm):
+            self.assertFalse(self.controller.discard())
+        self.assertEqual(self.controller.pending,before);self.assertEqual(len(self.window.saved),saves)
+        self.window.tag_controller.deliver()
+        self.assertEqual(self.controller.pending,[]);self.assertEqual(self.requests,[request])
+        self.assertEqual(len(self.window.published),1)
+
+    def test_discard_refuses_changed_queue_source_restore_and_state_owners(self):
+        from desktop.tag_creation_controller import QMessageBox
+        self.assertTrue(self.controller.enqueue(self.request()));self.controller.timer.stop()
+        reviewed=deepcopy(self.controller.pending)
+        for change in ('tail','in-place','source','kind','closing','maintenance','publication','refresh','restore'):
+            with self.subTest(change=change):
+                self.window.settings[QUEUE]=deepcopy(reviewed)
+                self.window.lib.source_library_id='library';self.window.lib.source_kind='rekordbox-db'
+                self.controller.closing=False;self.window._state_maintenance=False
+                self.window._state_publication=False;self.window._refresh_worker=None
+                self.window._state_repository=SimpleNamespace(generation=0,area=SimpleNamespace(generation=0))
+                retained=[]
+                def confirm(*_args):
+                    if change=='tail':
+                        self.assertTrue(self.controller.enqueue(self.request('Newer')));self.controller.timer.stop()
+                    elif change=='in-place':self.controller.pending[0]['error']='New conflict'
+                    elif change=='source':self.window.lib.source_library_id='replacement'
+                    elif change=='kind':self.window.lib.source_kind='rekordbox-xml'
+                    elif change=='closing':self.controller.closing=True
+                    elif change=='maintenance':self.window._state_maintenance=True
+                    elif change=='publication':self.window._state_publication=True
+                    elif change=='refresh':self.window._refresh_worker=object()
+                    elif change=='restore':self.window._state_repository.area.generation+=1
+                    retained.extend(deepcopy(self.controller.pending))
+                    return QMessageBox.Yes
+                with mock.patch.object(QMessageBox,'question',side_effect=confirm):
+                    self.assertFalse(self.controller.discard())
+                self.assertEqual(self.controller.pending,retained)
+        self.controller.closing=False
+
+    def test_unchanged_discard_is_durable_and_storage_failure_retains_exact_queue(self):
+        from desktop.tag_creation_controller import QMessageBox
+        self.assertTrue(self.controller.enqueue(self.request()));self.controller.timer.stop()
+        self.window._native_reconcile_source=mock.Mock();previous=self.controller.pending
+        with mock.patch.object(QMessageBox,'question',return_value=QMessageBox.No):
+            self.assertFalse(self.controller.discard())
+        self.assertIs(self.controller.pending,previous)
+        self.window.save_ok=False
+        with mock.patch.object(QMessageBox,'question',return_value=QMessageBox.Yes):
+            self.assertFalse(self.controller.discard())
+        self.assertIs(self.controller.pending,previous)
+        self.window._native_reconcile_source.assert_not_called()
+        self.window.save_ok=True
+        with mock.patch.object(QMessageBox,'question',return_value=QMessageBox.Yes):
+            self.assertTrue(self.controller.discard())
+        self.assertEqual(self.window.saved[-1][QUEUE],[])
+        self.assertEqual(self.controller.pending,[]);self.window._native_reconcile_source.assert_called_once()
+
     def test_continuous_ack_storage_failure_stops_readmission_until_explicit_retry(self):
         request = self.request()
         self.begin(request)

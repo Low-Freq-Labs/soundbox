@@ -62,26 +62,31 @@ class PassiveUsbDiscovery(unittest.TestCase):
 
 class SimpleEject(unittest.TestCase):
     def test_eject_cancels_idle_discovery_then_runs_macos_eject_without_a_final_read(self):
+        from desktop.app import MainWindow
         from desktop.device_browser import DeviceBrowserMixin
+        from soundbox.device_operations import DeviceOperationCoordinator, DeviceSessionIdentity
         class Signal:
             def __init__(self): self.callbacks = []
             def connect(self, callback): self.callbacks.append(callback)
             def emit(self):
                 for callback in self.callbacks: callback()
-        scan = SimpleNamespace(finished=Signal(), cancel=mock.Mock())
+        scan = SimpleNamespace(finished=Signal(), cancel=mock.Mock(), deleteLater=mock.Mock())
+        coordinator = DeviceOperationCoordinator()
+        coordinator.observe(DeviceSessionIdentity('/synthetic/USB', 1))
         host = SimpleNamespace(_dev_scan_worker=scan,
             _EJECT_BLOCKING_WORKERS=DeviceBrowserMixin._EJECT_BLOCKING_WORKERS,
-            _device_coordinator=SimpleNamespace(eject_pending=''), _stock_view_pending=set(),
+            _device_coordinator=coordinator, _stock_view_pending=set(), _exporting=False,
+            _shutting_down=False, _update_device_action_state=mock.Mock(),
             _pending_device_operation=None, _start_pulse=mock.Mock(), _begin_macos_eject=mock.Mock())
         host._eject = lambda target: DeviceBrowserMixin._eject(host, target)
-        with mock.patch('desktop.device_browser.QTimer.singleShot', side_effect=lambda _delay, callback: callback()), \
+        with mock.patch('desktop.app.QTimer.singleShot', side_effect=lambda _delay, callback: callback()), \
                 mock.patch('soundbox.cdj_usb.read_library', side_effect=AssertionError('Final USB read')), \
                 mock.patch('soundbox.cdj_export.verify', side_effect=AssertionError('Eject verification')):
             host._eject('/synthetic/USB')
             scan.cancel.assert_called_once()
             host._begin_macos_eject.assert_not_called()
-            host._dev_scan_worker = None
-            scan.finished.emit()
+            self.assertEqual(scan.finished.callbacks, [])
+            MainWindow._finish_worker(host, '_dev_scan_worker', scan)
         host._begin_macos_eject.assert_called_once_with('/synthetic/USB')
 
 
@@ -250,6 +255,7 @@ class UsbPresentation(unittest.TestCase):
         self.assertEqual(host._usb_view_requests, set())
 
     def test_successful_eject_retires_only_its_own_rows_and_caches_without_scanning(self):
+        from desktop.app import MainWindow
         from desktop.device_browser import DeviceBrowserMixin
         from desktop.trees import DEVPATH_ROLE
         from PySide6.QtWidgets import QTreeWidget, QTreeWidgetItem
@@ -259,14 +265,17 @@ class UsbPresentation(unittest.TestCase):
         for path in (target, other):
             item = QTreeWidgetItem(tree, [path]); item.setData(0, DEVPATH_ROLE, path)
         names = ('_device_profiles', '_device_mount_tokens', '_drift_cache', '_usb_device_rows',
-                 '_usb_view_cache', '_stock_view_cache', '_stock_view_failures', '_stock_view_pending',
+                 '_usb_view_cache', '_stock_view_cache', '_stock_catalog_witness_cache',
+                 '_stock_view_failures', '_stock_view_pending',
                  '_dual_sync_queue')
         host = SimpleNamespace(device_tree=tree, _device_coordinator=SimpleNamespace(disconnect=mock.Mock()),
             _usb_view_requests={target, other}, _stock_view_warming={target, other},
             _current_device_path=target, _stock_snapshot=object(), stack=mock.Mock(),
+            _stock_view_callbacks={},
             _set_device_poll_interval=mock.Mock(), _update_device_action_state=mock.Mock(),
             _refresh_devices=mock.Mock(side_effect=AssertionError('Eject caused a device scan')),
             **{name: {target: object(), other: object()} for name in names})
+        host._discard_stock_view_callbacks = lambda dev, message: MainWindow._discard_stock_view_callbacks(host,dev,message)
         with mock.patch('desktop.devices.forget_device_mount') as forget, \
                 mock.patch('desktop.device_browser.os.stat', side_effect=AssertionError('Eject stat')):
             DeviceBrowserMixin._retire_ejected_device(host, target)

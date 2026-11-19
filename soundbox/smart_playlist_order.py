@@ -30,6 +30,12 @@ class Assignment:
     playlists: tuple[tuple[str, str, str], ...]
 
 
+@dataclass(frozen=True)
+class Promotions:
+    """Immutable presentation facts prepared from one private source readback."""
+    ranks: tuple[tuple[str, tuple[str, ...]], ...]
+
+
 def _smart_nodes(library: Library) -> dict[str, dict]:
     nodes = library.source_playlist_catalog.get('nodes', [])
     result: dict[str, dict] = {}
@@ -129,22 +135,22 @@ def _state(value: Any) -> dict:
     return value
 
 
-def record(previous: Any, assignment: Assignment | None, verified: Library) -> Any:
-    """Return detached changed maps only after exact native membership readback."""
+def prepare(assignment: Assignment | None, verified: Library) -> Promotions | None:
+    """Resolve identities/memberships on the readback worker, before publication."""
     if (assignment is None or verified.source_kind != 'rekordbox-db'
             or (str(verified.source), verified.source_library_id)
                 != (assignment.source, assignment.library_id)):
-        return previous
+        return None
     if not any((tag.tag_id, tag.source_uuid) == (assignment.tag_id, assignment.tag_uuid)
                for tag in verified.source_tags):
-        return previous
+        return None
     targets = set(assignment.targets)
     tracks = {(track.native_id, track.source_uuid): track for track in verified.tracks_by_id.values()
               if track.source_tag_ids is not None and assignment.tag_id in track.source_tag_ids
               and track.track_id not in verified.source_binding_issues and not track.imported}
     targets.intersection_update(tracks)
     if not targets:
-        return previous
+        return None
     nodes = _smart_nodes(verified)
     playlists = {playlist.pid: playlist for playlist in verified.playlists}
     promotions = {}
@@ -159,17 +165,29 @@ def record(previous: Any, assignment: Assignment | None, verified: Library) -> A
         if matched:
             promotions[_scope(verified, identity, uuid, rule)] = matched
     if not promotions:
+        return None
+    return Promotions(tuple((scope, tuple(sorted(uuids))) for scope, uuids in promotions.items()))
+
+
+def record_prepared(previous: Any, promotions: Promotions | None) -> Any:
+    """Apply prepared promotions to the latest display clock, without Library walks."""
+    if promotions is None:
         return previous
     state = _state(previous)
     if state['sequence'] == _MAX_SEQUENCE:
         raise ValueError('Smart-playlist display-order clock is exhausted; previous order retained')
     sequence = state['sequence'] + 1
     ranks = dict(state['playlists'])
-    for scope, uuids in promotions.items():
+    for scope, uuids in promotions.ranks:
         ranks[scope] = {**ranks.get(scope, {}), **dict.fromkeys(uuids, sequence)}
     result = dict(version=1, sequence=sequence, playlists=ranks)
     _state(result)
     return result
+
+
+def record(previous: Any, assignment: Assignment | None, verified: Library) -> Any:
+    """Return detached changed maps only after exact native membership readback."""
+    return record_prepared(previous, prepare(assignment, verified))
 
 
 def order_rows(rows: list[dict], library: Library, playlist_id: str, value: Any) -> list[dict]:

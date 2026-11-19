@@ -9,6 +9,10 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import stat
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .sync import DeviceSession
 
 from .operation_control import checkpoint, record_metric
 
@@ -25,7 +29,9 @@ def _epoch(value: os.stat_result) -> tuple[int, ...]:
             value.st_ctime_ns, value.st_mode)
 
 
-def read_device_manifest(root: str | Path) -> bytes | None:
+def read_device_manifest(
+        root: str | Path, *, session: DeviceSession | None = None,
+) -> bytes | None:
     """Read at most 64 MiB + 1 using pinned root/state/file descriptors.
 
     Missing state returns None. Links, oversized input, replacement, remounts,
@@ -35,9 +41,14 @@ def read_device_manifest(root: str | Path) -> bytes | None:
     from .sync import DeviceSession
 
     requested = Path(root).expanduser()
-    if not requested.exists():
-        return None
-    session = DeviceSession(requested, [], create=False)
+    if session is None:
+        if not requested.exists():
+            return None
+        session = DeviceSession(requested, [], create=False)
+    else:
+        session.revalidate()
+        if requested.resolve(strict=True) != session.target:
+            raise ManifestCaptureError("Manifest target differs from the captured device")
     session.guard(Path(".soundbox/manifest.json"))
     checkpoint()
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW

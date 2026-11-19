@@ -19,7 +19,7 @@ class TagDefinitionController(QObject):
         self.tags = window.tag_controller
         self.factory = store_factory
         self.deletion_factory = deletion_store_factory
-        self.loader = loader or self.tags._loader
+        self.loader = loader
         self.closing = False
         self.not_before = 0.0
         self.timer = QTimer(self)
@@ -213,7 +213,9 @@ class TagDefinitionController(QObject):
                 store = (self.factory(lib) if self.factory else
                          definitions.TagDefinitionStore(authority, self.tags._write_root(lib)))
             created = store.apply(job['request'])
-            return dict(created=created, library=self.loader(Path(lib.source)))
+            library = (self.loader(Path(lib.source)) if self.loader is not None
+                       else self.tags.readback_library(lib))
+            return dict(created=created, library=library)
 
         def completed(worker):
             if worker.error:
@@ -287,12 +289,16 @@ class TagDefinitionController(QObject):
         return True
 
     def discard(self):
-        if self.closing or self.tags.owned or not self.pending or self.queue_error():
-            return False
+        from .intent_review import capture_discard,discard_is_current
+        review=capture_discard(self)
+        if review is None:return False
         w = self.window
         if QMessageBox.question(w, 'Discard pending tag changes',
-                f'Discard {len(self.pending)} pending tag change(s)?\nChanges already saved in rekordbox remain saved.',
+                f'Discard {len(review.jobs)} pending tag change(s)?\nChanges already saved in rekordbox remain saved.',
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            return False
+        if not discard_is_current(self,review):
+            w._flash_status('A save started or the pending edits changed; review them and try again.',12)
             return False
         previous = w.settings.get(QUEUE, [])
         w.settings[QUEUE] = []

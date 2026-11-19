@@ -7,7 +7,8 @@ from types import SimpleNamespace
 import unittest
 from unittest import mock
 
-from scripts.build_composition import REQUIRED_RUNTIME_MODULES, verify_runtime_code, composition, runtime_submodule, source_fingerprint
+from scripts.build_composition import (REQUIRED_RUNTIME_MODULES, verify_runtime_code,
+    verify_startup_scripts, composition, runtime_submodule, source_fingerprint)
 
 
 class PackagedRuntimeCode(unittest.TestCase):
@@ -62,7 +63,7 @@ class PackagedRuntimeCode(unittest.TestCase):
     def test_developer_modules_hidden_only_inside_pyz_are_rejected(self):
         for name in ('research', 'research.native_library.mp3_analysis_pilot', 'tests.test_cbr_analysis_store',
                      'sqlalchemy.testing', 'sqlalchemy.testing.fixtures', 'sqlalchemy.ext.mypy.plugin',
-                     'mypy.nodes', 'ast_serialize'):
+                     'mypy.nodes', 'ast_serialize', 'Crypto.SelfTest.Cipher.test_AES'):
             with self.subTest(module=name):
                 self.code[name] = compile('', name, 'exec')
                 with self.assertRaisesRegex(ValueError, 'Developer Python modules leaked'):
@@ -72,7 +73,7 @@ class PackagedRuntimeCode(unittest.TestCase):
     def test_build_filter_retains_runtime_orm_and_typing_dependencies(self):
         for name in ('sqlalchemy', 'sqlalchemy.orm', 'sqlalchemy.ext.asyncio',
                      'sqlalchemy.sql', 'mypy_extensions', 'pyrekordbox.db6',
-                     'sqlcipher3', 'PIL.Image', 'numpy', 'scipy'):
+                     'sqlcipher3', 'PIL.Image', 'numpy', 'scipy', 'Crypto.Cipher.AES'):
             with self.subTest(module=name):
                 self.assertTrue(runtime_submodule(name))
 
@@ -109,3 +110,75 @@ assert not any(name.startswith(('sqlalchemy.testing','sqlalchemy.ext.mypy','mypy
     def test_isolated_runtime_sql_probe_is_memory_only(self):
         from desktop.startup_check import runtime_sql_check
         self.assertTrue(runtime_sql_check())
+
+    def test_isolated_runtime_aes_probe_loads_the_real_backend(self):
+        from desktop.startup_check import runtime_crypto_check
+        self.assertTrue(runtime_crypto_check())
+
+
+class PackagedStartupScripts(unittest.TestCase):
+    def setUp(self):
+        self.area = tempfile.TemporaryDirectory(); self.addCleanup(self.area.cleanup)
+        self.root = Path(self.area.name)
+        (self.root / 'soundbox').mkdir()
+        self.hook = self.root / 'soundbox/packaged_worker_hook.py'
+        self.hook.write_text('def configure():\n    return "worker-only"\nconfigure()\n')
+        self.entry = self.root / 'soundbox_app.py'
+        self.entry.write_text('def dispatch():\n    return "desktop-or-worker"\ndispatch()\n')
+        self.bootstrap = self.root / 'bootstrap.py'
+        self.bootstrap.write_text('pass\n')
+        self.order = ['pyiboot01_bootstrap', 'packaged_worker_hook',
+                      'pyi_rth_inspect', 'pyi_rth_pyside6', 'soundbox_app']
+
+    def archive(self, order=None, *, hook_type='s'):
+        from PyInstaller.archive.readers import CArchiveReader
+        from PyInstaller.archive.writers import CArchiveWriter
+        paths = {'packaged_worker_hook': self.hook, 'soundbox_app': self.entry}
+        entries = [(name, str(paths.get(name, self.bootstrap)), True,
+                    hook_type if name == 'packaged_worker_hook' else 's')
+                   for name in (self.order if order is None else order)]
+        path = self.root / 'startup.pkg'
+        CArchiveWriter(str(path), entries, 'Python')
+        return CArchiveReader(str(path))
+
+    def test_real_archive_verifies_worker_hook_and_entry_code_in_boot_order(self):
+        result = verify_startup_scripts(self.archive(), root=self.root)
+        self.assertEqual(result, dict(order=self.order,
+                                      verified=['packaged_worker_hook', 'soundbox_app']))
+
+    def test_missing_or_unexecuted_startup_scripts_are_rejected(self):
+        for name in ('pyiboot01_bootstrap', 'packaged_worker_hook', 'pyi_rth_pyside6', 'soundbox_app'):
+            with self.subTest(missing=name):
+                archive = self.archive([item for item in self.order if item != name])
+                with self.assertRaisesRegex(ValueError, 'Startup scripts missing: ' + name):
+                    verify_startup_scripts(archive, root=self.root)
+        with self.assertRaisesRegex(ValueError, 'Startup scripts missing: packaged_worker_hook'):
+            verify_startup_scripts(self.archive(hook_type='x'), root=self.root)
+
+    def test_late_hook_early_entry_and_prebootstrap_hook_are_rejected(self):
+        orders = (
+            ['pyiboot01_bootstrap', 'pyi_rth_pyside6', 'packaged_worker_hook', 'soundbox_app'],
+            ['pyiboot01_bootstrap', 'pyi_rth_inspect', 'packaged_worker_hook', 'pyi_rth_pyside6', 'soundbox_app'],
+            ['packaged_worker_hook', 'pyiboot01_bootstrap', 'pyi_rth_pyside6', 'soundbox_app'],
+            ['pyiboot01_bootstrap', 'packaged_worker_hook', 'soundbox_app', 'pyi_rth_pyside6'],
+        )
+        for order in orders:
+            with self.subTest(order=order):
+                with self.assertRaisesRegex(ValueError, 'Worker runtime hook must run first'):
+                    verify_startup_scripts(self.archive(order), root=self.root)
+
+    def test_nested_worker_hook_code_and_missing_source_are_rejected(self):
+        archive = self.archive()
+        original = self.hook.read_text()
+        self.hook.write_text(original.replace('worker-only', 'wrong-worker'))
+        with self.assertRaisesRegex(ValueError, 'startup code differs from tested source: packaged_worker_hook'):
+            verify_startup_scripts(archive, root=self.root)
+        self.hook.unlink()
+        with self.assertRaisesRegex(ValueError, 'startup script has no source: packaged_worker_hook'):
+            verify_startup_scripts(archive, root=self.root)
+
+    def test_stale_entry_dispatch_code_is_rejected(self):
+        archive = self.archive()
+        self.entry.write_text('def dispatch():\n    return "old-entry"\ndispatch()\n')
+        with self.assertRaisesRegex(ValueError, 'startup code differs from tested source: soundbox_app'):
+            verify_startup_scripts(archive, root=self.root)

@@ -17,6 +17,7 @@ from soundbox.rekordbox_cues import CueEdit
 from soundbox.rekordbox_cue_store import load_cue_authority
 from soundbox.rekordbox_grid import GridEdit, read_grid
 from soundbox.rekordbox_write import WriteProofError, assert_rekordbox_closed, _regular, _digest
+from .prep_state import PrepStateLane
 
 
 def _headline_bpm(track, fallback):
@@ -48,6 +49,19 @@ class PrepEditController(QObject):
         self.timer.timeout.connect(self.pump)
         self.tags.idle.connect(self.schedule)
         self.tags.changed.connect(self.schedule)
+        self.state_lane=PrepStateLane(self)
+
+    @property
+    def admission_pending(self):return self.state_lane.pending
+
+    @property
+    def admission_error(self):return str(self.state_lane.failed[0][1]) if self.state_lane.failed else ''
+
+    def drain_admissions(self):self.state_lane.drain()
+
+    def requested_cues(self, tid):return self.state_lane.cues(tid)
+
+    def queue_error(self):return self.admission_error
 
     @property
     def pending(self):return self.window.settings.get(edits.KEY,[])
@@ -59,7 +73,10 @@ class PrepEditController(QObject):
     @staticmethod
     def _job_matches(job, lib, track):
         return bool(lib and track and job['path']==str(track.path)
-                    and (job['source'],job['library_id']) in (('',''),(str(lib.source),lib.source_library_id)))
+                    and (job['source'],job['library_id']) in (('',''),(str(lib.source),lib.source_library_id))
+                    and all(key not in job or job[key]==value for key,value in (
+                        ('native_id',track.native_id),('source_uuid',track.source_uuid),
+                        ('native_path',str(track.native_path)))))
 
     def handles(self, tid):
         lib=self.window.lib; track=lib.tracks_by_id.get(tid) if lib else None
@@ -69,7 +86,13 @@ class PrepEditController(QObject):
     def reason(self, tid, *, grid=False):
         if self.closing or self.window._shutting_down:return 'Finishing library edits…'
         if self.window._state_maintenance:return 'Restoring library state…'
-        try:edits.validate(self.pending)
+        try:
+            pending=self.pending
+            if grid or not isinstance(pending,list) or len(pending)>256:
+                edits.validate(pending)
+            else:
+                selected=self.job(tid)
+                edits.validate([{**selected,'grid':[]}] if selected else [])
         except ValueError as exc:return str(exc)
         job=self.job(tid)
         track=self.window.lib.tracks_by_id.get(tid) if self.window.lib else None
@@ -123,6 +146,8 @@ class PrepEditController(QObject):
         return None
 
     def cue_rows(self, tid):
+        staged=self.state_lane.cues(tid)
+        if staged is not None:return staged
         job=self.job(tid)
         track=self.window.lib.tracks_by_id.get(tid) if self.window.lib else None
         if job:
@@ -151,15 +176,20 @@ class PrepEditController(QObject):
             # worker's exact SHA proof may renew this cloud metadata identity;
             # the pending intention grants no source publication permission.
             identity_pending=True;epoch=list(record['epoch'])
-        view=self.grid_view(track.track_id)
         ready = bool(track.source_analysis_path or kind == 'cue' and not identity_pending
                      and PrepEditController._native_cues(self,track))
+        # A native cue intention owns only its cue component. Capturing the
+        # selected grid here needlessly copies/validates every beat on a pad
+        # press; a later grid gesture captures its own current RAM grid.
+        view=None if kind=='cue' else self.grid_view(track.track_id)
         job=dict(version=2 if ready else 1,id=str(uuid4()),track_id=track.track_id,path=str(track.path),epoch=epoch,
             native_ready=ready,
             sha256=record['sha256'] if record else '',duration=record['duration'] if record else pb._dur/1000,
             source=str(w.lib.source) if w.lib.source_kind=='rekordbox-db' else '',
             library_id=w.lib.source_library_id if w.lib.source_kind=='rekordbox-db' else '',
             grid=deepcopy(view[0]) if view else [],cues=edits.cues(track.source_cues),operations=[],prepared=None,error='')
+        if not track.imported and track.source_uuid:
+            job.update(native_id=track.native_id,source_uuid=track.source_uuid,native_path=str(track.native_path))
         if identity_pending:job['identity_pending']=True
         # A requested first-beat Memory cue is a real pending cue intention too.
         for cue in local_cues.cues(record) if record and not track.source_analysis_path else []:
@@ -193,26 +223,51 @@ class PrepEditController(QObject):
         # without cloning unrelated saved analysis/settings on every gesture.
         previous={key:w.settings.get(key,missing) for key in (edits.KEY,'analysis_results')}
         try:
-            track=w.lib.tracks_by_id[tid]; old=self.job(tid)
+            lane=getattr(self,'state_lane',None)
+            track=w.lib.tracks_by_id[tid]; old=lane.job(tid) if lane and lane.enabled else self.job(tid)
             if old and not self._job_matches(old,w.lib,track):
                 raise ValueError('Prep edits belong to a different source; intentions preserved')
             job=old or self._new(track,kind=kind)
-            after=edits.operation(job,kind,operation,value,**cue)
+            if kind=='grid' and job['native_ready'] and not job['grid']:
+                view=self.grid_view(tid)
+                if not view:raise ValueError('Load a track with a beat grid before editing it')
+                job={**job,'grid':deepcopy(view[0])}
+            # Cue intentions never copy/validate the unchanged grid component.
+            # The native planner still verifies that component before writes.
+            after=edits.operation({**job,'grid':[]} if kind=='cue' else job,
+                                  kind,operation,value,**cue)
+            if kind=='cue':after['grid']=job['grid']
             if after==job:return True
+            if lane and lane.enabled and (kind=='cue' or after['native_ready'] and self._native_cues(track)):
+                return lane.admit(track,old,after,cue_only=kind=='cue')
             record=w._analysis_result(track); updated=self._record(record,after)
             w.settings[edits.KEY]=[after if j['track_id']==tid else j for j in self.pending] if old else [*self.pending,after]
-            if updated is not None:w.settings['analysis_results']={**w.settings.get('analysis_results',{}),analysis.result_key(track.path):updated}
+            if updated is not None and updated is not record:
+                w.settings['analysis_results']={**w.settings.get('analysis_results',{}),analysis.result_key(track.path):updated}
             if not w._save_state():raise OSError('The edit could not be saved; check available space and retry')
         except (OSError,ValueError,RuntimeError) as exc:
             for key,before in previous.items():
                 if before is missing:w.settings.pop(key,None)
                 else:w.settings[key]=before
-            w._flash_status(str(exc),15);w._sync_grid();w._sync_cue_editing();return False
-        self.refresh(tid);self.schedule();return True
+            w._flash_status(str(exc),15)
+            if kind!='cue':w._sync_grid()
+            w._sync_cue_editing();return False
+        if kind=='cue':self.refresh(tid,cue_only=True)
+        else:self.refresh(tid)
+        self.schedule();return True
 
     def request_grid(self, tid, operation, value):return self._request(tid,'grid',operation,value)
     def request_cue(self, tid, page, slot, operation, position):
         return self._request(tid,'cue',operation,page=page,slot=slot,position=position)
+
+    def publish_cues(self, tid):
+        """Make an accepted gesture usable without any persistence/analysis work."""
+        w=self.window;track=w.lib.tracks_by_id.get(tid) if w.lib else None
+        if track is None or self.closing or w._shutting_down:return
+        pb=w.player_bar
+        if pb.current_track()==tid:
+            pb.refresh_live_cues(tid,track.path,self.cue_rows(tid))
+        w._sync_cue_editing()
 
     def attach_result(self, track, record):
         job=self.job(track.track_id)
@@ -234,12 +289,12 @@ class PrepEditController(QObject):
         self.window.settings[edits.KEY]=[job if j['track_id']==tid else j for j in self.pending
                                        if j['track_id']!=tid or job['operations']]
 
-    def refresh(self, tid, result=None):
+    def refresh(self, tid, result=None, *, cue_only=False):
         w=self.window;track=w.lib.tracks_by_id.get(tid) if w.lib else None
         if track is None or self.closing or w._shutting_down:return
         job=self.job(tid)
         if job and not self._job_matches(job,w.lib,track):return
-        w._invalidate_rows([tid]); view=self.grid_view(tid) if self.handles(tid) else None
+        w._invalidate_rows([tid]); view=self.grid_view(tid) if not cue_only and self.handles(tid) else None
         pb=w.player_bar
         if view:
             effective=local_grid.effective_result(w._analysis_result(track))
@@ -250,14 +305,15 @@ class PrepEditController(QObject):
             else:w._update_browser_bpm(tid,f'{view[1]:.2f}')
         if pb.current_track()==tid:
             pb.detected_analysis=w._analysis_result(track)
-            if result and result.get('beats') and not self.job(tid):
+            if not cue_only and result and result.get('beats') and not self.job(tid):
                 provenance=pb._analysis_parts.get('provenance',{})
                 pb._analysis_parts['provenance']={k:v for k,v in provenance.items() if k!='user_data'}
                 pb._analysis_parts['provenance']['grid']='rekordbox'
                 pb.refresh_live_grid(tid,track.path,result['beats'],result['row']['BPM']/100)
             elif view:pb.refresh_live_grid(tid,track.path,*view)
             pb.refresh_live_cues(tid,track.path,self.cue_rows(tid) if self.handles(tid) else track.source_cues)
-        w._sync_grid();w._sync_cue_editing()
+        if not cue_only:w._sync_grid()
+        w._sync_cue_editing()
 
     def schedule(self):
         # Lane release should wake a queued gesture on the next event turn,
@@ -272,6 +328,16 @@ class PrepEditController(QObject):
 
     def _fail(self, tid, error, *, refresh=True):
         job=self.job(tid)
+        if job and job['version']==2 and self.state_lane.enabled:
+            queue=[{**j,'error':str(error)[:4096]} if j['track_id']==tid else j for j in self.pending]
+            self.errors[tid]=str(error);self.busy=True
+            def finished():
+                self.busy=False
+                self._status('Prep edits need attention: '+str(error))
+                self.window._flash_status('Couldn’t save prep edits: '+str(error),15)
+                if refresh:self.refresh(tid,cue_only=all(op['kind']=='cue' for op in job['operations']))
+            self.state_lane.save(tid,queue,finished,lambda _error:finished())
+            return
         if job:
             queue=[{**j,'error':str(error)[:4096]} if j['track_id']==tid else j for j in self.pending]
             self.window.settings[edits.KEY]=queue;self.window._save_state()
@@ -412,15 +478,19 @@ class PrepEditController(QObject):
 
     def pump(self):
         w=self.window
+        if self.state_lane.pending:
+            self.state_lane.pump();return
         if self.closing or w._shutting_down or self.busy:return
         try:edits.validate(self.pending)
         except ValueError as exc:
             self.tags.prep_priority=True;self._status(str(exc));return
         self.tags.prep_priority=any(j['prepared'] is not None for j in self.pending)
         if not self.pending:
+            if self.admission_error:
+                self._status('Prep edits need attention: '+self.admission_error);return
             self._status('');self.window._finish_edit_status(quiet=True);return
         selected=next((j for j in self.pending if j['prepared'] is not None),None)
-        selected=selected or next((j for j in self.pending if not j['error']),None)
+        selected=selected or next((j for j in self.pending if not j['error'] and j['track_id'] not in self.errors),None)
         if selected is None:return
         job=deepcopy(selected);tid=job['track_id']
         repair=(job['version']==1 and job['prepared'] is not None
@@ -438,8 +508,7 @@ class PrepEditController(QObject):
             self.timer.start(2000);return
         if not track:
             self.timer.start(2000);return
-        if ((job['source'],job['library_id']) not in (('',''),(str(lib.source),lib.source_library_id))
-                or str(track.path)!=job['path'] or tid in getattr(lib,'source_binding_issues',{})):
+        if (not self._job_matches(job,lib,track) or tid in getattr(lib,'source_binding_issues',{})):
             self._fail(tid,'Prep edits belong to a different source; intentions preserved');return
         if job.get('identity_pending'):
             self._check_identity(job,lib,track);return
@@ -525,25 +594,49 @@ class PrepEditController(QObject):
                 queue=[upgraded if j['track_id']==tid else j for j in queue]
             elif 'prepared' in result:current['prepared']=result['prepared']
             else:current['operations']=current['operations'][1:];current['prepared']=None
-            queue=[j for j in queue if j['operations']];w.settings[edits.KEY]=queue
+            queue=[j for j in queue if j['operations']]
+            def saved():
+                self.busy=False
+                self.tags.prep_priority=any(j['prepared'] is not None for j in self.pending)
+                if 'upgrade' in result:
+                    self.errors.pop(tid,None);self.refresh(tid)
+                elif 'prepared' not in result:
+                    self.state_lane.acknowledge(job['id'],op['id'])
+                    fresh=w.lib.tracks_by_id[tid]
+                    w.lib.tracks_by_id[tid]=replace(fresh,bpm=f"{result['row']['BPM']/100:.2f}",**result['cue_fields'])
+                    self.tags.lib=w.lib
+                    self.refresh(tid,result,cue_only=op['kind']=='cue')
+                    if not self.pending:w.grid_controller.configure();w._cache_library()
+                self.schedule()
+            if job['version']==2 and self.state_lane.enabled:
+                self.busy=True
+                def failed(error):
+                    self.busy=False;self._fail(tid,str(error))
+                self.state_lane.save(tid,queue,saved,failed)
+                return
+            w.settings[edits.KEY]=queue
             try:
                 if not w._save_state():raise OSError('Prep saved state could not be confirmed locally')
             except (OSError,ValueError) as exc:
                 w.settings[edits.KEY]=previous;self._fail(tid,str(exc));return
-            self.tags.prep_priority=any(j['prepared'] is not None for j in queue)
-            if 'upgrade' in result:
-                self.errors.pop(tid,None);self.refresh(tid)
-            elif 'prepared' not in result:
-                w.lib.tracks_by_id[tid]=replace(latest,bpm=f"{result['row']['BPM']/100:.2f}",**result['cue_fields'])
-                self.tags.lib=w.lib
-                self.refresh(tid,result)
-                if not queue:w.grid_controller.configure();w._cache_library()
-            self.schedule()
+            saved()
         self.busy=True
         if not self.tags.run_prep_job(work,completed):self.busy=False;self.timer.start(2000)
         else:self._status('Updating beatgrid…' if op['kind']=='grid' else 'Updating cue…')
 
     def retry(self):
+        if self.admission_pending or self.busy:return
+        if self.state_lane.failed:
+            self.state_lane.retry();return
+        if self.state_lane.enabled and self.pending and all(job['version']==2 for job in self.pending):
+            queue=[{**job,'error':''} for job in self.pending]
+            self.busy=True
+            def saved():
+                self.errors.clear();self.busy=False;self.schedule()
+            def failed(error):
+                self.busy=False
+                self.window._flash_status('Prep retry could not be saved: '+str(error),15)
+            self.state_lane.save(queue[0]['track_id'],queue,saved,failed);return
         self.errors.clear();queue=[{**job,'error':''} for job in self.pending]
         old=self.window.settings.get(edits.KEY,[]);self.window.settings[edits.KEY]=queue
         if not self.window._save_state():self.window.settings[edits.KEY]=old;return

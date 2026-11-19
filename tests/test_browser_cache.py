@@ -5,12 +5,27 @@ import tempfile
 import unittest
 from unittest import mock
 import io
+import hashlib
 
 from soundbox import browser_cache
 from soundbox.library import Track
 
 
 class BrowserCache(unittest.TestCase):
+    def test_streamed_fingerprint_matches_existing_json_contract(self):
+        for count in (0,1,4000):
+            with self.subTest(count=count):
+                inputs=(frozenset((str(i),'不明 😀 / \\"','line\n\t',-0.0,True,None)
+                                  for i in range(count)),
+                        (('manual','é / e\u0301'),), (('title','\\path'),), (), ('policy',))
+                expected=hashlib.sha256(json.dumps([browser_cache.SCHEMA,sorted(inputs[0]),*inputs[1:]],
+                    ensure_ascii=True,allow_nan=False,separators=(',', ':')).encode()).hexdigest()
+                self.assertEqual(browser_cache.fingerprint(inputs),expected)
+                self.assertEqual(browser_cache.fingerprint(inputs,bounded=True),expected)
+        invalid=(frozenset({('song',float('nan'))}),(),(),(),())
+        for bounded in (False,True):
+            with self.assertRaises(ValueError):browser_cache.fingerprint(invalid,bounded=bounded)
+
     def test_deep_malformed_cache_falls_back(self):
         with tempfile.TemporaryDirectory() as area:
             path = Path(area) / 'browsercache.json'

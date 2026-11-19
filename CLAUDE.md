@@ -24,6 +24,7 @@ Native macOS library/prep/player app bridging rekordbox to USB, stock iPod and R
 - Canonical `library.json` and referenced `.state-records/` are inseparable; materialize portable snapshots through the state repository.
 - No automated input/termination of real apps, live-source tests, device erase/replay, restoration or permanent deletion without current explicit scope.
 - Work autonomously on reversible local changes. Inspect and preserve the dirty worktree.
+- Keep parallel critical-path audits running alongside focused fixes; record reproducible findings separately and deliver validated fixes in later updates without blocking the active release on unrelated audits.
 - Do not commit/push unless asked; “wrap up” authorizes validated completion/publication under the detailed contracts.
 
 ## Checks and delivery

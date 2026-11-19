@@ -4,6 +4,7 @@ from dataclasses import replace
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
+import time
 import unittest
 from unittest import mock
 
@@ -34,7 +35,13 @@ class Window(QWidget):
         self.saved.append(deepcopy(dict(settings=self.settings,titles=self.titles,artists=self.overrides)))
         return self.save_ok
 
-    def _publish_created_library(self,library):self.published.append(library);self.lib=library
+    def _publish_metadata_library(self,library,changed_ids):
+        assert changed_ids==('local-song',)
+        assert self.saved[-1]['settings'].get(ACKS)==self.settings.get(ACKS)
+        assert self.saved[-1]['settings'].get(KEY)==self.settings.get(KEY)
+        self.published.append(library);self.lib=library
+
+    def _publish_created_library(self,library):raise AssertionError('Metadata must not publish a created library')
 
 
 class MetadataPhases(unittest.TestCase):
@@ -247,6 +254,28 @@ class MetadataPhases(unittest.TestCase):
         self.assertFalse(self.controller.migration_pending)
         self.assertEqual(self.native,dict(title='Song',artist='Artist'))
         self.assertEqual(self.w.settings[truth.TARGETS],targets)
+
+    def test_frozen_backlog_yields_before_queueing_and_capture_during_browser_input(self):
+        self.freeze_pair();before=deepcopy(self.w.settings)
+        self.w._background_library_not_before=time.monotonic()+60
+        self.pump()
+        self.assertEqual(self.w.settings,before)
+        self.assertFalse(self.w.tag_controller.admitted)
+        self.w._background_library_not_before=0
+        self.pump()
+        self.assertEqual(len(self.controller.pending),2)
+        self.w._background_library_not_before=time.monotonic()+60
+        self.pump();self.assertFalse(self.w.tag_controller.admitted)
+        self.w._background_library_not_before=0
+        self.pump();self.assertEqual(len(self.w.tag_controller.admitted),1)
+
+    def test_browser_input_does_not_delay_an_explicit_edit_or_captured_source_request(self):
+        self.w._background_library_not_before=time.monotonic()+60
+        self.begin();self.deliver()
+        self.assertIsNotNone(self.controller.pending[0]['request'])
+        self.pump();self.deliver()
+        self.assertEqual(len(self.writes),1)
+        self.assertFalse(self.controller.pending)
 
     def test_mid_pair_title_edit_preserves_frozen_and_pending_artist(self):
         self.freeze_pair();self.pump();self.pump();self.deliver();self.pump();self.deliver()

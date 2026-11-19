@@ -1,9 +1,10 @@
 # Native CDJ USB export
 
-The November8 cleanup is installed as accepted personal build169, including both
-Track Info tabs prepared before presentation. Dated build167 USB evidence below
-retains its original scope; [HANDOFF](HANDOFF.md) records exact signed provenance,
-latest observed app state and validation.
+The November8 cleanup was accepted as personal build169, including both Track Info
+tabs prepared before presentation. That checkpoint and dated build167 USB evidence
+below retain their original scope; [HANDOFF](HANDOFF.md) records current source,
+package and installed identities separately, plus latest observed app state and
+validation. A source candidate does not identify the installed application.
 The personal app prepares classic Device Library and
 Device Library Plus together. Sonny reports successful player playback, artwork
 and waveforms from his export. Exact firmware, the wider performance/control
@@ -47,15 +48,20 @@ with unrelated smart-list evaluation skipped. Structural/ancestor and active-ID
 checks remain; an optimization never substitutes cached browser membership.
 Accepted source tag/cue/grid, native-playlist, registration, local/native analysis,
 tag-definition and metadata intentions drain before capture; frozen SourceTruth
-work and unresolved save attention also retain the barrier. A second
+work and unresolved save attention also retain this CDJ barrier. A second
 capture detects concurrent changes. Native playlist selections rebind by stable
 ID after that drain, so a rename/membership save is reflected and a deleted
 selection or switched source stops before USB writes. Pending playlist intents
 are not their own worker ownership; the waiting request leaves the source lane
-free to finish them. Direct stock/dual iPod commands use the same source-save
-barrier before capturing their immutable inputs; waiting native playlist choices
-rebind by source/ID/UUID while preserving their device export keys. Source or
-target changes refuse the command before device writes. Browser
+free to finish them. Current stock, dual and Rockbox iPod exports instead capture
+a selected durable effective-metadata checkpoint, so unrelated metadata backlog
+may remain paused or running. Selected structural, registration, physical-media
+and local-grid transitions still drain, and waiting native playlist choices
+rebind by source/ID/UUID while preserving their device export keys. The captured
+metadata and exact source/target fences remain current through publication;
+see [the iPod checkpoint contract](DEVICES.md). This does not relax CDJ source
+capture or accepted database-write Quit drains. Source or target changes refuse
+the command before device writes. Browser
 cache and player overlays grant no export authority. SoundBox title/artist/info
 overrides and a locked artwork snapshot apply without editing source audio or
 adding a desktop database write domain. Imported/XML tracks or missing required

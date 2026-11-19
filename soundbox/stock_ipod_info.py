@@ -20,8 +20,9 @@ from clickwheel.ipod import (  # type: ignore[import-untyped]
     parse_itunesdb,
 )
 
-from .stock_ipod import normalize_model_number, supports_stock_write
 from .stock_ipod_capture import StockIpodNativeCapture, capture_stock_ipod_native
+from .stock_ipod_format import StockWriteFormat, inspect_stock_write_format
+from .stock_ipod_identity import hardware_model, model_from_serial, normalize_display_model
 
 
 @dataclass(frozen=True)
@@ -53,6 +54,9 @@ class StockIpodTrackSnapshot:
     location: str
     pending_plays: int
     pending_skips: int
+    year: int = 0
+    bpm: int = 0
+    comments: str = ""
 
 
 @dataclass(frozen=True)
@@ -110,29 +114,11 @@ class StockIpodSnapshot:
     sync_detail: str = "No committed Mac-side fast-sync baseline"
     sync_local_changes: int = 0
     sync_committed_at: str = ""
-
-
-_HARDWARE_CATALOG = {
-    "MA446": ("iPod Video", "5.5th generation", "Wolfson WM8758BG"),
-}
-
-# The serial-number suffix mapping is the mechanism used by libgpod's device
-# catalog.  Keep this intentionally narrow until each additional model is
-# backed by a fixture and hardware-catalog entry.  WEE is deliberately omitted:
-# historical libgpod tables assign that suffix to more than one model.
-_SERIAL_SUFFIX_MODELS = {
-    "VQM": "MA446",
-    "V9M": "MA446",
-    "V9N": "MA446",
-}
-
-
-def model_from_serial(serial_number: str) -> tuple[str, str]:
-    """Return a verified model and the serial suffix that established it."""
-    serial = "".join(
-        char for char in str(serial_number or "").upper() if char.isalnum())
-    suffix = serial[-3:] if len(serial) >= 3 else ""
-    return _SERIAL_SUFFIX_MODELS.get(suffix, ""), suffix
+    artwork_database_sha256: str = ""
+    stock_format: StockWriteFormat | None = None
+    usb_family: str = ""
+    firewire_guid: str = ""
+    identity_conflict: bool = False
 
 
 def read_stock_ipod_header(root: str | Path) -> StockIpodHeader:
@@ -183,8 +169,8 @@ def confirmed_model_from_recovery(root: str | Path) -> str:
             value = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        model = normalize_model_number(str(value.get("model") or ""))
-        if supports_stock_write(model):
+        model = normalize_display_model(str(value.get("model") or ""))
+        if hardware_model(model) is not None:
             return model
     return ""
 
@@ -264,6 +250,11 @@ def read_stock_ipod_snapshot(
     firmware_source: str = "",
     transport_revision: str = "",
     native_capture: StockIpodNativeCapture | None = None,
+    usb_family: str = "",
+    firewire_guid: str = "",
+    observed_model_number: str = "",
+    observed_model_source: str = "",
+    identity_conflict: bool = False,
 ) -> StockIpodSnapshot:
     """Parse a complete, immutable view of a mounted classic stock iPod."""
     target = Path(root).expanduser().resolve(strict=True)
@@ -316,19 +307,34 @@ def read_stock_ipod_snapshot(
             location=str(raw.get("location") or ""),
             pending_plays=pending_plays,
             pending_skips=pending_skips,
+            year=int(raw.get("year") or 0),
+            bpm=int(raw.get("bpm") or 0),
+            comments=str(raw.get("Comment") or raw.get("comment") or ""),
         ))
 
-    model, serial_suffix = model_from_serial(serial_number)
-    model_source = f"serial suffix {serial_suffix}" if model else ""
-    if not model:
-        model = normalize_model_number(model_number)
+    model = normalize_display_model(observed_model_number)
+    model_source = (observed_model_source or "connected device metadata") if model else ""
+    serial_model, serial_suffix = model_from_serial(serial_number)
+    identity_conflict = identity_conflict or bool(model and serial_model and model != serial_model)
+    observed_hardware = hardware_model(model or serial_model)
+    if (observed_hardware is not None and usb_family in {"iPod Video", "iPod Classic"}
+            and observed_hardware.family != usb_family):
+        identity_conflict = True
+    if identity_conflict:
+        model, model_source = "", "conflicting device identity"
+    elif not model:
+        model = serial_model
+        model_source = f"serial suffix {serial_suffix}" if model else ""
+    if not model and not identity_conflict:
+        model = normalize_display_model(model_number)
         model_source = "remembered confirmation" if model else ""
-    if not model:
+    if not model and not identity_conflict:
         model = confirmed_model_from_recovery(target)
         if model:
             model_source = "previous SoundBox sync"
-    family, generation, dac_name = _HARDWARE_CATALOG.get(
-        model, ("Classic stock iPod", "Unknown generation", ""))
+    hardware = hardware_model(model)
+    family, generation, dac_name = ((hardware.family, hardware.generation, hardware.dac_name)
+        if hardware else (usb_family or "Classic stock iPod", "Unknown generation", ""))
     dac_source = f"verified {model} hardware catalog" if dac_name else ""
     identity_key = stock_ipod_device_key(volume_uuid, header.library_persistent_id)
     if not capacity_bytes or not free_bytes:
@@ -370,6 +376,11 @@ def read_stock_ipod_snapshot(
         recovery_count=recovery_count,
         tracks=tuple(tracks),
         playlists=_playlist_snapshots(database, raw_tracks),
+        artwork_database_sha256=captured.artwork_database_sha256,
+        stock_format=inspect_stock_write_format(captured.database, captured.artwork_database,
+            usb_family=usb_family, firewire_guid=firewire_guid or usb_serial),
+        usb_family=usb_family,
+        firewire_guid=firewire_guid or usb_serial,
         serial_number=str(serial_number or ""),
         serial_source=str(serial_source or ""),
         usb_serial=str(usb_serial or ""),
@@ -378,4 +389,5 @@ def read_stock_ipod_snapshot(
         transport_revision=str(transport_revision or ""),
         dac_name=dac_name,
         dac_source=dac_source,
+        identity_conflict=identity_conflict,
     )

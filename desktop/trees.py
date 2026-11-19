@@ -10,7 +10,7 @@ import math
 import json
 from uuid import UUID
 
-from PySide6.QtCore import QMimeData, QModelIndex, QPersistentModelIndex, QPoint, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QMimeData, QModelIndex, QPersistentModelIndex, QPoint, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QDrag, QFontMetrics, QIcon, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QLineEdit, QStyledItemDelegate, QTableView,
@@ -39,6 +39,14 @@ class CellEditDelegate(QStyledItemDelegate):
     """Opens the cell editor pre-filled with the existing text, cursor at the end
     (no select-all) — so you can tweak a word instead of retyping."""
 
+    def createEditor(self, parent, option, index):
+        editor = super().createEditor(parent, option, index)
+        view = self.parent()
+        if editor is not None and view is not None and hasattr(view, 'window'):
+            from .inline_drafts import owner_for
+            editor._inline_draft_owner = owner_for(view, index, editor)
+        return editor
+
     def setEditorData(self, editor, index):
         text = index.data(Qt.EditRole)
         if hasattr(editor, "setText"):
@@ -48,12 +56,39 @@ class CellEditDelegate(QStyledItemDelegate):
             if (isinstance(index.model(), TrackModel)
                     and hasattr(editor, "setMaxLength")
                     and index.column() < len(COLUMNS)):
-                editor.setMaxLength(_EDIT_MAX.get(COLUMNS[index.column()][0], 32767))
+                limit = _EDIT_MAX.get(COLUMNS[index.column()][0], 32767)
+                if editor.maxLength() != limit:editor.setMaxLength(limit)
+            owner = getattr(editor, '_inline_draft_owner', None)
+            if owner is not None:
+                if not owner.seed(editor, index):return
+            elif (editor.isModified()
+                    and getattr(editor, '_inline_seed_index', None) == index):
+                return
+            editor._inline_seed_index = QPersistentModelIndex(index)
             editor.setText("" if text is None else str(text))
             editor.deselect()
             editor.end(False)
         else:
             super().setEditorData(editor, index)
+
+    def setModelData(self, editor, model, index):
+        owner = getattr(editor, '_inline_draft_owner', None)
+        if owner is None:
+            return super().setModelData(editor, model, index)
+        with owner.commit(editor, index) as valid:
+            if valid:super().setModelData(editor, model, index)
+
+    def eventFilter(self, editor, event):
+        event_type = event.type()
+        if event_type == QEvent.KeyPress and event.key() == Qt.Key_Escape:
+            owner = getattr(editor, '_inline_draft_owner', None)
+            if owner is not None:owner.cancelled(editor)
+        return super().eventFilter(editor, event)
+
+    def destroyEditor(self, editor, index):
+        owner = getattr(editor, '_inline_draft_owner', None)
+        if owner is not None:owner.closed(editor)
+        super().destroyEditor(editor, index)
 
 
 

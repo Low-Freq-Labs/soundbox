@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import stat
 import tempfile
 import unittest
 from unittest import mock
@@ -18,6 +19,147 @@ from soundbox.sync import clean_applefiles
 
 
 class DeviceStaging(unittest.TestCase):
+    @contextmanager
+    def allocation_identity(self):
+        """Model the FD and name transition measured on a real FAT32 image."""
+        raw_open, raw_fstat, raw_stat = os.open, os.fstat, os.stat
+        handles = set()
+        observations = []
+        empty_inode = 18446744073709551604
+
+        def allocated(info):
+            if not stat.S_ISREG(info.st_mode):
+                return info
+            values = list(info)
+            if not info.st_size:
+                values[1] = empty_inode
+            return os.stat_result(values)
+
+        def open_stage(path, *args, **kwargs):
+            handle = raw_open(path, *args, **kwargs)
+            if Path(path).name.startswith('.soundbox-'):
+                handles.add(handle)
+                observations.append(allocated(raw_fstat(handle)).st_ino)
+            return handle
+
+        def fstat_stage(handle):
+            info = raw_fstat(handle)
+            if handle in handles:
+                info = allocated(info)
+                observations.append(info.st_ino)
+            return info
+
+        def stat_stage(path, *args, **kwargs):
+            info = raw_stat(path, *args, **kwargs)
+            if Path(path).name.startswith('.soundbox-'):
+                info = allocated(info)
+            return info
+
+        with mock.patch.object(device_staging.os, 'open', side_effect=open_stage), \
+                mock.patch.object(device_staging.os, 'fstat', side_effect=fstat_stage), \
+                mock.patch.object(device_staging.os, 'stat', side_effect=stat_stage):
+            yield observations
+
+    def test_allocation_identity_changes_allow_empty_and_nonempty_publication(self):
+        for kind in ('generic', 'cdj'):
+            for payload in (b'', b'new generation' * 20):
+                with self.subTest(kind=kind, empty=not payload), tempfile.TemporaryDirectory() as area:
+                    target = Path(area).resolve()
+                    session = (DeviceSession(target, []) if kind == 'generic' else
+                               CdjSession(target, [], token=target.stat().st_dev, volume_uuid='fixture'))
+                    destination = target / 'selected.wav'
+                    destination.write_bytes(b'previous generation')
+                    with self.allocation_identity() as observations:
+                        session.atomic_write(destination, payload)
+                    self.assertEqual(destination.read_bytes(), payload)
+                    self.assertEqual(list(target.glob('.soundbox-*.sbpart')), [])
+                    if payload:
+                        self.assertNotEqual(observations[0], observations[-1])
+                    else:
+                        self.assertEqual(len(set(observations)), 1)
+
+    def test_allocation_identity_failure_cleans_before_original_descriptor_closes(self):
+        for failure in ('body', 'fsync'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as area:
+                target = Path(area).resolve()
+                session = DeviceSession(target, [])
+                destination = target / 'selected.wav'
+                destination.write_bytes(b'previous generation')
+                with self.allocation_identity():
+                    with self.assertRaisesRegex(OSError, 'deliberate failure'):
+                        if failure == 'fsync':
+                            with mock.patch.object(device_staging.os, 'fsync',
+                                                   side_effect=OSError('deliberate failure')):
+                                session.atomic_write(destination, b'allocated generation')
+                        else:
+                            with session._staged_output(destination) as output:
+                                output.write(b'allocated generation')
+                                output.flush()
+                                raise OSError('deliberate failure')
+                self.assertEqual(destination.read_bytes(), b'previous generation')
+                self.assertEqual(list(target.glob('.soundbox-*.sbpart')), [])
+
+    def test_replaced_regular_stage_is_neither_published_nor_removed(self):
+        for original in (b'', b'owned allocated payload'):
+            for foreign in (b'', b'foreign replacement'):
+                with self.subTest(original=original, foreign=foreign), tempfile.TemporaryDirectory() as area:
+                    target = Path(area).resolve()
+                    session = DeviceSession(target, [])
+                    destination = target / 'selected.wav'
+                    destination.write_bytes(b'previous generation')
+                    occupant = target / '.soundbox-replaced.sbpart'
+                    with mock.patch.object(device_staging.secrets, 'token_hex', return_value='replaced'):
+                        with self.assertRaisesRegex(RuntimeError, 'temporary file changed'):
+                            with session._staged_output(destination) as output:
+                                output.write(original)
+                                output.flush()
+                                occupant.unlink()
+                                occupant.write_bytes(foreign)
+                    self.assertEqual(destination.read_bytes(), b'previous generation')
+                    self.assertEqual(occupant.read_bytes(), foreign)
+
+    def test_reused_identity_during_name_check_cannot_claim_a_replaced_stage(self):
+        with tempfile.TemporaryDirectory() as area:
+            target = Path(area).resolve()
+            session = DeviceSession(target, [])
+            destination = target / 'selected.wav'
+            destination.write_bytes(b'previous generation')
+            occupant = target / '.soundbox-replaced.sbpart'
+            raw_stat, raw_fstat = os.stat, os.fstat
+            replaced = False
+            stage_handle = None
+
+            def identity(info):
+                values = list(info)
+                values[1] = 1001
+                return os.stat_result(values)
+
+            def replace_during_stat(path, *args, **kwargs):
+                nonlocal replaced
+                if Path(path).name == occupant.name:
+                    if not replaced:
+                        replaced = True
+                        occupant.unlink()
+                        occupant.write_bytes(b'')
+                    return identity(raw_stat(path, *args, **kwargs))
+                return raw_stat(path, *args, **kwargs)
+
+            def fstat(handle):
+                info = raw_fstat(handle)
+                return identity(info) if handle == stage_handle else info
+
+            with mock.patch.object(device_staging.secrets, 'token_hex', return_value='replaced'), \
+                    mock.patch.object(device_staging.os, 'stat', side_effect=replace_during_stat), \
+                    mock.patch.object(device_staging.os, 'fstat', side_effect=fstat):
+                with self.assertRaisesRegex(RuntimeError, 'temporary file changed'):
+                    with session._staged_output(destination) as output:
+                        stage_handle = output.fileno()
+            # APFS exposes the unlinked descriptor as nlink0. FAT32 may retain
+            # nlink1, so actual FAT replacement identity has separate coverage.
+            self.assertTrue(replaced)
+            self.assertEqual(destination.read_bytes(), b'previous generation')
+            self.assertEqual(occupant.read_bytes(), b'')
+
     def test_cleanup_parent_swap_after_listing_preserves_both_original_folders(self):
         with tempfile.TemporaryDirectory() as area:
             root = Path(area).resolve()
@@ -335,3 +477,21 @@ class DeviceStaging(unittest.TestCase):
                 self.assertEqual(len(calls), 1)
                 self.assertEqual(source.read_bytes(), raw)
                 self.assertEqual(destination.read_bytes(), raw)
+
+    def test_concat_preserves_multiple_segments_without_whole_file_copy(self):
+        import posix
+        with tempfile.TemporaryDirectory() as area:
+            root = Path(area).resolve()
+            source_root = root / 'sources'
+            source_root.mkdir()
+            sources = [source_root / 'first', source_root / 'second', source_root / 'third']
+            payloads = [b'first' * 8193, b'second' * 16385, b'tail']
+            for source, payload in zip(sources, payloads, strict=True):
+                source.write_bytes(payload)
+            session = DeviceSession(root / 'device', sources)
+            destination = session.target / 'concatenated.ithmb'
+            with mock.patch.object(posix, '_fcopyfile',
+                    side_effect=AssertionError('Concatenation must preserve stream offsets'), create=True):
+                session.atomic_concat(sources, destination)
+            self.assertEqual(destination.read_bytes(), b''.join(payloads))
+            self.assertEqual([source.read_bytes() for source in sources], payloads)

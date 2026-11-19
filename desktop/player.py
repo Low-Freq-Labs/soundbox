@@ -892,6 +892,14 @@ class WaveformBar(QWidget):
         self._drag_preview_ms = position
         self.set_timing(position, self._duration_ms)
 
+    def cancel_drag(self):
+        """Release mouse ownership without committing an obsolete seek."""
+        self._drag_origin_ms = None
+        self._drag_preview_ms = None
+        self._drag_moved = False
+        self._overview_drag = False
+        self.setCursor(Qt.CursorShape.OpenHandCursor if self._active else Qt.CursorShape.ArrowCursor)
+
     def _seek_to_ms(self, target: int | float, snap: bool = True):
         if not self._duration_ms:
             return
@@ -1481,38 +1489,47 @@ class CuePanel(QWidget):
         self._refresh()
 
     def _refresh(self):
+        rendered=getattr(self,'_rendered_cues',{})
         for kind, buttons in (
                 ("hot", self.hot_slots), ("memory", self.memory_slots)):
             for slot, button in enumerate(buttons):
                 cue = self._cues[kind][slot]
+                state=(cue,self._loaded,self._editable,self._edit_reason)
+                previous=rendered.get((kind,slot))
+                if previous==state:
+                    continue
+                rendered[kind,slot]=(dict(cue) if cue else None,
+                    self._loaded,self._editable,self._edit_reason)
                 label = chr(ord("A") + slot) if kind == "hot" else str(slot + 1)
                 filled_changed = button.property("filled") != (cue is not None)
                 if filled_changed:
                     button.setProperty("filled", cue is not None)
                 if cue is None:
-                    button.setText(f"{label}   —")
-                    button.setIcon(QIcon())
-                    button.setStyleSheet('')
+                    if previous is None or previous[0] is not None:
+                        button.setText(f"{label}   —")
+                        button.setIcon(QIcon())
+                        button.setStyleSheet('')
                     button.setToolTip(
                         'Set at the current position' if self._editable else
                         self._edit_reason or f"{'Hot' if kind == 'hot' else 'Memory'} cue {label}")
                     button.setEnabled(self._loaded and self._editable)
                 else:
                     position = max(0, int(cue.get("position_ms", 0)))
-                    button.setText(f"{label}  {_fmt(position)}")
-                    raw_color = (_MEMORY_CUE_COLOR if kind == "memory"
-                                 else self._HOT_COLORS[slot])
-                    color = (QColor(*raw_color) if isinstance(raw_color, list)
-                             else QColor(raw_color))
-                    pixmap = QPixmap(20, 20)
-                    pixmap.setDevicePixelRatio(2.0)
-                    pixmap.fill(color)
-                    button.setIcon(QIcon(pixmap))
-                    button.setIconSize(QSize(10, 10))
-                    rim = color.darker(160).name()
-                    button.setStyleSheet(
-                        f'QPushButton {{ border-color: {rim}; }}'
-                        f'QPushButton:hover, QPushButton:pressed {{ border-color: {color.name()}; }}')
+                    if previous is None or previous[0]!=cue:
+                        button.setText(f"{label}  {_fmt(position)}")
+                        raw_color = (_MEMORY_CUE_COLOR if kind == "memory"
+                                     else self._HOT_COLORS[slot])
+                        color = (QColor(*raw_color) if isinstance(raw_color, list)
+                                 else QColor(raw_color))
+                        pixmap = QPixmap(20, 20)
+                        pixmap.setDevicePixelRatio(2.0)
+                        pixmap.fill(color)
+                        button.setIcon(QIcon(pixmap))
+                        button.setIconSize(QSize(10, 10))
+                        rim = color.darker(160).name()
+                        button.setStyleSheet(
+                            f'QPushButton {{ border-color: {rim}; }}'
+                            f'QPushButton:hover, QPushButton:pressed {{ border-color: {color.name()}; }}')
                     details = [cue.get("label") or "",
                                f"{'Loop' if cue.get('type') == 'loop' else 'Cue'}"
                                f" at {_fmt(position)}",
@@ -1523,6 +1540,7 @@ class CuePanel(QWidget):
                 # Every filled/unfilled transition changes the local sheet,
                 # which already repolishes after the property update. Avoid
                 # querying its borrowed, replaced stylesheet-style wrapper.
+        self._rendered_cues=rendered
 
     def _press(self, kind: str, slot: int):
         cue = self._cues[kind][slot]
@@ -2018,6 +2036,7 @@ class PlayerBar(QWidget):
             # A polled PAUSED snapshot during refill is not a user pause; a
             # momentary CUE preview is not ordinary playback either.
             autoplay = self._wants_ordinary_playback()
+        self._begin_transport_intent()
         if changed:
             self._ordinary_playback_requested = False
         if changed and (self.is_playing() or self._pause_pending):
@@ -2129,6 +2148,16 @@ class PlayerBar(QWidget):
     def _begin_transport_intent(self) -> int:
         """Invalidate every completion created by an older user command."""
         self._transport_epoch += 1
+        if self._deck_drag_active or self._deck_drag_target is not None:
+            self._deck_drag_active = False
+            self._deck_drag_resume = False
+            self._deck_drag_target = None
+            self.wave.cancel_drag()
+            # Grabbing a playing waveform muted/paused it synchronously. A
+            # newer command now owns the clock and must also release its visual
+            # hold; the obsolete mouse-up cannot restore the old preview.
+            self.audio.setVolume(self._deck_volume)
+            self._on_pos(self.player.position())
         return self._transport_epoch
 
     def _mark_load_phase(self, phase: str):
@@ -2224,7 +2253,17 @@ class PlayerBar(QWidget):
             after()
 
     def toggle(self):
+        held_playback = self._deck_drag_active and self._deck_drag_resume
         self._begin_transport_intent()
+        if held_playback:
+            # The grab paused the decoder, but PLAY still represents the
+            # original ordinary playback intent. Space now explicitly pauses
+            # that intent instead of starting audio underneath the hand.
+            self._ordinary_playback_requested = False
+            self._transport_play_active = False
+            self._pause_clean()
+            self._sync_deck_button_states()
+            return
         if self._cue_preview_active and not self._cue_preview_latched:
             # Pressing play/Space while a cue is held converts the momentary
             # preview into normal playback. Releasing the cue will no longer
@@ -2531,10 +2570,16 @@ class PlayerBar(QWidget):
 
     def _move_clean(self, target: int | float):
         """Move once at silence, resuming only if the deck was playing."""
-        if self.is_playing() and not self._pause_pending:
+        resume = (self._wants_ordinary_playback()
+                  or (self.is_playing() and not self._pause_pending))
+        self._begin_transport_intent()
+        if self.is_playing() or self._pause_pending:
             def finish():
                 self._set_position(target)
-                self._play_clean()
+                if resume:
+                    self._play_clean()
+                else:
+                    self._arm_session_cue_relocation()
             self._pause_clean(finish)
         else:
             self._set_position(target)
@@ -2549,9 +2594,11 @@ class PlayerBar(QWidget):
     def _on_wave_drag_started(self):
         if self._deck_drag_active:
             return
+        self._begin_transport_intent()
         self._deck_drag_active = True
         self._deck_drag_target = None
-        self._deck_drag_resume = self.is_playing() and not self._pause_pending
+        self._deck_drag_resume = (self._wants_ordinary_playback()
+                                 or (self.is_playing() and not self._pause_pending))
         # Freeze Metal under the hand at its own continuous render clock, then
         # make that exact frame the waveform's relative-drag origin. The older
         # Python poll can lag between frames and caused a small click-side jerk.
@@ -2561,7 +2608,7 @@ class PlayerBar(QWidget):
             self.wave.reanchor_drag(self._pos)
         elif hasattr(self.player, "set_visual_position"):
             self.player.set_visual_position(self._pos, True)
-        if self._deck_drag_resume:
+        if self.is_playing() or self._pause_pending:
             # A hand taking the moving waveform owns transport immediately.
             # The ordinary pause envelope intentionally advances to its fade
             # endpoint; using it here lets audio keep travelling after Metal

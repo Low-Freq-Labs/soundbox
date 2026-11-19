@@ -92,6 +92,13 @@ def validate(queue):
                 or job.get('prepared') is not None and not isinstance(job['prepared'], dict)):
             raise ValueError('Invalid pending prep identity')
         if job['version']==2 and not job['native_ready']:raise ValueError('Native prep requires registered analysis')
+        binding_keys=('native_id','source_uuid','native_path')
+        if any(key in job for key in binding_keys):
+            if (any(not isinstance(job.get(key),str) or not job[key] or '\0' in job[key]
+                    for key in binding_keys)
+                    or len(job['native_id'])>128 or len(job['source_uuid'])>128
+                    or len(job['native_path'])>32768 or not job['native_path'].startswith('/')):
+                raise ValueError('Invalid captured prep track binding')
         if (type(job.get('identity_pending',False)) is not bool or job.get('identity_pending') and
                 (job['version']!=1 or not _hex(job['sha256']) or job['prepared'] is not None)):
             raise ValueError('Invalid pending prep audio proof')

@@ -14,6 +14,7 @@ from .cdj_transaction import CdjPlan, CdjSession, load_manifest, read_manifest, 
 from .cdj_usb import (CATALOG_RENDER_POLICY, DATABASE_FILES, DISPLAY_FIELDS, digest, default_display, patch_display,
                       read_library, read_profiles, run_renderer)
 from .source_acquisition import SourceContract, acquire_source
+from .operation_control import OperationCancelled
 
 
 def _stable_id(key):
@@ -159,7 +160,7 @@ def plan_export(library, playlists, target, *, token, volume_uuid, all_playlists
         assets = []
         for i, (track, dto) in enumerate(zip(tracks, request['tracks'])):
             if should_cancel():
-                raise RuntimeError('CDJ preparation cancelled')
+                raise OperationCancelled('CDJ preparation cancelled')
             if track.path.suffix.lower() not in ('.wav', '.mp3', '.aif', '.aiff', '.flac', '.m4a'):
                 raise ValueError(f'Unsupported CDJ audio format: {track.name}')
             canonical = Path(dto['source_path']).resolve(strict=True)
@@ -412,7 +413,7 @@ def verify(target, *, token, volume_uuid, deep=False, should_cancel=lambda:False
     result['entries'] = sum(len(p.entries) for p in native.playlists)
     for path, contract in previous['files'].items():
         if should_cancel():
-            raise RuntimeError('CDJ verification cancelled')
+            raise OperationCancelled('CDJ verification cancelled')
         local = session.guard(session.target/path)
         try:
             size = local.stat().st_size

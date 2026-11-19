@@ -5,12 +5,13 @@ from pathlib import Path
 from types import SimpleNamespace
 import tempfile
 import unittest
+from unittest import mock
 
 from sqlalchemy import String, create_engine, event
 from sqlalchemy.orm import Session
 from sqlalchemy.schema import CreateTable
 from pyrekordbox.db6.tables import (
-    ContentCue, DjmdAlbum, DjmdArtist, DjmdContent, DjmdCue, DjmdGenre, DjmdKey, DjmdLabel,
+    ContentCue, DjmdAlbum, DjmdArtist, DjmdContent, DjmdCue, DjmdGenre, DjmdKey, DjmdLabel,DjmdSongPlaylist,
 )
 
 from soundbox import rekordbox_db as reader
@@ -108,3 +109,60 @@ class NativeReaderEfficiency(unittest.TestCase):
         content = [parameters for statement, parameters in self.sql if 'LEFT OUTER JOIN' in statement]
         self.assertEqual(len(content), 1)
         self.assertEqual(set(content[0]), selected)
+
+
+class NativeMembershipEfficiency(unittest.TestCase):
+    def setUp(self):
+        self.engine=create_engine('sqlite:///:memory:');self.addCleanup(self.engine.dispose)
+        with self.engine.begin() as connection:
+            connection.exec_driver_sql(str(CreateTable(DjmdSongPlaylist.__table__).compile(self.engine)).replace('NOT NULL',''))
+            rows=[dict(ID=str(index),PlaylistID='p',ContentID='track-'+str(index),TrackNo=1205-index,
+                       rb_local_deleted=1 if index%17==0 else None if index%19==0 else 0) for index in range(1205)]
+            rows.extend([dict(ID='history',PlaylistID='deleted',ContentID='track-history',TrackNo=None,rb_local_deleted=0),
+                         dict(ID='other',PlaylistID='q',ContentID='track-other',TrackNo=1,rb_local_deleted=0)])
+            connection.execute(DjmdSongPlaylist.__table__.insert(),rows)
+        self.session=Session(self.engine);self.addCleanup(self.session.close)
+        self.nodes=[SimpleNamespace(ID=identity,Name=name,Attribute=0,ParentID='root',Seq=index+1,
+            rb_local_deleted=int(identity=='deleted')) for index,(identity,name) in enumerate(
+                (('p','Manual order'),('q','Other'),('deleted','Historical')))]
+        self.db=SimpleNamespace(get_playlist=lambda:self.nodes,query=self.session.query)
+        self.statements=[]
+        event.listen(self.engine,'before_cursor_execute',lambda _c,_cur,statement,parameters,_ctx,_many:
+            self.statements.append((statement,parameters)))
+
+    def legacy(self,active,selected=None):
+        class LegacyRows:
+            def all(inner):return self.session.query(DjmdSongPlaylist).all()
+        db=SimpleNamespace(get_playlist=lambda:self.nodes,query=lambda _entity:LegacyRows())
+        result=reader._read_playlists(db,active,selected_ids=selected)
+        self.session.expunge_all();return result
+
+    def test_bounded_scalar_memberships_match_full_mapped_reader_without_orm_identity_debt(self):
+        active={'track-'+str(index) for index in range(1205) if index%13} | {'track-other'}
+        expected=self.legacy(active);self.statements.clear()
+        actual=reader._read_playlists(self.db,active)
+        self.assertEqual(actual,expected)
+        self.assertEqual(actual[0].keys,[f'track-{index}' for index in reversed(range(1205)) if index%13 and index%17])
+        self.assertEqual(actual[1].keys,['track-other'])
+        self.assertFalse(self.session.identity_map)
+        self.assertEqual(len(self.statements),1)
+        self.assertNotIn('created_at',self.statements[0][0])
+
+    def test_selected_scope_and_duplicate_track_number_guards_match_full_mapped_reader(self):
+        active={'track-'+str(index) for index in range(1205)} | {'track-other'}
+        expected=self.legacy(active,{'q'})
+        self.assertEqual(reader._read_playlists(self.db,active,selected_ids={'q'}),expected)
+        with self.engine.begin() as connection:
+            connection.exec_driver_sql('UPDATE djmdSongPlaylist SET TrackNo=7 WHERE ID IN (?,?)',('1','2'))
+        self.assertEqual(reader._read_playlists(self.db,active,selected_ids={'q'}),expected)
+        with self.assertRaisesRegex(ValueError,'duplicate TrackNo'):
+            reader._read_playlists(self.db,active)
+        with self.assertRaisesRegex(ValueError,'duplicate TrackNo'):self.legacy(active)
+
+    def test_selected_smart_only_view_does_not_query_unselected_manual_memberships(self):
+        smart=SimpleNamespace(ID='smart',Name='Smart',Attribute=4,ParentID='root',Seq=1,rb_local_deleted=0)
+        db=SimpleNamespace(get_playlist=lambda:[smart],query=mock.Mock(side_effect=AssertionError('No manual membership read')),
+            get_playlist_contents=lambda _node:[SimpleNamespace(ID='track-other')])
+        result=reader._read_playlists(db,{'track-other'},selected_ids={'smart'})
+        self.assertEqual([(playlist.pid,playlist.keys) for playlist in result],[('smart',['track-other'])])
+        db.query.assert_not_called()

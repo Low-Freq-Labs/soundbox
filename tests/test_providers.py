@@ -35,7 +35,7 @@ class ProviderComposition(unittest.TestCase):
         self.assertEqual(public.actions, ())
         self.assertEqual(set(composition("public")["excludes"]),
                          {"yt_dlp", "soundbox_personal", "research", "tests",
-                          "sqlalchemy.testing", "sqlalchemy.ext.mypy", "mypy", "ast_serialize"})
+                          "sqlalchemy.testing", "sqlalchemy.ext.mypy", "mypy", "ast_serialize", "Crypto.SelfTest"})
 
     def test_missing_or_broken_provider_preserves_core(self):
         manifest = composition("personal")["manifest"]
@@ -150,7 +150,7 @@ with mock.patch.object(QStandardPaths, 'writableLocation', return_value=str(root
         (root / 'sources').mkdir()
         src = root / 'sources' / 'source.mp3'
         src.write_bytes(b'synthetic source')
-        library = Library({'1': Track('1','Track','Artist',src.as_uri())}, [Playlist('Set', [], keys=['1'])], source='synthetic')
+        library = Library({'1': Track('1','Track','Artist',src.as_uri())}, [Playlist('Set', [], keys=['1'])], source=root/'sources'/'synthetic.xml')
         target = root / 'USB'
         report = sync.run(library, library.playlists, target, dry_run=True)
         assert report.bytes_to_copy == src.stat().st_size

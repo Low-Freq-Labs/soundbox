@@ -17,12 +17,15 @@ datas = [(str(manifest), "."), ("assets/soundbox-wordmark.svg", "assets"),
          ("native/cdj/vendor/rbxport/crates/rbl-deck/vendor/rubberband/COPYING", "licenses/rbxport")]
 binaries = [("build/native/libsoundbox_deck.dylib", "native"),
             ("build/native/libsoundbox_process_guard.dylib", "native"),
+            ("build/native/soundbox-ipod-identity", "native"),
             ("build/cdj/release/soundbox-cdj", "native")]
 hiddenimports = []
 for package in config["submodules"]:
     hiddenimports += collect_submodules(package, filter=runtime_submodule)
 for package in config["collections"]:
-    data, binary, imports = collect_all(package)
+    options = (dict(include_py_files=False, filter_submodules=runtime_submodule,
+                    exclude_datas=["**/SelfTest/**"]) if package == "Crypto" else {})
+    data, binary, imports = collect_all(package, **options)
     datas += data
     binaries += binary
     hiddenimports += imports
@@ -36,7 +39,7 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=[str(Path(SPECPATH) / 'soundbox' / 'packaged_worker_hook.py')],
     excludes=config["excludes"],
     noarchive=False,
     optimize=0,

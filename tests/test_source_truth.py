@@ -91,6 +91,18 @@ class SourceCurationScopes(unittest.TestCase):
         self.assertEqual(restored['settings'][truth.CURATION]['partitions'][truth.scope_key(truth.scope(other))]
                          ['curation']['top']['title_overrides'],{'2':'Second library title'})
 
+    def test_archived_curation_and_refreshed_header_detach_from_later_input_mutations(self):
+        original=document();scoped=truth.stage_scope(original,self.lib,bootstrap=True)
+        refreshed=truth.stage_scope(scoped,self.lib,previous=self.lib)
+        refreshed['settings'][truth.CURATION]['active']['pins']['1']['path']='changed header'
+        self.assertNotEqual(scoped['settings'][truth.CURATION]['active']['pins']['1']['path'],'changed header')
+        other=library(identity='2',uuid='uuid-two',source='/other/master.db',library_id='456')
+        switched=truth.stage_scope(scoped,other,previous=self.lib)
+        archived=deepcopy(switched['settings'][truth.CURATION]['partitions'])
+        scoped['title_overrides']['1']='Newer original title'
+        scoped['settings']['track_info']['1']['title']='Newer physical title'
+        self.assertEqual(switched['settings'][truth.CURATION]['partitions'],archived)
+
     def test_same_source_track_or_playlist_uuid_replacement_is_refused_but_same_uuid_relocation_is_safe(self):
         state=truth.stage_scope(document(),self.lib,bootstrap=True)
         replaced=replace(self.lib,tracks_by_id={'1':replace(self.lib.tracks_by_id['1'],source_uuid='new')})

@@ -17,6 +17,8 @@ import subprocess
 import sys
 import tempfile
 
+from .operation_control import OperationCancelled
+
 PROFILE_FILES = ('DEVSETTING.DAT', 'MYSETTING.DAT', 'MYSETTING2.DAT',
                  'DJMMYSETTING.DAT', 'djprofile.nxs')
 DATABASE_FILES = tuple('PIONEER/rekordbox/' + name for name in
@@ -61,7 +63,7 @@ def run_renderer(command, workspace, *args, should_cancel=None, process_nice=Non
                 except subprocess.TimeoutExpired:
                     if should_cancel and should_cancel():
                         process.terminate()
-                        raise RuntimeError('CDJ preparation cancelled')
+                        raise OperationCancelled('CDJ preparation cancelled')
             output.seek(0)
             errors.seek(0)
             if status:
@@ -241,7 +243,7 @@ def read_library(target, token, *, allow_pending=False, check_pair=False, snapsh
     """Copy only native databases/profiles; parse local copies, never live SQL."""
     def cancelled():
         if should_cancel and should_cancel():
-            raise RuntimeError('CDJ preparation cancelled')
+            raise OperationCancelled('CDJ preparation cancelled')
     cancelled()
     if not snapshot_only:assert_no_database_journals(target,token)
     session = CdjReadSession(target, token)

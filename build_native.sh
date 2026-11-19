@@ -8,4 +8,4 @@ cmake -S native -B build/native \
   -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0
 cmake --build build/native --config Release --parallel
 
-echo "Built: build/native/libsoundbox_deck.dylib and libsoundbox_process_guard.dylib"
+echo "Built: native deck/process libraries and soundbox-ipod-identity"

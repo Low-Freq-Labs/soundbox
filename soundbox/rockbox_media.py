@@ -27,7 +27,7 @@ from mutagen.flac import FLAC
 from mutagen.id3 import COMM, ID3, TIT2, TPE1, TXXX
 from mutagen.mp4 import MP4
 
-from .operation_control import checkpoint, phase_progress, record_metric
+from .operation_control import OperationCancelled, checkpoint, phase_progress, record_metric
 from . import artencode
 
 
@@ -44,7 +44,9 @@ _LEGACY_NORMALIZED_MEDIA_PROFILES = frozenset({
     "rockbox-no-embedded-art-normalized-tags-v4",
     "rockbox-no-embedded-art-normalized-tags-no-purchase-receipts-v1",
 })
-ART_PROFILE = "rockbox-paletted8-bmp-universal-v6"
+# V6 could hash one source epoch and encode a later replacement. Its payload
+# self-hash cannot identify that poisoned association, so do not reuse it.
+ART_PROFILE = "rockbox-paletted8-bmp-universal-v7"
 
 
 from .source_acquisition import SourceContract, acquire_source, SourceAcquisitionError
@@ -57,7 +59,11 @@ class RockboxMediaError(RuntimeError):
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+        while True:
+            checkpoint()
+            chunk = handle.read(1024 * 1024)
+            if not chunk:
+                break
             digest.update(chunk)
     return digest.hexdigest()
 
@@ -177,10 +183,12 @@ def _hash_ranges(path: Path, ranges: list[tuple[int, int]]) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for offset, size in ranges:
+            checkpoint()
             digest.update(struct.pack(">Q", size))
             handle.seek(offset)
             remaining = size
             while remaining:
+                checkpoint()
                 chunk = handle.read(min(1024 * 1024, remaining))
                 if not chunk:
                     raise RockboxMediaError(
@@ -468,6 +476,7 @@ def _riff_info_chunk(title: str, artist: str) -> bytes:
 def _copy_exact(source, destination, size: int, path: Path) -> None:
     remaining = size
     while remaining:
+        checkpoint()
         chunk = source.read(min(1024 * 1024, remaining))
         if not chunk:
             raise RockboxMediaError(f"WAV ended unexpectedly: {path}")
@@ -495,6 +504,7 @@ def _write_riff_info(path: Path, title: str, artist: str) -> None:
         if header[:4] != b"RIFF" or header[8:12] != b"WAVE":
             raise RockboxMediaError(f"Unsupported WAV metadata layout: {path}")
         while source.tell() < total:
+            checkpoint()
             offset = source.tell()
             chunk_header = source.read(8)
             if not chunk_header:
@@ -529,6 +539,7 @@ def _write_riff_info(path: Path, title: str, artist: str) -> None:
             destination.write(b"RIFF\0\0\0\0WAVE")
             inserted = False
             for kind, offset, size in chunks:
+                checkpoint()
                 source.seek(offset)
                 _copy_exact(source, destination, size, path)
                 if not inserted and kind == b"fmt ":
@@ -544,6 +555,7 @@ def _write_riff_info(path: Path, title: str, artist: str) -> None:
             destination.write(struct.pack("<I", final_size - 8))
             destination.flush()
             os.fsync(destination.fileno())
+        checkpoint()
         os.replace(temp, path)
     finally:
         temp.unlink(missing_ok=True)
@@ -695,6 +707,7 @@ class RockboxMediaCache:
     ) -> PreparedRockboxMedia:
         original = Path(source).expanduser().resolve(strict=True)
         try:
+            checkpoint()
             with acquire_source(
                 SourceContract(original, expected_size, expected_sha256),
                 self.root / "acquisition",
@@ -709,6 +722,8 @@ class RockboxMediaCache:
                     source_ctime_ns=snapshot.observation.st_ctime_ns,
                     source_device=snapshot.observation.st_dev,
                     source_inode=snapshot.observation.st_ino)
+        except OperationCancelled:
+            raise
         except SourceAcquisitionError as exc:
             raise RockboxMediaError(str(exc)) from exc
         finally:
@@ -727,8 +742,10 @@ class RockboxMediaCache:
             source_hash: str,
     ) -> PreparedRockboxMedia:
         original = Path(source).expanduser().resolve(strict=True)
+        checkpoint()
         phase_progress("Preparing audio", 0, original.stat().st_size, original.name)
         count = _embedded_picture_count(original)
+        checkpoint()
         normalize_tags = title is not None or artist is not None
         if normalize_tags and (title is None or artist is None):
             raise RockboxMediaError(
@@ -739,6 +756,7 @@ class RockboxMediaCache:
             entry.mkdir(parents=True, exist_ok=True)
             payload = entry / original.name
             size = original.stat().st_size
+            checkpoint()
             os.replace(original, payload)
             return PreparedRockboxMedia(
                 original, payload, False, 0, size, source_hash, profile)
@@ -783,17 +801,22 @@ class RockboxMediaCache:
         os.close(fd)
         temp = Path(temp_name)
         try:
+            checkpoint()
             before_technical = _technical_signature(original)
+            checkpoint()
             before_essence = _audio_essence(original)
+            checkpoint()
             original_size = original.stat().st_size
             # The snapshot is disposable. Move it into the working derivative
             # once its verification facts are captured, so RIFF rewriting never
             # retains a third whole-track copy.
             os.replace(original, temp)
             removed = _strip_embedded_pictures(temp)
+            checkpoint()
             if normalize_tags:
                 assert title is not None and artist is not None
                 _normalize_display_tags(temp, title, artist)
+                checkpoint()
             if removed != count or _embedded_picture_count(temp):
                 raise RockboxMediaError(
                     f"Embedded artwork remained after preparing {original}")
@@ -807,6 +830,7 @@ class RockboxMediaCache:
                 raise RockboxMediaError(
                     f"Rockbox display tags failed verification for {original}")
             payload_hash = _sha256(temp)
+            checkpoint()
             os.replace(temp, payload)
             row = {
                 "profile": profile,
@@ -1180,7 +1204,7 @@ class RockboxArtworkCache:
                 key: row for key, row in (raw.items() if isinstance(raw, dict) else ())
                 if isinstance(row, dict)
                 and all(type(row.get(field)) is int
-                        for field in ("size", "mtime_ns", "ctime_ns"))
+                        for field in ("dev", "ino", "size", "mtime_ns", "ctime_ns"))
                 and isinstance(row.get("source_sha256"), str)
                 and len(row["source_sha256"]) == 64
                 and all(c in "0123456789abcdef" for c in row["source_sha256"])
@@ -1192,6 +1216,8 @@ class RockboxArtworkCache:
     def _remember_source(
             self, source: Path, stat: os.stat_result, sha256: str) -> None:
         row = {
+            "dev": stat.st_dev,
+            "ino": stat.st_ino,
             "size": stat.st_size,
             "mtime_ns": stat.st_mtime_ns,
             "ctime_ns": stat.st_ctime_ns,
@@ -1212,6 +1238,72 @@ class RockboxArtworkCache:
         )
         self._source_index_dirty = False
 
+    @staticmethod
+    def _epoch(stat: os.stat_result) -> tuple[int, ...]:
+        return (stat.st_dev, stat.st_ino, stat.st_size,
+                stat.st_mtime_ns, stat.st_ctime_ns)
+
+    @classmethod
+    def _capture_source(cls, source: Path) -> tuple[bytes, os.stat_result]:
+        for _attempt in range(2):
+            checkpoint()
+            if source.resolve(strict=True) != source:
+                raise RockboxMediaError(f"Curated artwork identity changed: {source}")
+            before = source.stat()
+            with source.open("rb") as handle:
+                opened = os.fstat(handle.fileno())
+                # Bound this read even if another process keeps extending the
+                # image. An unstable read retries once, without encoding it.
+                data = handle.read(before.st_size + 1)
+                closed = os.fstat(handle.fileno())
+            checkpoint()
+            after = source.stat()
+            if source.resolve(strict=True) != source:
+                raise RockboxMediaError(f"Curated artwork identity changed: {source}")
+            if (cls._epoch(before) == cls._epoch(opened)
+                    == cls._epoch(closed) == cls._epoch(after)
+                    and len(data) == after.st_size):
+                return data, after
+        raise RockboxMediaError(f"Curated artwork remained unstable: {source}")
+
+    def _entry(self, source_hash: str, side: int) -> Path:
+        key = hashlib.sha256(
+            f"{ART_PROFILE}\0{side}\0{source_hash}".encode("ascii")).hexdigest()
+        return self.root / ART_PROFILE / key
+
+    def _load(
+            self, original: Path, source_hash: str, side: int,
+            verify_cache: bool,
+    ) -> PreparedRockboxArtwork | None:
+        entry = self._entry(source_hash, side)
+        payload = entry / f"cover.{side}x{side}.bmp"
+        manifest_path = entry / "manifest.json"
+        try:
+            row = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if not isinstance(row, dict):
+                return None
+            payload_hash = row.get("sha256")
+            if not (isinstance(payload_hash, str) and len(payload_hash) == 64
+                    and all(c in "0123456789abcdef" for c in payload_hash)):
+                return None
+            if (
+                row.get("profile") == ART_PROFILE
+                and int(row.get("side") or 0) == side
+                and row.get("source_sha256") == source_hash
+                and payload.is_file()
+                and payload.stat().st_size == int(row.get("size") or -1)
+                and (
+                    not verify_cache
+                    or _sha256(payload) == payload_hash
+                )
+            ):
+                return PreparedRockboxArtwork(
+                    original, payload, payload.stat().st_size,
+                    payload_hash, side)
+        except (OSError, ValueError, TypeError, OverflowError):
+            pass
+        return None
+
     def prepare(
             self,
             source: str | Path,
@@ -1225,41 +1317,31 @@ class RockboxArtworkCache:
         stat = original.stat()
         indexed = self._source_index.get(str(original)) or {}
         source_hash = str(indexed.get("source_sha256") or "")
-        if not (
-            len(source_hash) == 64
-            and int(indexed.get("size") or -1) == stat.st_size
-            and int(indexed.get("mtime_ns") or -1) == stat.st_mtime_ns
-            and int(indexed.get("ctime_ns") or -1) == stat.st_ctime_ns
-        ):
-            source_hash = _sha256(original)
-            self._remember_source(original, stat, source_hash)
-        key = hashlib.sha256(
-            f"{ART_PROFILE}\0{side}\0{source_hash}".encode("ascii")).hexdigest()
-        entry = self.root / ART_PROFILE / key
-        payload = entry / f"cover.{side}x{side}.bmp"
-        manifest_path = entry / "manifest.json"
-        try:
-            row = json.loads(manifest_path.read_text(encoding="utf-8"))
-            if (
-                isinstance(row, dict)
-                and row.get("profile") == ART_PROFILE
-                and int(row.get("side") or 0) == side
-                and row.get("source_sha256") == source_hash
-                and payload.is_file()
-                and payload.stat().st_size == int(row.get("size") or -1)
-                and (
-                    not verify_cache
-                    or _sha256(payload) == row.get("sha256")
-                )
-            ):
-                return PreparedRockboxArtwork(
-                    original, payload, payload.stat().st_size,
-                    str(row["sha256"]), side)
-        except (OSError, ValueError, TypeError, OverflowError):
-            pass
-        encoded = artencode.to_rockbox_cover(original.read_bytes(), side)
+        if (len(source_hash) == 64
+                and tuple(indexed.get(field) for field in
+                          ("dev", "ino", "size", "mtime_ns", "ctime_ns"))
+                == self._epoch(stat)):
+            ready = self._load(original, source_hash, side, verify_cache)
+            if (ready is not None
+                    and original.resolve(strict=True) == original
+                    and self._epoch(original.stat()) == self._epoch(stat)):
+                return ready
+
+        # A warm source index alone cannot bind pixels on a cache miss. Hash
+        # and encode this one stable captured buffer, including new sizes and
+        # corrupt/deleted derivative repair.
+        data, stat = self._capture_source(original)
+        source_hash = hashlib.sha256(data).hexdigest()
+        self._remember_source(original, stat, source_hash)
+        ready = self._load(original, source_hash, side, verify_cache)
+        if ready is not None:
+            return ready
+        encoded = artencode.to_rockbox_cover(data, side)
         if encoded is None:
             raise RockboxMediaError(f"Could not prepare Rockbox cover: {original}")
+        entry = self._entry(source_hash, side)
+        payload = entry / f"cover.{side}x{side}.bmp"
+        manifest_path = entry / "manifest.json"
         entry.mkdir(parents=True, exist_ok=True)
         _atomic_write(payload, encoded)
         payload_hash = hashlib.sha256(encoded).hexdigest()

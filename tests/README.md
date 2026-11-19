@@ -3,6 +3,7 @@
 Behavioral, property, recovery, UI, native audio and Metal contracts.
 
 - `test_*.py`: discovered suites; native deck cases run serially under Cocoa.
+- `test_device_staging_filesystems.py`: real, private FAT32/exFAT image publication; never connected physical disks.
 - [support](support/README.md): shared pure builders and native source loading; no tests at import time.
 - [fixtures](fixtures/README.md): tracked manifests pinning protected offline references.
 - [native](native/README.md): independently compiled native numerical oracles.

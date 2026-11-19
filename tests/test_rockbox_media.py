@@ -8,6 +8,7 @@ import struct
 import tempfile
 import unittest
 import wave
+from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
 
@@ -16,6 +17,7 @@ from mutagen.mp3 import MP3
 from PIL import Image
 
 from soundbox.rockbox_media import (
+    ART_PROFILE,
     InterruptedFileVerifier,
     NORMALIZED_MEDIA_PROFILE,
     RECEIPT_SANITIZED_MEDIA_PROFILE,
@@ -555,6 +557,173 @@ class RockboxAudioDerivative(unittest.TestCase):
 
 
 class RockboxArtworkDerivative(unittest.TestCase):
+    @staticmethod
+    @contextmanager
+    def _replace_after_source_read(source, replace):
+        source = source.resolve()
+        original_open = Path.open
+
+        @contextmanager
+        def open_with_replacement(path, *args, **kwargs):
+            with original_open(path, *args, **kwargs) as handle:
+                if path == source and (args[0] if args else kwargs.get('mode')) == 'rb':
+                    reader = mock.Mock(wraps=handle)
+
+                    def read(*read_args):
+                        data = handle.read(*read_args)
+                        if data:
+                            replace()
+                        return data
+
+                    reader.read.side_effect = read
+                    yield reader
+                else:
+                    yield handle
+
+        with mock.patch.object(Path, 'open', open_with_replacement):
+            yield
+
+    def test_replaced_cover_hash_and_pixels_stay_paired_on_cold_and_warm_misses(self):
+        from soundbox import artencode
+
+        for warm_index in (False, True):
+            for side in (160, 116, 32):
+                with self.subTest(warm_index=warm_index, side=side):
+                    with tempfile.TemporaryDirectory() as area:
+                        root = Path(area).resolve()
+                        source = root / 'curated.png'
+                        images = []
+                        for color in ((240, 20, 10), (10, 20, 240)):
+                            buffer = io.BytesIO()
+                            Image.new('RGB', (80, 80), color).save(buffer, 'PNG')
+                            images.append(buffer.getvalue())
+                        source.write_bytes(images[0])
+                        cache = RockboxArtworkCache(root / 'cache')
+                        if warm_index:
+                            cache.prepare(source, side=64)
+                            cache.flush_source_index()
+                            cache = RockboxArtworkCache(root / 'cache')
+                        replacements = []
+
+                        def replace_once():
+                            if not replacements:
+                                newer = root / 'replacement.png'
+                                newer.write_bytes(images[1])
+                                newer.replace(source)
+                                replacements.append(True)
+
+                        with self._replace_after_source_read(source, replace_once):
+                            prepared = cache.prepare(source, side=side)
+
+                        self.assertEqual(replacements, [True])
+                        manifest = json.loads(
+                            (prepared.payload.parent / 'manifest.json').read_bytes())
+                        self.assertEqual(manifest['source_sha256'],
+                                         hashlib.sha256(images[1]).hexdigest())
+                        self.assertEqual(prepared.payload.read_bytes(),
+                                         artencode.to_rockbox_cover(images[1], side))
+                        self.assertEqual(source.read_bytes(), images[1])
+                        source.write_bytes(images[0])
+                        restored = cache.prepare(source, side=side)
+                        self.assertEqual(restored.payload.read_bytes(),
+                                         artencode.to_rockbox_cover(images[0], side))
+
+    def test_continuously_replaced_cover_refuses_without_publishing_cache(self):
+        with tempfile.TemporaryDirectory() as area:
+            root = Path(area).resolve()
+            source = root / 'curated.png'
+            buffer = io.BytesIO()
+            Image.new('RGB', (80, 80), (240, 20, 10)).save(buffer, 'PNG')
+            image = buffer.getvalue()
+            source.write_bytes(image)
+            cache = RockboxArtworkCache(root / 'cache')
+            replacements = []
+
+            def replace():
+                newer = root / 'replacement.png'
+                newer.write_bytes(image)
+                newer.replace(source)
+                replacements.append(True)
+
+            with self._replace_after_source_read(source, replace):
+                with self.assertRaisesRegex(RockboxMediaError, 'remained unstable'):
+                    cache.prepare(source)
+
+            self.assertEqual(len(replacements), 2)
+            self.assertFalse(cache.root.exists())
+            self.assertEqual(cache._source_index, {})
+            self.assertEqual(source.read_bytes(), image)
+
+    def test_cover_capture_cancels_before_encoding_or_cache_publication(self):
+        from threading import Event
+        from soundbox.operation_control import OperationCancelled, operation_scope
+
+        with tempfile.TemporaryDirectory() as area:
+            root = Path(area).resolve()
+            source = root / 'curated.png'
+            buffer = io.BytesIO()
+            Image.new('RGB', (80, 80), (240, 20, 10)).save(buffer, 'PNG')
+            image = buffer.getvalue()
+            source.write_bytes(image)
+            cache = RockboxArtworkCache(root / 'cache')
+            stop = Event()
+
+            with operation_scope(stop), \
+                    self._replace_after_source_read(source, stop.set), \
+                    mock.patch('soundbox.rockbox_media.artencode.to_rockbox_cover',
+                               side_effect=AssertionError('cancelled cover encoded')):
+                with self.assertRaises(OperationCancelled):
+                    cache.prepare(source)
+
+            self.assertFalse(cache.root.exists())
+            self.assertEqual(cache._source_index, {})
+            self.assertEqual(source.read_bytes(), image)
+
+    def test_legacy_self_consistent_wrong_cover_cache_is_not_reused(self):
+        from soundbox import artencode
+
+        with tempfile.TemporaryDirectory() as area:
+            root = Path(area).resolve()
+            source = root / 'curated.png'
+            images = []
+            for color in ((240, 20, 10), (10, 20, 240)):
+                buffer = io.BytesIO()
+                Image.new('RGB', (80, 80), color).save(buffer, 'PNG')
+                images.append(buffer.getvalue())
+            source.write_bytes(images[0])
+            source_hash = hashlib.sha256(images[0]).hexdigest()
+            legacy_profile = 'rockbox-paletted8-bmp-universal-v6'
+            key = hashlib.sha256(
+                f'{legacy_profile}\0{160}\0{source_hash}'.encode('ascii')).hexdigest()
+            entry = root / 'cache' / legacy_profile / key
+            entry.mkdir(parents=True)
+            wrong = artencode.to_rockbox_cover(images[1], 160)
+            self.assertIsNotNone(wrong)
+            (entry / 'cover.160x160.bmp').write_bytes(wrong)
+            legacy_manifest = {
+                'profile': legacy_profile, 'side': 160,
+                'source_sha256': source_hash, 'size': len(wrong),
+                'sha256': hashlib.sha256(wrong).hexdigest(),
+            }
+            (entry / 'manifest.json').write_text(json.dumps(legacy_manifest))
+            stat = source.stat()
+            index = {str(source): {
+                'size': stat.st_size, 'mtime_ns': stat.st_mtime_ns,
+                'ctime_ns': stat.st_ctime_ns, 'source_sha256': source_hash,
+            }}
+            (entry.parent / 'source-index.json').write_text(json.dumps(index))
+            before = {path: path.read_bytes() for path in entry.parent.rglob('*')
+                      if path.is_file()}
+
+            prepared = RockboxArtworkCache(root / 'cache').prepare(source)
+
+            self.assertNotEqual(ART_PROFILE, legacy_profile)
+            self.assertEqual(prepared.profile, ART_PROFILE)
+            self.assertEqual(prepared.payload.read_bytes(),
+                             artencode.to_rockbox_cover(images[0], 160))
+            self.assertEqual({path: path.read_bytes() for path in before}, before)
+            self.assertEqual(source.read_bytes(), images[0])
+
     def test_malformed_cover_index_and_manifest_repair_without_changing_curated_art(self):
         with tempfile.TemporaryDirectory() as area:
             root = Path(area)
@@ -597,13 +766,41 @@ class RockboxArtworkDerivative(unittest.TestCase):
             first = cache.prepare(source)
             cache.flush_source_index()
 
-            with mock.patch(
+            with self._replace_after_source_read(
+                    source, lambda: self.fail('unchanged cover was reread')), mock.patch(
                     "soundbox.rockbox_media._sha256",
                     side_effect=AssertionError("unchanged cover was rehashed")):
                 reused = RockboxArtworkCache(root / "cache").prepare(
                     source, verify_cache=False)
 
             self.assertEqual(reused, first)
+
+    def test_unverified_cache_still_repairs_missing_or_invalid_payload_digest(self):
+        with tempfile.TemporaryDirectory() as area:
+            root = Path(area).resolve()
+            source = root / 'curated.png'
+            buffer = io.BytesIO()
+            Image.new('RGB', (80, 80), (24, 90, 180)).save(buffer, 'PNG')
+            original = buffer.getvalue()
+            source.write_bytes(original)
+            cache = RockboxArtworkCache(root / 'cache')
+            prepared = cache.prepare(source)
+            payload = prepared.payload.read_bytes()
+            path = prepared.payload.parent / 'manifest.json'
+            baseline = json.loads(path.read_bytes())
+            cases = [{key: value for key, value in baseline.items() if key != 'sha256'}]
+            cases += [dict(baseline, sha256=value)
+                      for value in (None, 0, '', 'x' * 64, 'A' * 64, 'f' * 63, 'f' * 65)]
+            for manifest in cases:
+                with self.subTest(digest=manifest.get('sha256', 'MISSING')):
+                    path.write_text(json.dumps(manifest))
+                    with mock.patch('soundbox.rockbox_media._sha256', side_effect=
+                                    AssertionError('unverified payload was rehashed')):
+                        repaired = cache.prepare(source, verify_cache=False)
+                    self.assertEqual(repaired, prepared)
+                    self.assertEqual(repaired.payload.read_bytes(), payload)
+                    self.assertEqual(json.loads(path.read_bytes()), baseline)
+                    self.assertEqual(source.read_bytes(), original)
 
     def test_cover_is_exact_paletted_bmp_without_rewriting_canonical(self):
         with tempfile.TemporaryDirectory() as td:
