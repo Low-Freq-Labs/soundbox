@@ -198,12 +198,17 @@ class StockCatalogTests(unittest.TestCase):
 
     def test_optional_metadata_update_keeps_cached_device_order(self):
         plan = self.plan(update_metadata=True, title_overrides={"alpha": "Curated Alpha"})
-        self.assertEqual([(row.dbid, row.title_after) for row in plan.metadata_updates], [(101, "Curated Alpha")])
+        self.assertEqual([(row.dbid, row.title_after) for row in plan.metadata_updates],
+                         [(101, "Curated Alpha"), (102, "Beta")])
+        self.assertEqual([(row.dbid, row.fields) for row in plan.metadata_updates],
+                         [(101, ('title', 'album')), (102, ('album',))])
         stock_ipod.commit_stock_ipod_sync(plan)
         snapshot = self.read_snapshot()
         favorites = next(row for row in snapshot.playlists if row.title == "Favorites")
         self.assertEqual([row.dbid for row in favorites.entries], [102, 101])
         self.assertEqual([row.title for row in favorites.entries], ["Beta", "Curated Alpha"])
+        self.assertEqual({row.dbid: row.album for row in snapshot.tracks},
+                         {101: 'SoundBox', 102: 'SoundBox', 103: ''})
 
     def test_supported_display_metadata_sync_preserves_rating_history_and_other_strings(self):
         self.infos[0].album = 'Old album'; self.infos[0].genre = 'Old genre'
@@ -242,7 +247,10 @@ class StockCatalogTests(unittest.TestCase):
                 display_rows={'alpha': {'title': 'Desired title', 'artist': 'Desired artist', 'album': 'Desired album'}})
         self.assertTrue(diff.needs_sync)
         self.assertEqual({change.field for change in diff.changes}, {'title', 'artist', 'album'})
-        self.assertEqual({change.local_id for change in diff.changes}, {'alpha'})
+        self.assertEqual({change.local_id for change in diff.changes}, {'alpha', 'beta'})
+        self.assertEqual([(change.field, change.before, change.after)
+                          for change in diff.changes if change.local_id == 'beta'],
+                         [('album', '', 'SoundBox')])
 
     def test_backlog_changed_both_native_fields_uses_exact_original_identity_labels(self):
         from soundbox import alias_intents, metadata_provenance, source_truth
@@ -544,7 +552,9 @@ class StockCatalogTests(unittest.TestCase):
         self.assertEqual(plan.summary()['catalog_unmatched_tracks'], 0)
         result = stock_ipod.commit_stock_ipod_sync(plan)
         self.assertEqual((result.copied_tracks, result.reused_tracks, result.metadata_updates,
-                          result.catalog_playlist_updates, result.catalog_artwork_updates), (1, 2, 1, 1, 2))
+                          result.catalog_playlist_updates, result.catalog_artwork_updates), (1, 2, 2, 1, 2))
+        self.assertEqual([(row.dbid, row.fields) for row in plan.metadata_updates],
+                         [(101, ('title', 'album')), (102, ('album',))])
 
     def test_new_native_identity_cannot_reuse_a_bound_old_song_by_colliding_labels(self):
         first = self.plan(update_metadata=True, incremental=True)

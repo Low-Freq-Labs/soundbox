@@ -1,7 +1,7 @@
 # Shared library, analysis and player corrections
 
-Dated status review November8,2026 against accepted personal build169; exact
-installed provenance and validation are recorded in HANDOFF. Responsiveness
+Current-status review November20,2026; exact installed provenance and validation
+are recorded in HANDOFF. The November8 personal169 checkpoint, responsiveness
 build167/runtime `3fb0ff60…`, whole-app build165/runtime `7ffde716…`, build163,
 source release `4a3d29a` and build160/runtime `7bbe8577…` are prior delivery evidence.
 This plan began at build148 on October30. Direct shared imports, initial
@@ -14,7 +14,7 @@ their original boundaries, not current production availability.
 Later exact-library v5 Title/Artist saves and preserved backfill were independently
 accepted; scheduling pause does not revoke that authority. Other native Track Info
 fields, artwork, broader analysis/replacement and gain remain separate work.
-Current source also has selected durable iPod export checkpoints independent of
+The installed runtime also has selected durable iPod export checkpoints independent of
 bulk metadata pause, with selected physical/structural fences. Generic USB retains
 its native CDJ source-save barrier. HANDOFF distinguishes tested source, full-gate
 outcome and actual installation; these additions do not restamp an older binary.
@@ -23,8 +23,9 @@ The November2 delivery completes the one-time native Collection/custom merge,
 accepted native sibling reorder and virtual-only Artists correction. The complete
 waveform now appears once at its finished geometry/palette, including long
 AAC/ALAC sets; actual bytes, manual musical edits and source authority remain
-preserved. Playlist-only Star/Music note/Vinyl crate choices are local preferences,
-with fixed person Artists, home Collection and folder icons. All2144cases passed
+preserved. Playlist-only Star/Music note/Vinyl crate choices are local preferences;
+smart lists add a gear badge to the chosen icon. Artists, Collection and folders
+retain their fixed icons. All2144cases passed
 for that dated build154 delivery. It and the later build163/2595-test delivery are
 historical. HANDOFF records the current whole-app delivery, signed dirty-source
 provenance and published source-release identity separately; publication alone
@@ -34,7 +35,9 @@ Local prep stays usable while analysis saves fail or cloud ctime changes: each
 gesture is durable before a worker proves the original bytes. Adaptive saved
 grids preserve every tempo/endpoint, and failed native-analysis songs no longer
 stall healthy imports. UI Quit stays open while captured import/analysis/source
-saves remain, with input and pumps active; the next Quit proceeds when complete.
+saves remain, with input and pumps active; the original Close/Cmd-Q request then
+closes automatically after the safe drain and checkpoint. Failed work remains
+recoverable and can require attention before closing.
 Automatic BPM/key detection skips songs over15minutes; explicit/manual/native
 results remain available. Other unaccepted analysis profiles and
 existing-analysis replacement/gain/metadata still
@@ -392,8 +395,9 @@ These are new scopes, not extensions of manual-BPM or ordinary-playlist authorit
   separate exact library/schema/version authority only after native acceptance;
   existing playlist/grid authorities must not be broadened silently.
 - Normal successful saves retain bounded recovery plus permanent receipts.
-  Preserve full acceptance evidence with verified APFS sharing as appropriate;
-  do not recreate a permanent trail of full independent encrypted copies.
+  Preserve required current/unresolved full acceptance payloads; retire completed
+  duplicate payloads after retaining their compact proof and closure receipts.
+  APFS sharing alone does not justify an indefinite trail of encrypted copies.
 - Budget source snapshots and recovery per proven transaction/batch, not one
   whole-library reconstruction per field or playlist member. Composition must
   preserve verified native per-operation counters; do not invent a bulk formula
@@ -531,8 +535,10 @@ Read [the earlier native reference inventory](analysis-playlists-next.md),
 Original import/analysis examples are in the private
 ~/Library/Logs/Soundbox/playlist-analysis-ui-2026-10-29/ root; accepted playlist
 proofs are in playlist-management-2026-10-30/ and shared AppData recovery.
-The cleanup retained all byte-identical evidence through APFS sharing. Do not
-recapture old cases merely because apparent folder sizes look large.
+That historical cleanup used APFS sharing. Current bounded retention keeps compact
+proof and required current/unresolved payloads while retiring completed duplicates;
+an old path is not a promise that every full payload remains. Do not recapture old
+cases merely because apparent folder sizes look large.
 
 ## Execution and release discipline
 
@@ -548,9 +554,12 @@ in HANDOFF/ROADMAP, not by repeating those completed implementation phases.
 Complete autonomous copy-only work before asking Sonny for new native actions.
 Keep user prompts few, specific and supported by a concrete candidate.
 
-For each implementation milestone: meaningful component/race/recovery tests;
-full bare release/render gate for user-facing runtime changes; inspect native
-drawables/UI; personal build, safe install, real state/normal restart verification.
+For a small local fix, run its meaningful regression and affected component/race/
+recovery coverage plus relevant static checks; inspect native drawables/UI when
+affected. Focused evidence can support a local install with the unchanged strict
+package, isolated startup and guarded state/normal-reopen procedure. Run the full
+bare release/render gate before any commit, push or wrap-up, and earlier for broad
+changes that cannot be confidently scoped. See [the test gate](test-release-gate.md).
 A locked screen invalidates display timing; an actual Keychain request can hold
 a shutdown. Do not suppress failures, weaken thresholds or kill workers to pass.
 Keep logs bounded, retire reproducible build output after verified installation,

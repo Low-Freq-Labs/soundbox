@@ -1,10 +1,10 @@
-"""A row scrollbar over the last column, leaving its header fully resizable."""
+"""Shared overlay thumb for browser rows, dialog lists and scrolling hosts."""
 from PySide6.QtCore import QEvent, QObject, QPoint, Qt, QTimer
 from PySide6.QtWidgets import QScrollBar
 
 
 class BrowserScrollBar(QObject):
-    def __init__(self, view, header):
+    def __init__(self, view, header=None):
         super().__init__(view)
         self.view, self.header = view, header
         # Qt retains its normal range, wheel/keyboard and per-row scrolling.
@@ -20,6 +20,7 @@ class BrowserScrollBar(QObject):
         self.native.valueChanged.connect(self.bar.setValue)
         self.bar.valueChanged.connect(self.native.setValue)
         for widget in (view, view.viewport(), header, view.horizontalScrollBar()):
+            if widget is None:continue
             widget.installEventFilter(self)
         self.sync()
 
@@ -37,7 +38,19 @@ class BrowserScrollBar(QObject):
             self.bar.setValue(self.native.value())
         finally:self.bar.blockSignals(previous)
         rect = self.view.viewport().geometry()
-        top = max(rect.top(), self.header.mapTo(self.view, QPoint(0, self.header.height())).y())
+        top = rect.top()
+        if self.header is not None and not self.header.isHidden():
+            top = max(top, self.header.mapTo(self.view, QPoint(0, self.header.height())).y())
         width = self.bar.sizeHint().width()
         self.bar.setGeometry(rect.right()-width+1, top, width, max(0, rect.bottom()-top+1))
+        self.bar.setVisible(self.view.isVisible() and self.native.maximum() > self.native.minimum())
         self.bar.raise_()
+
+
+def ensure_scrollbar(view):
+    """Use one thumb owner; bespoke combo popups retain their custom painter."""
+    if getattr(view, '_soundbox_overlay_scrollbar', None) is not None:return
+    if view.property('soundboxThemePainted') or view.inherits('QHeaderView'):return
+    header = (view.horizontalHeader() if hasattr(view, 'horizontalHeader') else
+              view.header() if hasattr(view, 'header') else None)
+    view._edge_scrollbar = BrowserScrollBar(view, header)

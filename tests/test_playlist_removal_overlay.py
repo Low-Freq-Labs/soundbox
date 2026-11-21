@@ -1,7 +1,6 @@
 """Exact local overlay ACKs beside the accepted encrypted TEMP playlist writer."""
 from copy import deepcopy
 from dataclasses import replace
-import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -11,8 +10,10 @@ from PySide6.QtWidgets import QApplication
 
 from desktop.rekordbox_playlists import (NativePlaylistsMixin,PlaylistEditController,QUEUE,
     _capture_removal_overlay,_validate_removal_overlay,_ack_removal_overlay)
+from desktop.state_commit import _checked_commit,apply_gui_patch
 from soundbox.library import Library,Playlist,Track
 from soundbox import rekordbox_playlist_store as store
+from soundbox.state_repository import StateRepository,read_state
 import test_source_playlists as source_fixtures
 from test_tag_creation_controller import Window
 
@@ -20,7 +21,23 @@ from test_tag_creation_controller import Window
 class Host(Window,NativePlaylistsMixin):
     def _save_state(self):
         self.saved.append(deepcopy(dict(settings=self.settings,removals=self.removals)))
+        if self.save_ok and hasattr(self,'_state_repository'):
+            self._state_repository.save(dict(settings=self.settings,playlist_removals=self.removals))
         return self.save_ok
+
+    def _commit_tag_state(self,replacements,removals,committed,failed,*,current,expected_queues=None):
+        # Deliver synchronously in this controller unit fixture, but exercise
+        # real selected-queue guards and both canonical publication roots.
+        # Held worker/navigation cases live in test_playlist_sparse_state.
+        if not current():failed(OSError('The source changed'));return True
+        if not self.save_ok:failed(OSError('No space for playlist acknowledgement'));return True
+        try:
+            result=_checked_commit(self._state_repository,
+                self._state_repository.prepare_patch(replacements,removals),expected_queues)
+        except (OSError,ValueError) as exc:failed(exc);return True
+        apply_gui_patch(self,result.patch)
+        self.saved.append(deepcopy(dict(settings=self.settings,removals=self.removals)))
+        committed();return True
 
     def _apply_settings_to_lib(self,**_kwargs):
         self.lib.removed_by_playlist={key:set(bag) for key,bag in self.removals.items()}
@@ -34,7 +51,8 @@ class PlaylistRemovalOverlay(unittest.TestCase):
         fixture=source_fixtures.SourcePlaylists('test_catalog_snapshot_reads_committed_wal_without_rewriting_source_or_rendering_backups')
         fixture.setUp();self.addCleanup(fixture.doCleanups)
         self.writer=store.PlaylistStore(replace(fixture.authority,retain_full_backups=True),fixture.recovery)
-        self.w=Host(Path(self.enterContext(tempfile.TemporaryDirectory())));self.addCleanup(self.w.deleteLater)
+        root=Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.w=Host(root);self.addCleanup(self.w.deleteLater)
         self.track=Track('logical-one','One','Artist','file:///must-never-open/audio.wav',source_native_id='track',source_uuid='uuid')
         self.other=Track('track-two','Two','Artist','file:///must-never-open/other.wav',source_uuid='uuid-two')
         self.writer.apply(store.request_for(self.writer.snapshot(),'append',identity='1000',tracks=[self.track,self.other]))
@@ -43,6 +61,8 @@ class PlaylistRemovalOverlay(unittest.TestCase):
             [Playlist('Existing',[],[self.track.track_id,self.other.track_id],'1000')],str(self.writer.database),
             source_kind='rekordbox-db',source_library_id=self.writer.authority.library_id,source_playlist_catalog=catalog)
         self.w.removals={'1000':{'logical-one':'captured-date','track-two':'other-date'},'unrelated':{'keep':'keep-date'}}
+        self.w._state_repository=StateRepository(root/'library.json')
+        self.w._state_repository.save(dict(settings=self.w.settings,playlist_removals=self.w.removals))
         self.w._apply_settings_to_lib();self.w._view_key=''
         self.w.tag_controller.playlist_update_status=''
         self.w.tag_controller.run_playlist_job=lambda work,done:self.w.tag_controller._run_source_job('playlists',work,done)
@@ -70,6 +90,7 @@ class PlaylistRemovalOverlay(unittest.TestCase):
         self.assertNotIn('removal_overlay',saved['request'])
         self.assertEqual(saved['removal_overlay']['entries'][0]['local_id'],'logical-one')
         self.assertEqual(saved['removal_overlay']['entries'][0]['value'],'captured-date')
+        self.assertEqual(read_state(self.w._state_repository.path)['settings'][QUEUE][0],saved)
         self.turn();self.assertFalse(self.c.pending)
         self.assertEqual(self.w.removals,{'1000':{'track-two':'other-date'},'unrelated':{'keep':'keep-date'}})
         self.assertEqual(original['1000']['logical-one'],'captured-date')
@@ -88,9 +109,10 @@ class PlaylistRemovalOverlay(unittest.TestCase):
         self.enqueue();job=deepcopy(self.c.pending[0]);owners=self.w.removals,self.w.lib.removed_by_playlist
         self.w.save_ok=False;self.turn()
         self.assertIs(self.w.removals,owners[0]);self.assertIs(self.w.lib.removed_by_playlist,owners[1])
-        self.assertEqual(self.c.pending[0]['request'],job['request']);self.assertTrue(self.c.pending[0]['error'])
+        self.assertEqual(self.c.pending[0]['request'],job['request']);self.assertTrue(self.c.ack.error)
+        self.assertEqual(read_state(self.w._state_repository.path)['settings'][QUEUE][0],job)
         committed=self.writer.database.read_bytes(),self.writer.xml.read_bytes()
-        self.w.settings=json.loads(json.dumps(self.w.settings));self.c.stop()
+        self.w.settings=read_state(self.w._state_repository.path)['settings'];self.c.stop()
         self.c=PlaylistEditController(self.w,store_factory=lambda _:self.writer);self.w.playlist_controller=self.c
         self.addCleanup(self.c.stop);self.c.schedule=mock.Mock();self.w.save_ok=True
         self.c.retry();self.turn()
@@ -101,7 +123,8 @@ class PlaylistRemovalOverlay(unittest.TestCase):
         self.assertEqual((self.writer.database.read_bytes(),self.writer.xml.read_bytes()),committed)
 
     def test_legacy_job_without_proof_preserves_overlay_even_after_verified_remove(self):
-        self.enqueue();self.c.pending[0].pop('removal_overlay');owner=self.w.removals
+        self.enqueue();self.c.pending[0].pop('removal_overlay');self.assertTrue(self.w._save_state())
+        owner=self.w.removals
         self.assertFalse(self.c.queue_error());self.turn()
         self.assertIs(self.w.removals,owner);self.assertIn('logical-one',owner['1000'])
 
@@ -167,6 +190,7 @@ class PlaylistRemovalOverlay(unittest.TestCase):
         alias=replace(self.track,track_id='logical-alias')
         self.w.lib.tracks_by_id[alias.track_id]=alias
         self.w.removals['1000'][alias.track_id]='alias-date';self.w._apply_settings_to_lib()
+        self.assertTrue(self.w._save_state())
         self.writer.apply(store.request_for(self.writer.snapshot(),'append',identity='1000',
                                            tracks=[alias],allow_duplicate=True))
         self.w.lib.source_playlist_catalog=self.writer.snapshot();self.w.lib.playlists[0].keys.append(alias.track_id)
@@ -174,11 +198,12 @@ class PlaylistRemovalOverlay(unittest.TestCase):
         self.assertTrue(self.c.enqueue(request,selected_tracks=[self.track,alias]))
         job=deepcopy(self.c.pending[0]);owners=self.w.removals,self.w.lib.removed_by_playlist
         self.w.save_ok=False;self.turn()
-        self.assertTrue(self.c.pending[0]['error']);self.assertIs(self.w.removals,owners[0])
+        self.assertTrue(self.c.ack.error);self.assertIs(self.w.removals,owners[0])
+        self.assertEqual(read_state(self.w._state_repository.path)['settings'][QUEUE][0],job)
         self.assertIs(self.w.lib.removed_by_playlist,owners[1])
         self.assertFalse(any(row['ContentID']=='track' and row['rb_local_deleted']==0 for row in self.writer.snapshot()['members']))
         committed=self.writer.database.read_bytes(),self.writer.xml.read_bytes()
-        self.w.settings=json.loads(json.dumps(self.w.settings));self.c.stop()
+        self.w.settings=read_state(self.w._state_repository.path)['settings'];self.c.stop()
         self.c=PlaylistEditController(self.w,store_factory=lambda _:self.writer);self.w.playlist_controller=self.c
         self.addCleanup(self.c.stop);self.c.schedule=mock.Mock();self.w.save_ok=True
         self.c.retry();self.turn();self.assertEqual(self.c.pending[0]['removal_overlay'],job['removal_overlay'])

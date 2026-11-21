@@ -172,15 +172,17 @@ class EffectiveIpodExport(unittest.TestCase):
                     self._plan(self._capture(desired))
                 self.assertEqual(f._snapshot(f.ipod), before)
 
-    def test_folder_names_preserved_and_next_full_sync_is_noop(self):
+    def test_leaf_name_preserves_source_hierarchy_and_next_full_sync_is_noop(self):
         f = self.fixture; f.playlist.folder_path[:] = ['Sets', 'Gym']
         inputs = self._capture(_rows(('old', 'new')))
         first = stock_ipod.commit_stock_ipod_sync(self._plan(inputs))
         self.assertIsNotNone(first.catalog_witness)
         self.assertEqual(len(first.catalog_witness.bindings), 1)
         self.assertEqual(first.catalog_warning, '')
-        self.assertIn('Sets / Gym / Favorites', [row.title for row in
+        self.assertIn('Favorites', [row.title for row in
             read_stock_ipod_snapshot(f.ipod, volume_uuid='generated-volume').playlists])
+        self.assertEqual(f.playlist.folder_path, ['Sets', 'Gym'])
+        self.assertEqual(first.catalog_witness.bindings[0].source_label, 'Sets / Gym / Favorites')
         second = self._plan(inputs)
         self.assertFalse(second.requires_commit)
         self.assertEqual(second.rendered_database, (f.ipod / 'iPod_Control/iTunes/iTunesDB').read_bytes())

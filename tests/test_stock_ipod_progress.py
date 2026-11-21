@@ -51,6 +51,19 @@ class StockExportProgress(unittest.TestCase):
         self.assertFalse(self.stage(events, 'iTunes media'))
         self.assertEqual(f._snapshot(f.ipod), before)
 
+    def test_complete_plan_reports_fixed_compact_phase_timings_without_target_changes(self):
+        f=self.fixture
+        before=f._snapshot(f.ipod)
+        with mock.patch('soundbox.operation_control.logging.getLogger') as logger:
+            with operation_scope(Event()):self.plan()
+        metrics=next(call.args[1] for call in logger.return_value.info.call_args_list
+                     if call.args[0]=='Device operation metrics: %s')
+        stages=('capture','sources','inventory','playlists','prune','metadata','artwork','render','finalize')
+        values=[metrics['stock_plan_'+name+'_us'] for name in stages]
+        self.assertTrue(all(type(value) is int and value>=0 for value in values))
+        self.assertAlmostEqual(sum(values),metrics['stock_plan_total_us'],delta=10)
+        self.assertEqual(f._snapshot(f.ipod),before)
+
     def test_verified_physical_media_and_art_bytes_precede_database_and_cleanup(self):
         f = self.fixture
         f.playlist.keys += ['new']  # A repeated membership must not count another physical copy.

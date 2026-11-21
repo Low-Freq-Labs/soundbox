@@ -150,12 +150,15 @@ class IndependentPrepAuthorities(unittest.TestCase):
             store.lease.apply(CueEdit('2',self.grid_authority.bind('2',self.native.state.track['UUID']).track_uuid,'','hot',0,'add',777))
         self.assertFalse(self.controller.request_cue(self.tid,'hot',0,'add',777))
 
-    def test_cue_only_authority_saves_and_reads_grid_without_granting_grid_writes(self):
+    def test_cue_only_authority_saves_without_reading_or_granting_grid_writes(self):
         self.authority('cue')
         forbidden=self.native.grid._factory=mock.Mock(side_effect=AssertionError('No grid writer permission'))
         original=(self.dat.read_bytes(),self.ext.read_bytes());before=self.state()
         self.assertEqual(self.controller.reason(self.tid),'')
-        self.assertTrue(self.controller.request_cue(self.tid,'hot',0,'add',777));self.settled()
+        with mock.patch.object(cues.PilotCueStore,'grid_snapshot',
+                               side_effect=AssertionError('Cue writes must not acquire unrelated ANLZ')) as grid_read:
+            self.assertTrue(self.controller.request_cue(self.tid,'hot',0,'add',777));self.settled()
+        grid_read.assert_not_called()
         self.assertEqual((self.dat.read_bytes(),self.ext.read_bytes()),original)
         fresh=cues.PilotCueStore(self.cue_authority.bind('2'),self.root).snapshot()
         self.assertEqual(fresh.cues[0]['InMsec'],777)
@@ -173,6 +176,18 @@ class IndependentPrepAuthorities(unittest.TestCase):
         self.assertEqual(self.dat.read_bytes(),b'corrupt native analysis; do not rewrite')
         self.assertEqual(self.window.settings['analysis_results'],before)
         self.assertEqual(cues.PilotCueStore(self.cue_authority.bind('2'),self.root).snapshot().cues[0]['InMsec'],777)
+
+    def test_native_cue_with_existing_waveform_checks_grid_only_once_for_cache_reconciliation(self):
+        self.authority('cue')
+        target=self.case._grid_cache(self.window.player_bar._analysis_parts['beats'])
+        original=(self.dat.read_bytes(),self.ext.read_bytes(),target.read_bytes())
+        snapshot=cues.PilotCueStore.grid_snapshot
+        with mock.patch.object(cues.PilotCueStore,'grid_snapshot',autospec=True,
+                               side_effect=snapshot) as reads:
+            self.assertTrue(self.controller.request_cue(self.tid,'memory',0,'add',777));self.settled()
+        self.assertEqual(reads.call_count,1)
+        self.assertEqual((self.dat.read_bytes(),self.ext.read_bytes(),target.read_bytes()),original)
+        self.assertEqual(self.window.lib.tracks_by_id[self.tid].source_cues[0]['position_ms'],777)
 
 
 if __name__=='__main__':unittest.main()

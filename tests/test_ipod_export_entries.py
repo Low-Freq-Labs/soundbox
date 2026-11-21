@@ -116,10 +116,13 @@ class IpodExportEntries(unittest.TestCase):
     def test_scan_deferral_carries_the_same_capture_and_rejects_expired_capture(self):
         for kind in ('stock','dual'):
             with self.subTest(kind=kind):
-                owner,playlist,capture=self.generated();callbacks=[]
-                owner._defer_device_operation_until_scan_finishes=lambda callback:callbacks.append(callback) or True
+                owner,playlist,capture=self.generated();callbacks=[];targets=[]
+                def defer(callback,*,target=''):
+                    callbacks.append(callback);targets.append(target);return True
+                owner._defer_device_operation_until_scan_finishes=defer
                 getattr(owner,f'_begin_{kind}_ipod_sync')('/generated/IPOD',[playlist],_export_capture=capture)
                 self.assertEqual(len(callbacks),1)
+                self.assertEqual(targets,['/generated/IPOD' if kind=='dual' else ''])
                 owner._request_ipod_export_capture.assert_not_called()
                 capture.require_current.side_effect=ValueError('The connected iPod changed')
                 with self.assertRaisesRegex(ValueError,'connected iPod changed'):

@@ -12,7 +12,7 @@ Qt-free library, source protocols, analysis and device exporters.
 - `source_acquisition.py` / `source_verification.py`: stable captured bytes and identity proofs.
 - `media_transition.py`: read-only actual replacement/recovery witnesses; CDJ policy does not admit or reject iPod media.
 - `track_analysis.py` / `waveform_sections.py`: waveform/cache facade and pure section codec.
-- `stock_ipod.py`, `dual_ipod.py`, `sync.py`: distinct firmware transactions; `stock_ipod_catalog.py` recognizes cached playlists independently of media ownership.
+- `stock_ipod.py`, `dual_ipod.py`, `sync.py`: distinct firmware transactions; `stock_ipod_catalog.py` recognizes cached playlists independently of media ownership; `stock_plan_observations.py` holds negative-only facts and bounded timings.
 - `cdj_*.py`: generic USB capture, native rendering and selected-playlist publication.
 - `export_snapshot.py` / `ipod_export_metadata.py` / `ipod_export_witness.py`: immutable effective iPod inputs and verified optional catalog correspondence; source-overlap guards remain complete.
 - `device_staging.py` / `stock_delete.py`: cancellable descriptor IO and native indexed-entity deletion; recovery retains exact ownership.
@@ -21,5 +21,5 @@ Qt-free library, source protocols, analysis and device exporters.
 Keep source/device separation, independent authorities, fresh guards and recovery order intact.
 Generic USBs have explicit export, no automatic sync status or idle catalog comparisons.
 
-Run `./check.sh` from the root for types, immutable fixtures and all test phases.
+Run affected area/depth and static checks locally; complete `./check.sh --render` before publication.
 Details: [architecture](../docs/ARCHITECTURE.md), [native prep](../docs/rekordbox-prep.md), [devices](../docs/DEVICES.md).

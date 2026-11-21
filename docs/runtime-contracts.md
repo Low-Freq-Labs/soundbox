@@ -86,6 +86,54 @@ Finalization refreshes the completed target's cached native catalog even offpage
 preserving current navigation and serial device ownership. Header Export/Sync
 reads prepared pending state; it must not perform song, filesystem or DB scans.
 
+The iPod owns observed playback history, ratings, resume positions, firmware
+preferences and actual device contents. Playback-only changes refresh SoundBox's
+read-only snapshot, preserving selection, scroll and checked playlists; they do
+not request Sync or write the device. Unrelated externally added playlists,
+songs and artwork are observed and preserved without pending Sync. Compare
+current linked playlist identities, order, membership and supported musical
+metadata; those changes may request Sync. Device-side playlist deletion does not
+authorize recreation. Advisory comparison never renews persisted catalog hashes
+or weakens exact writer, source, recovery and publication proofs.
+
+## November19 iPod interaction requirements
+
+The header and playlist-footer primary actions mirror the same prepared state:
+Export when clean, Sync only for actual linked pending changes. An invisible
+current/focused playlist is never an implicit update target. Tag deletion belongs
+to the exact tag's context menu, with captured source/identity rechecks and one
+existing confirmation. The My Tags panel has no dedicated deletion footer.
+Tag rename also belongs to that exact tag's context menu. It retains the tag's
+native identity, assignments, category and smart-rule references; naming a newly
+created tag does not authorize renaming an existing one. Cross-folder smart
+playlist moves retain the original playlist identity and rule, with their own
+accepted native move protocol rather than ordinary sibling-order permission.
+
+New My Tags become visible and usable immediately from their captured creation
+intention. Pending assignment and smart-playlist gestures bind the exact source,
+library, future tag/category identities and creation operation. The parent
+intention becomes durable before its children; native creation and verified
+acknowledgement/publication precede their source dispatch. Pending views never
+change verified Library/export truth. Keep general edit ownership while yielding
+only the dispatch reservation to the prerequisite. Failures, restore, restart and
+normal Quit retain or fence exact dependent gestures; retries never adopt a
+replacement creation. Uncreated definitions cannot be renamed, deleted or reordered.
+
+Device IO on a known stock, dual or Rockbox iPod does not block independently
+authorized tag/cue/grid, metadata and playlist source saves. Source writers remain serialized under their
+existing shared lease/journal; actual source/recovery/maintenance ownership stays
+blocking. Accepted export membership and metadata remain detached from later
+ordinary edits. Generic or unknown device targets keep their separate barriers.
+
+Playlist names are unique under trimmed Unicode-NFC case-insensitive comparison
+across ordinary/smart native playlists, custom playlists and queued name claims.
+Folders are not playlist names; reject new collisions without renaming existing
+external curation. iPod-visible titles use the leaf alone. Migration must preserve
+foreign contents and exact owned-path retirement proofs through failed retries.
+Completed native migration keeps custom memberships as recovery evidence, not
+live name claims. A deleted playlist frees its name for ordinary or smart reuse;
+active native owners and pending create/rename intentions still reserve names.
+
 ## Runtime instruction parity
 
 `AGENTS.md` and `CLAUDE.md` are runtime equivalents and intentionally contain
@@ -240,15 +288,23 @@ repository can answer the question.
   preserved. Deletions retain native history/XML and sibling ordering. It shares
   Tag/Cue/Grid root/lock/journal and the one desktop source worker, requires
   rekordbox/agent closed, stages encrypted DB/XML pairs, and validates exact
-  recovery prefixes before another edit. Native acceptance archives retain full
-  pairs; ordinary completed backups retain the latest full pair plus permanent
+  recovery prefixes before another edit. Current/unresolved native acceptance retains its required full pairs; completed
+  historical copies follow the November10 bounded-retention rule below. Ordinary
+  completed backups retain the latest full pair plus permanent
   row/XML/operation receipts with verified, resumable older-payload retirement.
   Pending UI intents persist before worker admission and survive restart; no
   local veto substitutes for a source save. Retry renews stale/rolled-back intent
   identity/revision/clock, while committed receipts replay idempotently. Normal
   UI Quit/close remains open while captured import/analysis/source saves remain,
-  with input and source pumps live; the next Quit proceeds once complete.
-  Explicit teardown still retains any unstarted durable intents. Normal Quit may
+  with input and source pumps live; the original Close/Cmd+Q completes after
+  safe saves finish. November19 normal Close/Cmd+Q may retain failed source
+  intentions after an exact fresh canonical checkpoint verifies their complete
+  queue values. Errors and operation identities survive unchanged for the next
+  launch; no discard or native success is implied. Active source/native writers
+  still finish and join. Unsaved RAM admissions, failed storage and unresolved
+  canonical recovery cannot authorize closing. A changed/restored generation or
+  newer queue invalidates the close proof. Explicit teardown still retains any
+  unstarted durable intents. Normal Quit may
   also retain validated, idle metadata intentions when the exact verified source
   has no metadata authority, every native request is still uncaptured, and no
   worker/receipt retirement remains. Unstarted read-only derivation can be
@@ -299,6 +355,23 @@ repository can answer the question.
   remains outside this capability; another library/schema/version needs its own
   acceptance. Ordinary native recovery keeps its bounded latest full pair and
   permanent compact receipts under the November10 retention rule.
+- Intelligent rename and mixed reorder have separately marked, default-off
+  capabilities; ordinary CRUD/reorder and smart creation never grant them.
+  The local inline-name candidate follows the November19 native +1 window
+  while preserving its rule, identity, memberships and unrelated XML; the
+  criteria-definition editor's +2 creation window stays separate. The November19
+  mixed-order reference updates the dragged row first, then each displaced row
+  in ascending old sequence, with one local-counter increment and independent
+  SQL clock per row. Only target and non-root parent XML clocks change. Full
+  private DB/XML replay covers both directions, long moves, mixed intelligent/
+  regular neighbors and root folder neighbors. Intelligent targets and displaced
+  intelligent rows preserve measured local history 0 or 1, zero status/deletion
+  flags and absent cloud USNs; other histories fail closed. These rename/reorder
+  profiles admit neither cross-parent moves nor rule edits. Unsupported
+  ordinary gestures involving intelligent rows fail before durable FIFO
+  admission. Read-only native references and encrypted TEMP replay do not
+  provision a source authority; publication/native reopen acceptance remains
+  independently required.
 - Tag-definition deletion has an independently marked authority and measured
   `native-local-leaf-delete-v1` profile. Current implementation covers unsynced
   local definitions and unsynced local assignments: following local tag siblings
@@ -313,18 +386,67 @@ repository can answer the question.
   SQL clocks. The parent and retained XML stay exact. Exact UUID/rule/parent,
   source revision, recovery and receipt checks precede acknowledgement/retry.
   Both publishers share the existing worker/root/lock/journal; native references
-  and TEMP replays do not provision the production authorities. Source pilot,
-  native reopen acceptance and guarded package delivery remain pending in HANDOFF.
+  and TEMP replays do not provision the production authorities. Independent
+  source/native acceptance remains required for each capability; HANDOFF records
+  completed approved pilots and exact-library activation after the fresh
+  gate/package checks. Accepted local v1 profiles grant no older-history scope.
   Separate combined v2 markers additionally cover observed local synced smart
   tombstones and synced tag targets/association history. The earlier local-only
-  markers remain strict. Synced smart deletion advances once for the target and
-  once per following sibling, retaining exact tombstones/rules/XML and separate
-  clocks. Synced tag deletion owns the first counter step, then shifts later
+  markers remain strict. The retained isolated synced-smart reference writes
+  its tombstone at C+1 and one following survivor/global counter at C+2, with
+  independent SQL clocks and exact retained rules/XML. It does not establish
+  multiple-survivor grouping. The November19 zero-survivor observation also
+  contains an unrelated native playlist creation and remains a compound frame.
+  Historical smart deletion still needs its own source/native acceptance; a
+  disposable unsynced deletion pilot cannot provision that capability.
+  Synced tag deletion owns the first counter step, then shifts later
   local siblings and uses one final shared step for active synced assignments;
   pre-existing deleted history remains exact. Surviving synced tag siblings,
   synced tags without active synced assignments and unobserved metadata remain
   guarded. The compound two-tag oracle labels its overwritten intermediate clock
   as unobserved; its final whole-pool match is not isolated first-window proof.
+- Native My Tag order has its own default-off, exact-library authority. The
+  accepted bounded primitive reorders adjacent leaves within one category;
+  larger gestures compose only that proved primitive. Full category/tag
+  ID/UUID/name/order, source/version/schema, independent clocks, recovery and
+  fresh readback remain required. Definitions, assignments and other categories
+  stay exact. November19 source/native acceptance and the fresh gate/package
+  checkpoint completed; the exact-library authority was separately activated.
+  HANDOFF distinguishes that activation from installed-app verification.
+- Native tag rename and cross-parent smart-playlist moves are separate
+  default-off capabilities. Existing tag creation/order/deletion and playlist
+  rename/reorder/creation permissions do not admit them. Rename captures exact
+  tag/category UUIDs and old name; smart moves capture target UUID/rule and both
+  parent UUIDs, using append-only destination order. The desktop may project a
+  pending move but cannot publish it as native/export truth before durable ACK.
+  Source sibling sequence gaps remain exact; destination ordering comes from
+  the separate pure move context, never ordinary sibling-compaction assumptions.
+  Persisted SQL/XML clocks and their renewal remain engine-owned. Independent
+  native/source acceptance is required before enabling either exact-library
+  profile; current activation status belongs in HANDOFF.
+- Generic node placement has its own `node_move_accepted` flag and exact
+  `rekordbox-6.8.7.0303-local-node-placement-v1` profile; smart append/move or
+  sibling reorder permission never substitutes. It moves local regular/smart
+  playlists and ordinary folders by exact parent/anchor identities, including
+  nested folders. Reject cycles, self/descendant destinations, ambiguous sibling
+  order and unsupported row histories. Preserve descendants, song memberships,
+  rules/names/UUIDs and source-parent sequence gaps; only captured changed
+  destination positions receive their independent counter/clock windows.
+  Center drops append inside collapsed or expanded folders; before/after drops
+  retain their explicit anchor. This separately accepted exact-library path
+  shares the existing worker/lock/journal and fresh readback/ACK guards.
+- Normalized ordinary, folder and smart constructors have separate default-off
+  flags and exact profiles; the older smart root/front/append restrictions above
+  keep their original meanings. The normalized paths admit observed unique
+  sequence gaps and empty/mixed local destinations while rejecting ambiguous
+  order, unsupported histories and changed identities. Smart construction starts
+  after the maximum root Seq, then applies its captured placement/definition
+  windows; sibling normalization changes only exact affected rows and clocks.
+  Right-click creation captures placement below the clicked sibling and transfers
+  that sidecar to an accepted move in the same durable ACK. Pending projections
+  grant no native/export success before verified publication. Current exact-library
+  acceptance/activation is documented in the handoff and historical receipts;
+  another library/schema/version needs independent acceptance.
 - Sonny's November12 accidental ZYKO deletion has a one-off, explicitly scoped
   recovery record. Its exact pre-error ID/UUID/assignment rows were restored
   with compact tag order through the shared lock/journal and verified encrypted
@@ -348,8 +470,9 @@ repository can answer the question.
   before presentation. Restart/retry uses committed receipts; cancellation first
   reconciles source effects and never deletes completed native songs. This domain
   shares the existing source worker/root/lock/journal/closed-native-app guards and
-  encrypted paired recovery. Full acceptance archives remain retained; ordinary
-  completed transactions use bounded receipt-backed retention. A file gesture
+  encrypted paired recovery. Current/unresolved acceptance retains required payloads and compact receipts;
+  completed historical copies and ordinary transactions use bounded
+  receipt-backed retention. A file gesture
   authorizes its own native registration/membership without a separate save step.
   November1 follow-up: Sonny explicitly requested backfilling his existing visible
   SoundBox-only Collection and migrating all custom folders/playlists plus native
@@ -685,8 +808,10 @@ repository can answer the question.
   `/Playlists` and sorts them alphabetically. Composite sync must therefore keep
   every managed M3U8 at that top level and prefix only its Rockbox filename with
   a zero-padded manifest sequence (`01 - NAME.m3u8`). SoundBox rows and stock
-  iTunesDB titles use the concise playlist leaf, adding folder context only to
-  disambiguate duplicate leaves; the manifest alone retains the full hierarchy.
+  iTunesDB titles use the unique concise playlist leaf. New normalized duplicate
+  playlist names are rejected; folder context is not added to managed titles.
+  The manifest retains the full hierarchy, and foreign native playlists remain
+  outside managed rename/cleanup scope.
 - Stock playlist deletion may remove regular user playlists and the exact Apple
   **Videos** smart index only. Apple databases may mirror that index in the
   ordinary MHLP and canonical MHSD-5 datasets under different IDs; the device
@@ -824,7 +949,9 @@ source CRUD operations followed by Sonny's native inspection/normal save. The
 current permission is separate from the earlier exact-plan Bridge Pilot approval
 and the two specifically approved synthetic NEW-row reference seeds. Those old
 receipts never authorize arbitrary future source tests or changing existing
-sync flags. Preserve every native reference, approval and recovery archive.
+sync flags. Preserve compact native reference/approval/recovery receipts. Full payloads
+remain only for current proof, unresolved acceptance or runtime recovery under
+the November10 bounded-retention rule.
 Current implementation/installed status lives in HANDOFF; the broader scope and
 remaining analysis-format/replacement gates are in docs/analysis-playlists-next.md.
 
@@ -1016,6 +1143,50 @@ manual-grid PCM endpoint proof uses the shared source worker. See `docs/PLAYER.m
 
 ## Development
 
+### Focused local fixes — explicit November20 user requirement
+
+Default small-fix validation is the relevant regression plus affected integration,
+source-dispatch, lifecycle and error/recovery cases. Choose by the dependencies
+changed, not a fixed test-count budget. Use existing meaningful coverage, relevant
+lint/types, Cocoa for macOS appearance/input and an inspected render when useful.
+A plain divider adjustment does not require unrelated encrypted crash matrices,
+encoders or filesystem-image tests. Native writer/transaction changes still need
+their affected authority, identity, journal/recovery and acknowledgement tests.
+Broaden the run when scope or evidence makes the focused selection insufficient.
+
+Named areas are selectable independently and composable with
+`./check.sh --suite AREA... --level quick|integration|recovery`. Levels are
+cumulative: fast behavior checks, adjacent integration/lifecycle, then affected
+transaction/process-loss recovery. USB/CDJ and iPod are separate core areas;
+library, RB DB, metadata, tags, playlists, prep, player, waveform, analysis, artwork,
+state, UI, providers and tooling are also available. `--list-suites` lists them;
+`--plan` previews selectors and Qt routing without importing tests or Qt. Named
+runs use separate private processes, offscreen before Cocoa; native-deck selectors
+route to Cocoa automatically. Combined areas and overlapping selectors execute
+each selected ID once. A source writer/SQL/journal/ACK change requires affected
+recovery coverage, not the quick RB reader smoke. See the maintained
+[test catalog](test-release-gate.md#choose-an-area-and-depth) for selection guidance.
+
+`./check.sh --focus SELECTOR... [--cocoa]` imports only the named test modules,
+classes or methods in one private Qt-state process. It does not build unrelated
+native/CDJ code or run global fixture preflight. Rebuild affected native code and
+provision its required fixtures when that work is actually changed. Focused reports
+have a separate path and explicit scope; full-release verification rejects them.
+Every selected case must pass without skips/xfails. Do not repeat passing focused
+runs unless code, failures or unresolved concerns justify another run.
+
+Routine local installs can follow these focused checks, strict package/composition
+and isolated runtime checks, then the existing state-preserving install/reopen
+procedure. They do not require the complete suite after every small fix. Record
+what was tested and leave full-suite validation pending explicitly. The complete
+bare `./check.sh --render` remains mandatory before any commit/push or wrap-up,
+on the intended final source/test/build inputs; its full inventory, both Qt phases,
+zero-skip rule and exact report reconciliation remain unchanged. Earlier full proof
+is reusable only for unchanged covered inputs. Focused validation grants no native
+source authority, real-app control, live-device tests or weaker state safeguards.
+Developer-tooling/documentation-only changes do not require reinstalling the app.
+
+
 Background local waveform/BPM/key phases keep per-song dependency order. After a
 joined phase and durable acknowledgement, one eligible source task gets a turn
 before local work resumes. Source domains rotate across their existing heads,
@@ -1023,9 +1194,11 @@ without reordering each FIFO or bypassing same-song/native receipt prerequisites
 Only the selected synchronous opportunity may pass deferred cue/grid logical
 holds; physical ownership, prepared-prep/recovery reservations, closed-native-app
 guards and exact authorities remain. This bounds eligible admissions by phase,
-not wall time. Interactive Tags report busy during active DSP; once admitted,
-their single-flight assignment intentions persist before presentation and remain
-until exact native acknowledgement. Metadata uses the same fair source lane
+not wall time. Interactive Tags capture selected gestures into an immediate RAM
+FIFO while DSP or earlier saves finish. Sparse canonical acknowledgement precedes
+native dispatch; checkbox previews grant no source authority. Exact native
+readback and durable head acknowledgement preserve newer queued gestures.
+Metadata uses the same fair source lane
 with its own durable intentions and independent authority. Refresh/export/shutdown
 keep full ownership. These audit changes are source-validated; HANDOFF records
 the installed app separately.
@@ -1073,7 +1246,9 @@ in place. Closure does not claim perfect native appearance or presentation caden
 Current guidance stays in `docs/`; superseded experiments belong in
 `docs/archive/` and never override the current handoff or roadmap.
 
-    ./check.sh            # lint/build/types + all offscreen/Cocoa tests; zero skips
+    ./check.sh --focus tests/test_sidebar_layout.py  # local named regression checks
+    ./check.sh --focus tests/test_prep_tags.py --cocoa  # selected macOS UI checks
+    ./check.sh            # full pre-publication gate; lint/build/types + both Qt phases
     ./check.sh --render   # + hermetic offscreen UI render
     ./check.sh --native   # compatibility alias; Cocoa is always required
     ./build_native.sh     # arm64 deck + fresh process-guard dylibs
@@ -1116,7 +1291,10 @@ space-saving instruction rejects accumulated rollback generations; retire the
 temporary app after accepted verification. This does not retire musical originals,
 curation, transaction recovery or required offline fixtures.
 
-1. Run `./check.sh` bare, then `./build_app.sh`.
+1. For a small local fix, pass its focused/affected checks above; before
+   commit/push or wrap-up, pass the complete bare `./check.sh --render`.
+   Build with `./build_app.sh`, then verify the signed composition and isolated
+   packaged runtime. Record whether source validation was focused or complete.
 2. Back up and hash complete SoundBox state: preserve exact `library.json` plus
    referenced `.state-records/` and materialize portable JSON under the area lock.
    A manifest alone is insufficient. Record cache counts when relevant.

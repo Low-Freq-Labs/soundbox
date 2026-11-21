@@ -1,5 +1,67 @@
 # Test runtime audit — November 2, 2026
 
+## Focused workflow and scheduling review — November20
+
+Sonny requested focused testing for small local fixes, followed by the complete
+proper gate before Git publication. The [current policy](test-release-gate.md)
+now separates those stages. Local installs keep signed/isolated package checks,
+normal quit, complete current state preservation and verified reopen. Native
+source/device authority and fixtures remain unchanged. This developer-tooling
+change does not rebuild, reinstall or restamp the already verified app.
+
+The preceding full gate measured5001 offscreen cases in906.825s and68 Cocoa
+cases in83.009s, about16.5minutes of test phases before packaging. The three
+workers took688.076/696.963/904.069s. Only142 of391 modules had scheduling hints;
+249 default-weight modules accounted for1061.863s of summed case time. Fresh
+hints now cover all391 measured modules. Repartitioning the identical case IDs
+using measured costs predicts about757.1s of case time on the critical path versus897.3s
+with the old hints, about140s less. This is a scheduling estimate, not a newly
+measured full-suite speedup. Module fixtures stay grouped; no cases are removed.
+
+`./check.sh --focus` loads only named modules/classes/methods in private Qt state.
+Overlapping selectors run once; invalid selection clears prior green output.
+Focused reports declare scope and cannot overwrite full aggregate paths or pass
+full-release verification. Twelve runner/fixture/scope/cost regressions pass in
+1.952s, including real disposable subprocesses for private state, unrelated-import
+exclusion, failure/skip/xfail handling, Cocoa routing and full-report protection.
+The actual divider/sidebar example passes7 cases in0.202s (under one second for
+the command); selected native-Cocoa My Tags checks pass15 cases in0.530s (also
+under one second including process startup). These focused timings include case
+setup/cleanup and do not represent full-suite coverage. Relevant lint/shell checks
+pass. Independent disposable-runner probes agree with the isolation/scope results.
+
+The subsequent named-area extension adds16 composable groups and cumulative
+quick/integration/recovery depths. Generic USB/CDJ and iPod are separate core
+areas; quick USB includes passive export behavior and selected native metadata.
+All393 complete current test modules have at least one area at deepest depth,
+with static catalog/reference validation. Targeted native player/waveform smoke
+methods run on Cocoa automatically; the whole native module is reserved for
+recovery depth. Plans/listing import no Qt/test modules. Scope, stale report,
+failed/missing child, deduplication and phase routing regressions pass21cases in
+4.152s, with the strengthened whole-module coverage check passing separately.
+Real combined USB/RB quick coverage passes131cases in3.593s; player/waveform quick
+coverage passes84cases in3.861s (79offscreen then5Cocoa). These are selected runs,
+not complete application gates. Independent review found no orchestration blocker.
+Compact extension evidence is under `testing-workflow-20261120/named-areas/`.
+
+A subsequent23:31UTC installed-binary check verifies all233 first-party runtime
+modules/startup code and all four native text sections against the tested source/
+build, with the installed signature valid. The installed executable's isolated
+startup passes native CoreAudio/Metal, process guard/query and SQL/ORM/AES checks,
+without loading a live library or discovering devices. This supplies current
+installed parity/startup evidence for the selected runs; the full gate remains
+pending before publication. Receipt: `named-areas/installed-build-parity.json`.
+
+The complete encrypted/process-exit suites prove separate source authorities and
+recovery boundaries; they remain intact. Run affected domains for writer changes
+and the complete set before commit/push. Refresh scheduling hints only from a
+complete passing timing report with `scripts/update_test_costs.py`. New modules
+remain included even without a hint. Current full reports still describe the
+preceding installed release; these harness edits require a fresh full gate before
+publication. Compact review evidence is under
+`~/Library/Logs/Soundbox/testing-workflow-20261120/`.
+
+
 ## Cleanup follow-up — November8
 
 The final complete gate passes 2,886 cases in 570.446s across its test phases:
@@ -223,5 +285,5 @@ every machine/workload achieves the same speedup.
 
 The final current-source gate and installed-build provenance belong in
 [HANDOFF.md](HANDOFF.md). The normal complete gate remains
-[`./check.sh`](../check.sh); required fixtures and numerical/native limits are
+[`./check.sh --render`](../check.sh); required fixtures and numerical/native limits are
 documented in [test-release-gate.md](test-release-gate.md).

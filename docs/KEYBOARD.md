@@ -22,6 +22,10 @@ The existing defaults remain Space for play/pause, C for held session CUE, and
 Command-R for Rename selected item (including the artist-pictures catalog).
 For a focused playlist/folder sidebar row, Rename edits its plain name inline;
 Enter saves and Escape cancels. Icons/counts stay outside the editor.
+**Library → Select all** defaults to Command-A and selects the current song
+browser, including when focus is in the playlist sidebar. It can be rebound or
+unassigned. Plain A and Command-A are distinct; text editors keep native select
+all. The new default yields to any existing explicitly assigned Command-A action.
 Graveyard’s standard Cmd+A selects all before configurable grid actions.
 Additional cue defaults:
 
@@ -90,8 +94,10 @@ silently override restored user state.
 
 Tests cover conflict moves, persistence/unbinding/reset, modifier/focus changes,
 autorepeat, multiple holds, page switching, failed-save rollback and text-focus
-boundaries. Source changes require the full release/render gate and installed
-native-player acceptance; see [HANDOFF](HANDOFF.md) for the current state and
+boundaries. Local changes use affected keyboard/player/prep checks and Cocoa
+interaction evidence; complete release/render validation remains required before
+publication. Native-player acceptance retains its separate scope; see
+[HANDOFF](HANDOFF.md) for the current state and
 [PLAYER](PLAYER.md) for the cue editing/transport contract.
 
 The installed November1 follow-up adds unassigned **Set cue** directly below

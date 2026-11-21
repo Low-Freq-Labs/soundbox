@@ -262,8 +262,7 @@ def _render() -> None:
                 win._settings_tabs.setCurrentIndex(index)
         app.processEvents()
     if sync_progress:
-        from threading import Event
-        from soundbox.device_operations import Phase
+        from soundbox.device_operations import DeviceCommand, DeviceOperationState, DeviceSessionIdentity, Phase
 
         worker = object()
         win._on_dual_ipod_progress(14, 37, "fixture.wav")
@@ -271,7 +270,9 @@ def _render() -> None:
         app.processEvents()
         positions = tuple(widget.geometry() for widget in (
             win.status_label, win.status_count_label, win.progress, win.cancel_btn))
-        active = SimpleNamespace(worker=worker, cancellation=Event(), phase=Phase.EXECUTING)
+        active = DeviceOperationState(
+            DeviceCommand(DeviceSessionIdentity('/synthetic/IPOD', 1), 'commit-dual'),
+            Phase.EXECUTING, worker)
         with mock.patch.object(win._device_coordinator, "active", active):
             for stage in ("Acquiring source", "Copying to device", "Verifying device copy") * 20:
                 win._on_device_phase_progress(worker, stage, 14_500, 14_500, "fixture.bmp")
@@ -325,6 +326,7 @@ def _render() -> None:
         from pathlib import Path
         from PySide6.QtCore import QItemSelectionModel, QPoint
         from soundbox.library import LibraryTag
+        win.lib.source = '/synthetic/master.db'
         win.lib.source_kind = "rekordbox-db"
         win.lib.source_library_id = "synthetic-tags"
         win.lib.source_tags = [LibraryTag(str(i), name, "Genre", f"tag-{i}")

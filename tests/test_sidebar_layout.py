@@ -42,7 +42,7 @@ class SidebarLayout(unittest.TestCase):
         w._flash_status = mock.Mock()
         for name in ('_new_playlist_menu', '_rb_header_menu', '_on_playlist_select',
                      '_collapse_siblings', '_local_folder_expanded', '_native_append',
-                     '_native_reorder', '_native_import_files', '_on_tracks_dropped',
+                     '_native_reorder', '_native_move', '_native_place', '_native_import_files', '_on_tracks_dropped',
                      '_move_custom', '_move_local_node', '_import_files', '_playlist_menu',
                      '_device_menu', '_on_device_click', '_on_device_drop',
                      '_sync_artist_columns', '_fit_browser_columns'):

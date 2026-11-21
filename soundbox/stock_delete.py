@@ -1,7 +1,9 @@
 """Metadata-only entity guards for explicitly confirmed native iPod deletion.
 
-These witnesses authorize removal of current indexed file entities, not content
-integrity or ordinary Sync cleanup. No audio payload is read here.
+These primitives prove current file entities; callers independently admit their
+retirement. Native deletion requires its indexed selection. Playlist-name
+migration separately requires exact manifest ownership and text-byte proof.
+No audio payload is read here.
 """
 from __future__ import annotations
 

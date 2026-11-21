@@ -1,14 +1,20 @@
 #!/usr/bin/env bash
 # Release check: all tests in offscreen/Cocoa processes, required offline fixtures.
-# Usage: ./check.sh [--render] [--native]
+# Usage: ./check.sh [--render] | --focus SELECTOR... | --suite AREA... --level LEVEL
 set -e
 cd "$(dirname "$0")"
+for option in "$@"; do
+  case "$option" in
+    --focus|--suite|--list-suites|--plan|--help|-h)
+      exec ./.venv/bin/python scripts/check_tests.py "$@" ;;
+  esac
+done
 render=0
 for option in "$@"; do
   case "$option" in
     --render) render=1 ;;
     --native) : ;; # compatibility: native is now always required
-    *) echo "Usage: ./check.sh [--render] [--native]" >&2; exit 2 ;;
+    *) echo "Usage: ./check.sh [--render] | --focus SELECTOR... | --suite AREA... --level LEVEL | --list-suites" >&2; exit 2 ;;
   esac
 done
 echo "== pyflakes =="

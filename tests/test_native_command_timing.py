@@ -1,6 +1,9 @@
 """Native dispatch, worker phases and GUI acknowledgement stay distinct."""
 from pathlib import Path
 from copy import deepcopy
+import io
+import logging
+import sys
 import tempfile
 import threading
 import unittest
@@ -25,6 +28,60 @@ class NativeCommandTiming(unittest.TestCase):
         poll.start();timeout.start(5000)
         if not predicate():loop.exec()
         poll.stop();timeout.stop();self.assertTrue(predicate())
+
+    def test_production_logging_configuration_captures_worker_and_gui_phases(self):
+        from desktop import app
+        output=io.StringIO();handler=logging.StreamHandler(output)
+        self.addCleanup(handler.close)
+        self.addCleanup(app.LOG.setLevel,app.LOG.level)
+        self.addCleanup(timing.log.setLevel,timing.log.level)
+        timing.log.setLevel(logging.NOTSET)
+        def work():
+            with timing.phase('apply_tags'):return 42
+        def acknowledge(worker):
+            with timing.phase('acknowledge_native'):return worker.result
+        def publish():
+            with timing.phase('publish_library'):return 42
+        with (mock.patch.object(app.LOG,'handlers',[]),
+              mock.patch.object(app.LOG,'propagate',False),
+              mock.patch.object(timing.log,'handlers',[]),
+              mock.patch.object(timing.log,'propagate',True),
+              mock.patch.object(app.QStandardPaths,'isTestModeEnabled',return_value=True),
+              mock.patch.object(app.logging,'StreamHandler',return_value=handler),
+              mock.patch.object(sys,'excepthook')):
+            self.assertIsNone(app.setup_logging())
+            self.assertEqual(app.LOG.level,logging.INFO)
+            self.assertEqual(timing.log.level,logging.NOTSET)
+            worker=_TagTask(work,operation='tags')
+            worker.run()
+            self.assertEqual(worker.timing.acknowledge(acknowledge,worker),42)
+            self.assertEqual(worker.timing.publication(publish),42)
+        messages=output.getvalue().splitlines()
+        self.assertEqual(len(messages),6)
+        for label in ('phase=apply_tags ', 'Native command: kind=tags ',
+                      'phase=acknowledge_native ', 'Native command acknowledgement: kind=tags ',
+                      'phase=publish_library ', 'Native command publication: kind=tags '):
+            self.assertTrue(any(label in line for line in messages),label)
+        self.assertTrue(all('token='+worker.timing.token in line for line in messages))
+
+    def test_async_durable_publication_records_its_own_wait_and_keeps_failure_context_exact(self):
+        command=timing.CommandTiming('tags',admitted_at=10)
+        command.finished_at=25
+        def publish():
+            with timing.phase('publish_library'):return 42
+        with mock.patch.object(timing,'now',side_effect=[30,31,33,35]),self.assertLogs(timing.log,level='INFO') as logs:
+            self.assertEqual(command.publication(publish),42)
+        self.assertIn('phase=publish_library seconds=2.000',logs.output[0])
+        self.assertIn('post_worker_seconds=5.000 publication_seconds=5.000 admitted_seconds=25.000',logs.output[1])
+        self.assertTrue(all('token='+command.token in line for line in logs.output))
+        original=RuntimeError('private callback data')
+        def fail():raise original
+        with mock.patch.object(timing,'now',side_effect=[40,42]),self.assertLogs(timing.log,level='INFO') as logs:
+            with self.assertRaises(RuntimeError) as caught:command.publication(fail)
+        self.assertIs(caught.exception,original)
+        self.assertIn('outcome=raised',logs.output[0]);self.assertNotIn(str(original),logs.output[0])
+        with self.assertNoLogs(timing.log,level='INFO'):
+            with timing.phase('outside_publication'):pass
 
     def test_exact_dispatch_execution_phase_and_delayed_gui_acknowledgement_clocks(self):
         def work():

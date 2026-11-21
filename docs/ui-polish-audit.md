@@ -211,7 +211,9 @@ and connected targets right. A sole target is preselected, several may be checke
 and one action queues them through the existing serialized worker lane. Selection
 and target identities bind queued work; failed targets can report their result
 while later targets continue, and cancellation/shutdown clear remaining work.
-USB target results aggregate; iPod first-generation plan review remains intact.
+USB target results aggregate. The iPod first-generation plan review described
+at that checkpoint was later superseded by direct Export/Sync gestures without a
+second plan consent; current behavior is in [DEVICES](DEVICES.md).
 Generated dialog renders and queue tests are retained under the November4 export
 log directory. At this earlier checkpoint, read-only mount facts identified two
 writable generic USB targets and no actual USB export was performed. The later

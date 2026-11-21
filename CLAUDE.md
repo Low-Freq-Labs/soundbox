@@ -32,11 +32,27 @@ Native macOS library/prep/player app bridging rekordbox to USB, stock iPod and R
 Use Python 3.14 and `.venv`; pinned dependencies are in `requirements.txt`.
 
 ```sh
-./check.sh --render       # complete lint/types/build/offscreen/Cocoa gate; run bare
+./check.sh --list-suites  # named areas and cumulative quick/integration/recovery levels
+./check.sh --suite tags playlists --level integration  # combine affected areas
+./check.sh --focus tests/test_sidebar_layout.py  # exact module/class/method
+./check.sh --render       # complete gate before commit/push or wrap-up; run bare
 ./build_app.sh            # personal package; public uses ./build_app.sh public
 ```
 
-Every discovered test runs exactly once; no skips, weakened oracles or substituted fixtures.
+Choose a named area and depth with `--suite AREA... --level quick|integration|recovery`;
+preview exact coverage/platforms with `--plan`, or use `--focus` for exact selectors.
+USB/CDJ and iPod have separate core suites. Native writer/SQL/journal/ACK changes
+need the affected recovery coverage; quick reader/UI smoke is not writer proof.
+Small local fixes use focused regressions plus affected integration/lifecycle/error
+paths, relevant lint/types, and Cocoa/render checks when appearance or macOS input
+requires them. Reuse existing meaningful tests; do not run the whole suite for
+each small correction or repeat passing focused checks without changed inputs or
+an unresolved concern. Broaden coverage when the changed dependencies warrant it.
+Local installs may use this focused evidence plus package/isolated/runtime checks.
+Before any commit/push or wrap-up, run the complete gate on the intended final tree.
+In the full gate every discovered test runs exactly once; focused checks run every
+selected test once. Neither allows skips, weakened oracles or substituted fixtures.
+Record focused coverage honestly; it is not a full-suite pass.
 Build/isolated checks do not grant real-app control or source/device writes.
 A runtime handoff requires the guarded install/relaunch procedure and its current authorization.
 Record source validation separately from installed app identity; never restamp an older binary as new.

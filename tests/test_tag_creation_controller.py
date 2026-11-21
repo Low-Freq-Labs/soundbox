@@ -4,6 +4,7 @@ from dataclasses import replace
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
+import time
 import unittest
 from unittest import mock
 
@@ -79,6 +80,18 @@ class Window(QWidget):
         self.saved.append(deepcopy(self.settings))
         return self.save_ok
 
+    def _commit_tag_state(self, replacements, removals, committed, failed, *, current, expected_queues=None):
+        # Controller unit fixture delivers a sparse durable ACK immediately.
+        # Actual held StateRepository workers are covered in source-admission tests.
+        if not current():failed(OSError('The source changed'));return True
+        previous=deepcopy(self.settings)
+        for (root,key),value in replacements.items():
+            assert root=='settings'
+            self.settings[key]=deepcopy(value)
+        if not self._save_state():
+            self.settings=previous;failed(OSError('No space for pending intention'));return True
+        committed();return True
+
     def _publish_created_library(self, library):
         self.published.append(library)
         self.lib = library
@@ -119,6 +132,19 @@ class CreationController(unittest.TestCase):
         self.controller.timer.stop()
         self.controller.pump()
         self.assertEqual(len(self.window.tag_controller.admitted), 1)
+
+    def test_shared_source_idle_replaces_busy_poll_but_preserves_explicit_native_owner_backoff(self):
+        self.assertTrue(self.controller.enqueue(self.request()))
+        tags=self.window.tag_controller;tags.busy=True
+        self.controller.pump();self.assertGreater(self.controller.timer.remainingTime(),1000)
+        tags.busy=False;tags.idle.emit()
+        self.assertEqual(self.controller.timer.remainingTime(),0)
+        self.controller.timer.stop();self.controller.pump()
+        self.assertEqual(len(tags.admitted),1)
+        # A native owner refusal is an explicit deadline, unlike a busy poll.
+        tags.busy=False;self.controller.not_before=time.monotonic()+2
+        self.controller.timer.start(2000);tags.idle.emit()
+        self.assertGreater(self.controller.timer.remainingTime(),1000)
 
     def test_intent_persists_before_source_admission_and_verified_ack_precedes_presentation(self):
         request = self.request()
@@ -207,15 +233,16 @@ class CreationController(unittest.TestCase):
             self.app.processEvents()
         self.assertEqual(len(self.window.tag_controller.admitted), 1)
         self.assertEqual(len(self.created), 1)
-        self.assertFalse(self.controller.retry())
+        self.assertTrue(self.controller.retry());self.controller.ack.pump()
+        self.assertTrue(self.controller.ack.error)
         self.window.save_ok = True
         self.assertTrue(self.controller.retry())
+        self.controller.ack.pump()
         self.controller.timer.stop()
         self.controller.pump()
-        self.window.tag_controller.deliver()
         self.assertEqual(self.controller.pending, [])
         self.assertEqual(len(self.created), 1)
-        self.assertEqual(self.requests, [request, request])
+        self.assertEqual(self.requests, [request])
 
     def test_duplicate_capture_coalesces_without_save_and_conflicting_same_operation_refuses(self):
         request = self.request()
@@ -271,10 +298,13 @@ class CreationController(unittest.TestCase):
         self.assertFalse(self.window.published)
         self.assertFalse(self.controller.timer.isActive())
 
-    def test_failed_initial_persistence_admits_no_source_and_restores_queue(self):
+    def test_failed_initial_persistence_retains_unsaved_intention_without_source_admission(self):
         self.window.save_ok = False
-        self.assertFalse(self.controller.enqueue(self.request()))
+        request=self.request()
+        self.assertTrue(self.controller.enqueue(request))
         self.assertNotIn(QUEUE, self.window.settings)
+        self.assertEqual(self.controller.pending[0]['request'],request)
+        self.assertTrue(self.controller.admission_error)
         self.controller.pump()
         self.assertFalse(self.window.tag_controller.admitted)
 

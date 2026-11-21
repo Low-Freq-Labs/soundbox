@@ -25,6 +25,7 @@ from copy import deepcopy
 
 import logging
 import json
+import hashlib
 from math import cos, isfinite, pi, sin
 import os
 import random
@@ -723,10 +724,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         pages.stack.currentChanged.connect(self._remember_stock_device_view)
         pages.delete_playlists_requested.connect(self._begin_stock_playlist_delete)
         pages.playlist_order_requested.connect(self._apply_composite_playlist_order)
-        from .stock_catalog_sync import request_sync
-        pages.sync_requested.connect(lambda selected: request_sync(self, selected))
-        pages.export_requested.connect(lambda: self._show_export_dialog(self._current_device_path)
-            if not self._shutting_down and not self._state_maintenance else None)
+        pages.primary_action_requested.connect(self._device_primary_action)
         self._replace_device_page(1, pages)
         return pages
 
@@ -924,11 +922,12 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         except (OSError,ValueError,TypeError) as exc:
             failed(exc);return True
 
-    def _commit_tag_state(self,replacements,removals,committed,failed,*,current):
+    def _commit_tag_state(self,replacements,removals,committed,failed,*,current,expected_queues=None):
         """Admit a tag ACK; only the ordered durable callback publishes it."""
         from .state_commit import StateCommitter
         if self._state_committer is None:self._state_committer=StateCommitter(self)
-        try:return self._state_committer.submit(replacements,removals,committed,failed,current=current)
+        try:return self._state_committer.submit(replacements,removals,committed,failed,current=current,
+                                                expected_queues=expected_queues)
         except (OSError,ValueError,TypeError) as exc:
             failed(exc);return True
 
@@ -980,6 +979,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
 
     def _annotate_art(self, rows: list[dict]) -> list[dict]:
         """Stamp each row with cover/avatar/default/blank status for Art."""
+        if not rows:
+            return rows
         kinds = self.art_cache.status_kinds(r.get('id', '') for r in rows)
         for r in rows:
             r["art"] = kinds[r.get('id', '')]
@@ -1183,10 +1184,15 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         if self.model._rows is not previous:self._restore_browser_seat(seat)
 
     def _set_refreshed_rows(self,rows):
+        from .tag_selection_view import rows as tag_selection_rows
+        projected=tag_selection_rows(self,rows)
+        seat=self._browser_seat() if projected is not rows else None
+        rows=projected
         clean=lambda row:{k:v for k,v in row.items() if k!='_hay'}
         if len(rows)==len(self.model._all_rows) and all(clean(a)==clean(b) for a,b in zip(rows,self.model._all_rows)):
             return
         self.model.set_rows(rows)
+        if seat is not None:self._restore_browser_seat(seat)
 
     def _browser_seat(self):
         rows=self.model._rows;selection=self.table.selectionModel()
@@ -1279,10 +1285,11 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 tags_button.dismiss_outside(ev.globalPosition().toPoint())
             elif event_type == QEvent.ApplicationDeactivate:
                 tags_button.popup.close()
-        if (obj is QApplication.instance() and event_type == QEvent.Quit
-                and self._defer_quit_for_saves()):
-            ev.ignore()
-            return True
+        if obj is QApplication.instance() and event_type == QEvent.Quit:
+            if (getattr(self,'_shutdown_waiting',False) or getattr(self,'_state_maintenance',False)
+                    or self._defer_quit_for_saves(auto_close=True)):
+                ev.ignore()
+                return True
         usb_pages = vars(self).get('usb_device_pages')
         if (event_type in (QEvent.Resize, QEvent.Show)
                 and getattr(self, '_browser_columns_shown', False)
@@ -1335,7 +1342,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         if grave is not None and focus is grave:
             action = self._keyboard_router.keymap.action(event_binding(ev)) or ''
             browsing = (action.startswith(('transport.', 'cues.', 'grid.', 'wave.', 'autoplay.'))
-                        or action in ('browser.load','browser.search', 'app.settings'))
+                        or action in ('browser.load','browser.search', 'browser.select_all', 'app.settings'))
         if usb_pages is not None and focus is usb_pages.playlist_tree:
             action = self._keyboard_router.keymap.action(event_binding(ev)) or ''
             browsing = (action.startswith(('transport.', 'cues.', 'grid.', 'wave.', 'autoplay.'))
@@ -1374,6 +1381,9 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         return True
 
     def _dispatch_keyboard_action(self, action):
+        if action == 'browser.select_all':
+            self._select_all_browser_tracks()
+            return None
         pb = self.player_bar
         if action in ('transport.back','transport.forward'):
             return pb.begin_beat_jump(-1 if action=='transport.back' else 1)
@@ -1475,6 +1485,38 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         elif action in commands:
             commands[action]()
         return None
+
+    def _select_all_browser_tracks(self):
+        grave = getattr(self, '_grave', None)
+        if grave is not None and QApplication.focusWidget() is grave:
+            grave.selectAll()
+        elif self.stack.currentWidget() is self.artists_view:
+            self.artists_view.selectAll()
+        elif self.stack.currentIndex() == 0:
+            self.table.selectAll()
+            self._log_browser_selection('select-all')
+
+    def _browser_selection_diagnostic(self):
+        selected=self._selected_ids()
+        tracks=self.lib.tracks_by_id if self.lib else {}
+        bindings=tuple(sorted({(track.native_id,track.source_uuid or '') for identity in selected
+                              if (track:=tracks.get(identity)) is not None}))
+        return dict(view=str(getattr(self,'_view_key','') or ''),
+                    full=len(self.model._all_rows),visible=len(self.model._rows),selected=len(selected),
+                    filtered=bool(self.model._filter),bindings=bindings)
+
+    def _log_browser_selection(self, action, *, before=None, tag_id=None, present=None):
+        current=self._browser_selection_diagnostic()
+        bindings=current['bindings']
+        fingerprint=lambda values:hashlib.sha256(json.dumps(values,separators=(',',':')).encode()).hexdigest()
+        lost=tuple(sorted(set(before['bindings'])-set(bindings))) if before is not None else ()
+        LOG.info('Browser selection: action=%s view=%s full=%d visible=%d selected=%d '
+                 'native_targets=%d filtered=%s selection_sha256=%s tag_id=%s present=%s '
+                 'before_selected=%s lost=%d lost_sha256=%s lost_ids=%s',
+                 action,json.dumps(current['view'][:256]),current['full'],current['visible'],
+                 current['selected'],len(bindings),current['filtered'],fingerprint(bindings),
+                 tag_id,present,before['selected'] if before is not None else 'unknown',
+                 len(lost),fingerprint(lost),json.dumps([identity for identity,_uuid in lost[:8]]))
 
     def _set_next_cue(self):
         panel=self.player_bar.cue_panel
@@ -1904,17 +1946,16 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
     def _browser_body(self):
         """Resize the shared playlist/device column without collapsing either pane."""
         split = QSplitter(Qt.Horizontal)
+        split.setObjectName('BrowserSplit')
         split.setChildrenCollapsible(False)
-        split.setHandleWidth(5)
+        # Qt keeps an overlapping mouse grab area around a one-pixel handle.
+        split.setHandleWidth(1)
         split.addWidget(self._sidebar())
         content = self._main_stack()
         content.setMinimumWidth(320)
         split.addWidget(content)
         split.setStretchFactor(0, 0)
         split.setStretchFactor(1, 1)
-        handle = split.handle(1)
-        handle.setObjectName('VDivider')
-        handle.setAttribute(Qt.WA_StyledBackground, True)
         self._browser_split = split
         split.splitterMoved.connect(self._save_sidebar_width)
         return split
@@ -2115,8 +2156,11 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         self.search.setFixedWidth(self.my_tags.width())
         self.my_tags.popup.aboutToShow.connect(self._probe_tags)
         self.my_tags.assignment_requested.connect(self._assign_tag)
+        from .tag_order import save_order
+        self.my_tags.order_requested.connect(lambda order, binding: save_order(self, order, binding))
         self.my_tags.creation_requested.connect(self._new_tag)
         self.my_tags.deletion_requested.connect(self._delete_tag)
+        self.my_tags.rename_requested.connect(self._rename_tag)
         row.addWidget(self.my_tags)
         row.addStretch(1)
         row.addWidget(gear)
@@ -2248,24 +2292,50 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         if reset:self._restore_browser_seat(seat)
 
     def _sync_tags(self):
+        from .tag_selection_view import release
+        release(self)
+        from .tag_controller import device_blocks_library_work
         if not hasattr(self, "my_tags"):
             return
         controller = self.tag_controller
         ids = self._selected_ids() if hasattr(self, "table") and self.stack.currentIndex() == 0 else []
         reason = controller.reason(ids)
         if not reason and (self._refresh_worker is not None or self._state_maintenance
-                           or self._device_operation_owned()):
+                           or device_blocks_library_work(self)):
             reason = "Library operation in progress"
         lib = controller.lib
         assigned = controller.selected_tags(ids)
         creation_reason = self.tag_definition_controller.reason()
-        if not creation_reason and (self._refresh_worker is not None or self._device_operation_owned()):
+        if not creation_reason and (self._refresh_worker is not None or device_blocks_library_work(self)):
             creation_reason = 'Library operation in progress'
         deletion_reason = self.tag_definition_controller.deletion_reason()
-        if not deletion_reason and (self._refresh_worker is not None or self._device_operation_owned()):
+        if not deletion_reason and (self._refresh_worker is not None or device_blocks_library_work(self)):
             deletion_reason = 'Library operation in progress'
-        self.my_tags.set_state(lib.source_tags if lib else [], assigned, reason,
-                               creation_reason=creation_reason, deletion_reason=deletion_reason)
+        rename_reason = self.tag_definition_controller.rename_reason()
+        if not rename_reason and (self._refresh_worker is not None or device_blocks_library_work(self)):
+            rename_reason = 'Library operation in progress'
+        from .tag_order import ordered_tags
+        context = (str(lib.source), lib.source_kind, lib.source_library_id) if lib else None
+        project_tags=(getattr(self.tag_definition_controller,'available_tags',None)
+                      or self.tag_definition_controller.native_order)
+        tags = (project_tags(lib.source_tags)
+                if lib and lib.source_kind=='rekordbox-db' else
+                ordered_tags(lib.source_tags, self.settings, context) if lib else [])
+        order_reason=(self.tag_definition_controller.order_reason()
+                      if lib and lib.source_kind=='rekordbox-db' else '')
+        pending_creation=getattr(self.tag_definition_controller,'pending_creation',None)
+        pending_creations=({tag.tag_id for tag in tags if pending_creation(tag.tag_id,tag.source_uuid)}
+                           if callable(pending_creation) else set())
+        if pending_creations and not order_reason:
+            order_reason='Finish creating tags before reordering them'
+        self.my_tags.set_state(tags, assigned, reason,
+                               creation_reason=creation_reason, deletion_reason=deletion_reason,
+                               deletion_context=(str(lib.source), lib.source_kind, lib.source_library_id)
+                               if lib else None, order_reason=order_reason,
+                               rename_reason=rename_reason, rename_context=context,
+                               pending_creations=pending_creations,
+                               assignment_reasons={tag.tag_id:self.tag_definition_controller.assignment_reason(
+                                   tag.tag_id,tag.source_uuid) for tag in tags})
         self._sync_edit_status()
 
     def _sync_edit_status(self):
@@ -2377,21 +2447,25 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         return self.tag_controller.request_cue(track_id, kind, slot, operation, position)
 
     def _assign_tag(self, tag_id, present):
+        from .tag_controller import device_blocks_library_work
         if (self._refresh_worker is not None or self._state_maintenance
-                or self._shutting_down or self._device_operation_owned()):
+                or self._shutting_down or device_blocks_library_work(self)):
             self._sync_tags()
             return
         selected=list(self._selected_ids())
+        self._log_browser_selection('assign-tag',tag_id=tag_id,present=present)
         context=(str(self.lib.source),self.lib.source_library_id,
-                 smart_playlist_order.capture(self.lib,selected,tag_id,present)) if self.lib else None
+                 smart_playlist_order.capture(self.lib,selected,tag_id,present)
+                 if getattr(self.tag_controller, 'durable_assignment_ack', False) is not True else None) if self.lib else None
         if self.tag_controller.request(selected, tag_id, present):
             self._tag_order_context=context
         self._sync_rekordbox_connection()
         self._sync_tags()
 
     def _probe_tags(self):
+        from .tag_controller import device_blocks_library_work
         if (self._refresh_worker is not None or self._state_maintenance
-                or self._shutting_down or self._device_operation_owned()):
+                or self._shutting_down or device_blocks_library_work(self)):
             self._sync_tags()
             return
         self.tag_controller.probe()
@@ -2422,6 +2496,9 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         elif getattr(self.tag_controller,'durable_assignment_ack',False) is True:
             order_error=getattr(self.tag_controller,'order_error','')
         seat = self._browser_seat() if self.stack.currentIndex() == 0 else None
+        from .tag_selection_view import capture
+        retained_selection=capture(self)
+        if retained_selection is not None:self._tag_selection_view=retained_selection
         previous_rows=self.model._rows
         self._on_refresh_done(lib,prepared_native_ids=())
         if seat is not None and self.stack.currentIndex() == 0 and self.model._rows is not previous_rows:
@@ -2597,6 +2674,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         self.tree.itemCollapsed.connect(lambda item:self._local_folder_expanded(item,False))
         self.tree.native_tracks_dropped.connect(self._native_append)
         self.tree.native_reordered.connect(self._native_reorder)
+        self.tree.native_moved.connect(self._native_move)
+        self.tree.native_placed.connect(self._native_place)
         self.tree.native_files_dropped.connect(self._native_import_files)
         self.tree.tracks_dropped.connect(self._on_tracks_dropped)
         self.tree.playlist_moved.connect(self._move_custom)
@@ -2654,7 +2733,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         row = self._native_node(item.data(0,RB_NODE_ROLE)) if item else None
         smart_parent = row['ID'] if row and row['Attribute'] == 1 else row['ParentID'] if row else 'root'
         smart = menu.addAction('New Smart Playlist', lambda:self._new_smart_playlist(smart_parent))
-        smart_reason = self.playlist_controller.smart_reason()
+        smart_reason = self.playlist_controller.smart_creation_reason()
         smart.setEnabled(not smart_reason)
         smart.setToolTip(smart_reason)
         menu.addAction('New Folder',lambda:self._native_new(parent or 'root',folder=True))
@@ -2848,27 +2927,24 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         bar = FooterBar(); bar.setObjectName("BottomBar")
         bar.setFixedHeight(28)
         bar.setAttribute(Qt.WA_StyledBackground, True)
-        # A touch more left padding so status text (EXPORTING/DELETING/…) isn't jammed
-        # against the window edge.
+        # Keep progress and Cancel anchored before variable counts/phase text.
         h = QHBoxLayout(bar); h.setContentsMargins(20, 4, 12, 4); h.setSpacing(8)
         self.status_label = ElidedLabel("Ready")
         # Reserve only the current operation's animated dots.  A single global
         # width for every possible flash message left a huge dead gap before
         # the iPod count and progress bar.
         fm = self.status_label.fontMetrics()
-        h.addWidget(self.status_label)
         self.status_count_label = QLabel("")
         self.status_count_label.setAlignment(Qt.AlignCenter)
         # Reserve the full track-count width for the operation. Per-file byte
         # details live in the status tooltip, so copy/verify bursts cannot
-        # replace the count or move the progress bar.
+        # replace the count.
         self.status_count_label.setMinimumWidth(
             fm.horizontalAdvance("9999/9999") + 16)
         self.status_count_label.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Preferred)
         self.status_count_label.setMargin(0)
         self.status_count_label.setFixedHeight(20)
         self.status_count_label.setVisible(False)
-        h.addWidget(self.status_count_label)
         self.progress = ThemeProgressBar()
         self.progress.setMinimum(0)
         self.progress.setValue(0)
@@ -2884,6 +2960,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         self.cancel_btn.clicked.connect(self._cancel_export)
         self.cancel_btn.setVisible(False)
         h.addWidget(self.cancel_btn)
+        h.addWidget(self.status_count_label)
+        h.addWidget(self.status_label)
         h.addStretch(1)
         return bar
 
@@ -2919,6 +2997,9 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             return 'Finish cue/grid saves before changing library sources'
         if getattr(prep, 'admission_error', ''):
             return 'Cue/grid save needs attention before changing library sources'
+        if any(getattr(getattr(self,name,None),'admission_pending',False)
+               for name in ('playlist_controller','tag_definition_controller')):
+            return 'Finish or discard unsaved source intentions before changing library sources'
         if (self._refresh_worker is not None or self._state_maintenance or self._shutting_down
                 or getattr(self,'_state_publication',False) or getattr(tags,'state_commit_owned',False)
                 or getattr(getattr(self,'_state_committer',None),'pending',False)
@@ -3117,7 +3198,13 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                     scalar_inputs.add(display_input(self.lib.tracks_by_id[identity]))
                 display_inputs=(frozenset(scalar_inputs),*display_inputs[1:])
                 reuse=display_inputs==getattr(self,'_display_inputs',None)
-            dirty=tuple(sorted(set(prepared_native_ids)|set(self._artist_registry_changed_ids)))
+            from .prepared_browser import artist_tag_inputs
+            incoming_tags=artist_tag_inputs(self.lib)
+            previous_tags=getattr(self,'_artists_tag_inputs',None)
+            tag_changes=(set(incoming_tags) if previous_tags is None else
+                         {identity for identity,labels in previous_tags.items()
+                          if incoming_tags.get(identity)!=labels})
+            dirty=tuple(sorted(set(prepared_native_ids)|set(self._artist_registry_changed_ids)|tag_changes))
             affected=(tuple(self.lib.tracks_by_id) if not metadata.registry_context_equal(
                 previous_registry,self.lib.artist_registry) else dirty)
             self._apply_settings_to_lib(invalidate_rows=False,configure_artwork=False)
@@ -3139,10 +3226,11 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             if prepared_rows is not None:
                 self._row_cache.update({tid: row for tid, row in prepared_rows.items()
                                         if tid in self.lib.tracks_by_id})
-        from .prepared_browser import context as browser_context
+        from .prepared_browser import context as browser_context, artists_context
         current_browser_context=browser_context(self)
+        current_artists_context=artists_context(self)
         same_registry=metadata.registry_context_equal(previous_registry,self.lib.artist_registry)
-        if (prepared_only and same_registry and getattr(self,'_artists_context',None)==current_browser_context
+        if (prepared_only and same_registry and getattr(self,'_artists_context',None)==current_artists_context
                 and getattr(self,'_artists_library',None) is not None):
             # Native/media compatibility was proved before this publication.
             # Retain the prepared Artists baseline; its existing dirty-ID path
@@ -3156,7 +3244,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             # Source identity, visibility and complete ordered organization are
             # unchanged. Keep the existing tree items/editors/scroll position;
             # only dirty Artists rows need their ordinary prepared publication.
-            self._prepare_artists(prepared_context=current_browser_context)
+            self._prepare_artists(prepared_context=current_artists_context)
         else:
             self._populate_tree(engine.summary(self.lib))
         if not prepared_only:
@@ -3293,6 +3381,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         return None
 
     def _populate_tree(self, summary: dict, *, presentation=None):
+        self.tree._set_hover(None)
+        self.tree._set_insert(None)
         presentation=self._native_presentation() if presentation is None else presentation
         if presentation is not None and presentation is not self.lib:
             summary=engine.summary(presentation)
@@ -3339,6 +3429,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                     item.setData(0,PATH_ROLE,node.get('path') if node['type']=='playlist' else None)
                     item.setData(0,CUSTOM_ROLE,aliases.get(identity))
                     native=native_rows.get(node.get('pid'))
+                    item.setData(0,RB_NODE_KIND_ROLE,native['Attribute'] if native else node.get('attribute'))
                     item.setData(0,NATIVE_BINDING_ROLE,
                         dict(source=str(native_library.source),library_id=native_library.source_library_id,
                              id=native['ID'],uuid=native['UUID'],alias=aliases.get(identity))
@@ -3860,7 +3951,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         if self.lib is None:
             return
         self._stash_view()
-        self.model.set_rows(self._annotate_art(self._playlist_rows(path)))
+        self._set_refreshed_rows(self._annotate_art(self._playlist_rows(path)))
         self.stack.setCurrentIndex(0)
         self._restore_view(f"rb:{path}")
 
@@ -3869,10 +3960,9 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         if self.lib and self.lib.source_kind=='rekordbox-db':self._native_new()
         else:self._new_local_playlist()
 
-    def _custom_name_taken(self, name: str) -> bool:
-        """Custom names must not collide with each other OR the two exportable
-        views — on a device they're all identified by playlist name."""
-        return name in self.custom or name.casefold() in ("collection", "artists")
+    def _custom_name_taken(self, name: str, *, exclude_custom='') -> bool:
+        from .playlist_names import playlist_name_taken
+        return playlist_name_taken(self, name, custom_name=exclude_custom)
 
     def _landed_time(self, t) -> float:
         """When a track "landed" in the collection, for the newest-first sort.
@@ -4449,8 +4539,9 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         self._artists_library = self.lib
         self._artists_dirty_ids = set()
         self._artists_generation = generation
-        from .prepared_browser import context as browser_context
-        self._artists_context = browser_context(self) if prepared_context is None else prepared_context
+        from .prepared_browser import artists_context, artist_tag_inputs
+        self._artists_context = artists_context(self) if prepared_context is None else prepared_context
+        self._artists_tag_inputs = artist_tag_inputs(self.lib, tracks)
         for index in range(self.sb_tree.topLevelItemCount()):
             item = self.sb_tree.topLevelItem(index)
             if item.data(0, ARTISTS_ROLE):
@@ -4867,7 +4958,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 button.setToolTip('Open a library to export playlists')
             pages = self.__dict__.get('stock_ipod_pages')
             if pages is not None:
-                pages.set_playlist_actions_available(
+                pages.set_primary_action(button.text(),
                     button.isEnabled() and kind in {'stock_ipod', 'dual_boot'},
                     button.toolTip())
 
@@ -5078,9 +5169,12 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                     or not getattr(status,'database_sha256','')):
                 continue
             observed_art=getattr(status,'artwork_database_sha256',None)
+            observed_playback=getattr(status,'play_counts_sha256',None)
             if (status.database_sha256 != cached[0].database_sha256
-                    or observed_art is not None and observed_art != cached[0].artwork_database_sha256):
-                # This exact scan already observed the changed small catalog.
+                    or observed_art is not None and observed_art != cached[0].artwork_database_sha256
+                    or observed_playback is not None
+                    and observed_playback != getattr(cached[0], 'play_counts_sha256', '')):
+                # This exact scan already observed changed catalogs or history.
                 # Reuse the serialized view lane rather than asking the user
                 # to reconnect or weakening a later plan's freshness guard.
                 self._stock_view_pending.setdefault(dev,self._device_profiles[dev])
@@ -5140,10 +5234,14 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             self._pending_device_operation = None
             if (getattr(self, '_export_batch', None) is not captured_batch
                     or captured_batch is not None and captured_batch.get('active') is not captured_target):
+                rejected = getattr(callback, '_device_wait_rejected', None)
+                if rejected is not None:rejected()
                 return
             active = self._device_coordinator.active
             if ((active is not None and active.phase != Phase.DISCOVERING)
                     or getattr(self, '_usb_format_device', '')):
+                rejected = getattr(callback, '_device_wait_rejected', None)
+                if rejected is not None:rejected()
                 request = getattr(callback, '_catalog_request', None)
                 if request is not None:
                     from .stock_catalog_sync import _end_deferred_catalog
@@ -5160,6 +5258,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             fresh = identities()
             if (not retired_current or self._shutting_down
                     or self._device_coordinator.eject_pending or authority != fresh):
+                rejected = getattr(callback, '_device_wait_rejected', None)
+                if rejected is not None:rejected()
                 batch=getattr(self,'_export_batch',None)
                 if batch:
                     batch['error']='Connected devices changed while waiting; choose the targets again'
@@ -5167,6 +5267,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 return
             try:callback()
             except Exception as exc:
+                rejected = getattr(callback, '_device_wait_rejected', None)
+                if rejected is not None:rejected()
                 batch=getattr(self,'_export_batch',None)
                 if not batch:raise
                 batch['error']=str(exc)
@@ -5844,6 +5946,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             self._set_device_progress(1000)
             self._stop_pulse(force=True)
             finalization_error = self._device_finalization_error
+            MainWindow._restore_playlist_order_drop(self,dev)
             if previous is not None and self._device_coordinator.last_result is previous:
                 self._device_coordinator.last_result = replace(
                     previous, refresh="failed" if finalization_error else "complete")
@@ -6083,11 +6186,18 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 "iPod dashboard preloaded: %s (%d tracks, %d playlists)",
                 dev, len(result.tracks), len(result.playlists))
             return
+        previous_snapshot = self._stock_snapshot
+        from soundbox.stock_ipod_info import playback_refresh_compatible
+        playback_only = (composite_data is None and isinstance(previous_snapshot, StockIpodSnapshot)
+            and previous_snapshot.play_counts_sha256 != result.play_counts_sha256
+            and playback_refresh_compatible(previous_snapshot, result))
         self._stock_snapshot = result
         self._restoring_stock_view = True
         try:
-            self.stock_ipod_pages.set_snapshot(result, composite_data)
-            self._restore_stock_device_view()
+            if not (playback_only and self.stock_ipod_pages.set_playback_snapshot(result)):
+                self.stock_ipod_pages.set_snapshot(result, composite_data)
+                self._restore_stock_device_view()
+                self.stock_ipod_pages.restore_playlist_order_seat()
         finally:
             self._restoring_stock_view = False
         profile = self._device_profiles.get(dev)
@@ -6298,7 +6408,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 usb_family=getattr(facts, "usb_family", ""),
                 shadow_store=self.stock_ipod_shadow_store,
                 managed_playlist_names_before=tuple(
-                    " / ".join([*map(str, row.get("folder_path") or []), str(row.get("name") or "")])
+                    str(row.get('device_name') or " / ".join([
+                        *map(str, row.get("folder_path") or []), str(row.get("name") or "")]))
                     for row in managed.values() if isinstance(row, dict)),
                 managed_playlist_keys_before=tuple(str(key) for key in managed),
                 managed_track_rows_before=tuple(sorted({
@@ -6486,6 +6597,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
     ):
         """Build the composite stock/Rockbox plan without target writes."""
         if self._shutting_down or self._state_maintenance:
+            MainWindow._restore_playlist_order_drop(self,dev)
             return
         new_export=(action=='sync' and (playlists is None or not reconcile)
                     and expected_manifest is None and expected_playlist_rows is None)
@@ -6507,12 +6619,13 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             return
         from soundbox.dual_ipod import DualIpodSyncPlan,plan_dual_ipod_sync
         if self._device_operation_owned():
+            MainWindow._restore_playlist_order_drop(self,dev)
             self._export_target_result(dev,RuntimeError('Wait for the current device operation'))
             QMessageBox.warning(
                 self, "Device busy", "Wait for the current device operation.")
             return
-        if self._defer_device_operation_until_scan_finishes(
-                lambda: self._begin_dual_ipod_sync(
+        def resume():
+            self._begin_dual_ipod_sync(
                     dev,
                     playlists,
                     reconcile=reconcile,
@@ -6523,16 +6636,19 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                     expected_playlist_rows=expected_playlist_rows,
                     expected_manifest=expected_manifest,
                     audit_existing=audit_existing,
-                    _export_capture=_export_capture,
-                )):
+                    _export_capture=_export_capture)
+        resume._device_wait_rejected = lambda:MainWindow._restore_playlist_order_drop(self,dev)
+        if self._defer_device_operation_until_scan_finishes(resume, target=dev):
             return
         from .export_wait import sync_source_identity
         source_identity=sync_source_identity(self,dev,playlists)
         profile = self._device_profiles.get(dev)
         if self._stock_write_access(dev, profile) is None:
+            MainWindow._restore_playlist_order_drop(self,dev)
             return
         model = str(getattr(profile, 'model', '') or '')
         if source_identity!=sync_source_identity(self,dev,playlists):
+            MainWindow._restore_playlist_order_drop(self,dev)
             self._export_target_result(dev,RuntimeError('Library, playlist or connected iPod changed; choose the target again'))
             self._flash_status('Library, playlist or connected iPod changed; choose the target again',15)
             return
@@ -6617,6 +6733,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             plan,
             log_label="Dual iPod planning",
         )
+        worker.playlist_order_drop = getattr(self,'_playlist_order_drop',None)
         self._dual_plan_worker = worker
         self._exporting = True
         self.progress.setRange(0, 1000)
@@ -6678,6 +6795,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             try:_export_capture.require_current(self,dev)
             except Exception as exc:result=exc
         if isinstance(result, Exception):
+            MainWindow._restore_playlist_order_drop(self,dev)
             self._export_target_result(dev,result)
             was_preconfirmed = self._dual_active_preconfirmed
             self._exporting = False
@@ -6707,6 +6825,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             self._refresh_devices()
             return
         if not isinstance(result, DualIpodSyncPlan):
+            MainWindow._restore_playlist_order_drop(self,dev)
             self._export_target_result(dev,RuntimeError('Unexpected iTunes/Rockbox plan result'))
             was_preconfirmed = self._dual_active_preconfirmed
             self._exporting = False
@@ -6894,6 +7013,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             commit,
             log_label="Dual iPod commit",
         )
+        worker.playlist_order_drop = getattr(self,'_playlist_order_drop',None)
         self._dual_commit_worker = worker
         self._exporting = True
         total = plan.progress_total
@@ -6975,6 +7095,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
     def _on_dual_ipod_commit(
             self, dev: str, result, plan: DualIpodSyncPlan | None = None):
         from soundbox.operation_control import OperationCancelled
+        if isinstance(result, Exception):MainWindow._restore_playlist_order_drop(self,dev)
         self._exporting = False
         self._cancelling = False
         self.cancel_btn.setVisible(False)
@@ -7395,16 +7516,30 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             raise ValueError("Refresh the iPod playlist view before retrying")
         return deepcopy(cached[1].manifest)
 
+    def _restore_playlist_order_drop(self, dev=None):
+        """Retire only the exact optimistic dual drop, including rejected waits."""
+        request = getattr(self, '_playlist_order_drop', None)
+        if request is None or dev is not None and request[0] != dev:return
+        self._playlist_order_drop = None
+        self.stock_ipod_pages.restore_playlist_order(request[1])
+
     def _apply_composite_playlist_order(self, requested_keys) -> None:
         """Publish the Device-tab sequence to iTunesDB and Rockbox together."""
         from .export_dialog import device_failure_text
         dev = self._current_device_path
         profile = self._device_profiles.get(dev)
+        pages = self.stock_ipod_pages
+        token = pages.playlist_order_token
+        if getattr(profile, 'kind', '') == 'stock_ipod':
+            from .stock_playlist_order import request_order
+            request_order(self, requested_keys)
+            return
         if (
             not dev
             or self.lib is None
             or getattr(profile, "kind", "") != "dual_boot"
         ):
+            pages.restore_playlist_order(token)
             return
         try:
             manifest = self._cached_composite_manifest(dev)
@@ -7417,6 +7552,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 self.lib, self._sync_playlists())
             playlists = [current[key] for key in order]
         except Exception as exc:
+            pages.restore_playlist_order(token)
             QMessageBox.warning(
                 self,
                 "Playlist order unavailable",
@@ -7424,15 +7560,14 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             )
             self._refresh_device_surfaces(dev)
             return
-        self._begin_dual_ipod_sync(
-            dev,
-            playlists,
-            reconcile=True,
-            respect_selected_order=True,
-            confirmed=True,
-            action="order",
-            expected_manifest=manifest,
-        )
+        self._playlist_order_drop = (dev, token)
+        try:
+            self._begin_dual_ipod_sync(
+                dev, playlists, reconcile=True, respect_selected_order=True,
+                confirmed=True, action="order", expected_manifest=manifest)
+        except Exception as exc:
+            MainWindow._restore_playlist_order_drop(self,dev)
+            QMessageBox.warning(self, "Playlist order unavailable", device_failure_text(exc,phase='plan'))
 
     def _begin_composite_playlist_delete(
             self,
@@ -9510,6 +9645,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
     def _cancel_export(self):
         from .export_wait import cancel_source_syncs
         from .stock_catalog_sync import cancel_deferred_sync
+        MainWindow._restore_playlist_order_drop(self)
         if cancel_deferred_sync(self):
             return
         batch=getattr(self,'_export_batch',None)
@@ -9557,8 +9693,11 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             return
         self._cdj_waiting = None
         active = self._device_coordinator.active
-        waiting = self._pending_device_operation is not None
+        pending = self._pending_device_operation
+        waiting = pending is not None
         self._pending_device_operation = None
+        rejected = getattr(pending, '_device_wait_rejected', None)
+        if rejected is not None:rejected()
         self._dual_sync_queue.clear()
         workers = []
         for attr in self._EJECT_BLOCKING_WORKERS:
@@ -9636,6 +9775,9 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         if current and isinstance(result, Exception):
             self._dual_sync_queue.clear()
         if owned and not current:
+            drop=getattr(worker,'playlist_order_drop',None)
+            if drop is not None and getattr(self,'_playlist_order_drop',None)==drop:
+                MainWindow._restore_playlist_order_drop(self,drop[0])
             from soundbox.cdj_transaction import CdjPlan
             if isinstance(result, CdjPlan):
                 result.close()
@@ -9697,6 +9839,11 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         the app quits while a worker thread is still running."""
         if getattr(self, "_shutdown_waiting", False):
             return
+        for name in ('playlist_controller','tag_definition_controller'):
+            flush=getattr(getattr(self,name,None),'flush_admission',None)
+            if flush is not None and not flush():
+                self._flash_status('Source intentions could not be saved; SoundBox remains open',20)
+                return False
         self._shutdown_waiting = True
         if hasattr(self, 'my_tags'):
             self.my_tags.popup.close()
@@ -9772,6 +9919,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         for audition in self.findChildren(ReviewPlayer):
             audition.shutdown()
         self._device_coordinator.cancel(shutdown=True)
+        rejected = getattr(getattr(self, '_pending_device_operation', None), '_device_wait_rejected', None)
+        if rejected is not None:rejected()
         self._pending_device_operation = None
         self._dual_sync_queue.clear()
         # Session cue edits are already visible/usable. Finish their accepted
@@ -9832,10 +9981,25 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             loop.exec()
         self._shutdown_waiting = False
 
-    def _pending_save_reason(self):
+    def _pending_save_reason(self, *, retained=()):
         """Quit admission only: ordinary editing and source pumps stay open."""
         if getattr(self, '_shutting_down', False):
             return ''
+        for name in ('playlist_controller', 'tag_definition_controller'):
+            controller = getattr(self, name, None)
+            ack=getattr(controller,'ack',None)
+            if (ack is not None and ack.key in retained and ack.retention_capture() is not None
+                    and not getattr(getattr(controller,'admission',None),'pending',False)):
+                continue
+            error = getattr(controller, 'admission_error', '')
+            if error:return 'Save needs attention — ' + str(error)
+            if getattr(controller, 'admission_pending', False):
+                return 'Finishing source saves — SoundBox remains open'
+        tag_lane = getattr(getattr(self, 'tag_controller', None), 'tag_state_lane', None)
+        if tag_lane is not None and tag_lane.error:
+            return 'My Tag save needs attention — ' + tag_lane.error
+        if tag_lane is not None and tag_lane.pending:
+            return 'Finishing My Tag saves — SoundBox remains open'
         if getattr(getattr(self,'prep_controller',None),'admission_pending',False):
             return 'Finishing cue/grid saves — SoundBox remains open'
         prep_error=getattr(getattr(self,'prep_controller',None),'admission_error','')
@@ -9852,7 +10016,10 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         unadmitted_metadata=bool(metadata_controller and getattr(metadata_controller,
             'can_quit_with_unadmitted_metadata',lambda:False)())
         planning = bool(metadata_controller and getattr(metadata_controller,'planning_pending',False))
-        if metadata_controller and not unadmitted_metadata and (planning or getattr(metadata_controller,'migration_pending',False)):
+        from .quit_saves import METADATA
+        retained_metadata = (not planning and any(settings.get(key) for key in METADATA)
+                             and all(key in retained for key in METADATA if settings.get(key)))
+        if metadata_controller and not unadmitted_metadata and not retained_metadata and (planning or getattr(metadata_controller,'migration_pending',False)):
             migration=(settings.get('source_truth_alias_next') if 'source_truth_alias_next' in settings
                        else settings.get('source_truth_migration'))
             error=getattr(metadata_controller,'queue_error',lambda:'')()
@@ -9879,6 +10046,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         for key in ('shared_import_jobs', 'analysis_jobs', 'native_analysis_jobs',
                     'pending_prep_edits', 'rekordbox_playlist_edits', 'pending_tag_definitions',
                     'pending_tag_assignments', 'pending_metadata_edits'):
+            if key in retained:continue
             if key=='pending_metadata_edits' and unadmitted_metadata:continue
             queue = settings.get(key, [])
             if queue:
@@ -9890,7 +10058,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                     return 'Save needs attention — ' + str(error)
                 return 'Finishing saves — SoundBox remains open'
         removal = settings.get('graveyard_delete_intent')
-        if removal:
+        if removal and 'graveyard_delete_intent' not in retained:
             return ('Save needs attention — ' + str(removal['error'])
                     if isinstance(removal, dict) and removal.get('error')
                     else 'Finishing saves — SoundBox remains open')
@@ -9912,24 +10080,37 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             return 'Finishing saves — SoundBox remains open'
         return ''
 
-    def _defer_quit_for_saves(self):
-        MainWindow._flush_settings_preferences(self)
+    def _defer_quit_for_saves(self, *, auto_close=False):
+        if getattr(self,'_shutting_down',False):return False
+        if not MainWindow._flush_settings_preferences(self):return True
         committer=getattr(self,'_state_committer',None)
-        if committer is not None and committer.preferences_error is not None:
+        if (committer is not None and committer.preferences_error is not None
+                and (auto_close or getattr(self,'_quit_saves',None) is None)):
             committer.retry_preferences()
-        reason = self._pending_save_reason()
+        guard = getattr(self, '_quit_saves', None)
+        retained = guard.retained() if guard is not None else ()
+        reason = MainWindow._pending_save_reason(self, retained=retained)
         if not reason:
             return False
-        self._flash_status(reason, 10)
+        if auto_close and guard is None:
+            from .quit_saves import QuitSaves
+            guard = self._quit_saves = QuitSaves(self)
+        if guard is not None:guard.defer(requested=auto_close)
+        message = ('Checking saved edits before closing…' if guard is not None and guard.checkpoint is not None
+                   else reason.replace('SoundBox remains open','closing when ready')
+                   if guard is not None and guard.requested else reason)
+        self._flash_status(message, 10)
         return True
 
     def closeEvent(self, event):
         if (getattr(self, "_shutdown_waiting", False)
                 or getattr(self, "_state_maintenance", False)
-                or self._defer_quit_for_saves()):
+                or self._defer_quit_for_saves(auto_close=True)):
             event.ignore()
             return
-        self.shutdown()
+        if self.shutdown() is False:
+            event.ignore()
+            return
         super().closeEvent(event)
 
     def _on_progress(self, done: int, total: int, label: str):

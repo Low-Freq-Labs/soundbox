@@ -511,8 +511,13 @@ class ExportSelectionMixin:
         target=batch.get('active') if batch else None
         context=dict(batch=batch if target and target.get('path')==dev else None,
                      batch_target=target)
+        order_drop=(getattr(self,'_playlist_order_drop',None)
+                    if kind=='dual' and options.get('action')=='order' else None)
         def failed(error,request):
             from .export_wait import retire_source_presentation
+            restore=getattr(self,'_restore_playlist_order_drop',None)
+            if restore is not None and order_drop is not None and getattr(self,'_playlist_order_drop',None)==order_drop:
+                restore(dev)
             batch=request.get('batch');target=request.get('batch_target')
             if batch is not None:
                 if getattr(self,'_export_batch',None) is not batch or batch.get('active') is not target:return

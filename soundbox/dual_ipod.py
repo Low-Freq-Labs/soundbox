@@ -39,6 +39,7 @@ from .transaction_outcome import record_outcome
 from .operation_control import (
     checkpoint, cancellation_disabled, CommittedOperationError, OperationCancelled, record_metric,
 )
+from .stock_plan_observations import PlanTimings
 from .rockbox_media import (
     InterruptedFileVerifier,
     NORMALIZED_MEDIA_PROFILE,
@@ -1172,34 +1173,12 @@ def _combined_playlists(
 
 
 def _device_playlist_names(playlists: list[Playlist]) -> list[str]:
-    """Choose concise, unique titles shared by stock and Rockbox views.
-
-    The leaf rekordbox name is what a listener expects to see (``Dubstep``,
-    not ``GENRES / Dubstep``).  Folder context is retained in the ownership
-    manifest and is used only to disambiguate genuinely duplicated leaf names.
-    """
-    leaf_counts: dict[str, int] = {}
-    for playlist in playlists:
-        leaf = str(playlist.name or "Untitled playlist").strip()
-        leaf_counts[leaf.casefold()] = leaf_counts.get(leaf.casefold(), 0) + 1
-    output = [
-        (
-            str(playlist.name or "Untitled playlist").strip()
-            if leaf_counts[
-                str(playlist.name or "Untitled playlist").strip().casefold()
-            ] == 1
-            else playlist.display_path
-        )
-        for playlist in playlists
-    ]
-    folded = [name.casefold() for name in output]
-    if len(set(folded)) != len(folded):
-        duplicate = next(
-            name for name in output if folded.count(name.casefold()) > 1)
-        raise DualIpodError(
-            "Managed iPod playlist titles must be unique, including folder "
-            f"context: {duplicate}")
-    return output
+    """Flat device catalogs use unique leaf names, never folder prefixes."""
+    from .playlist_names import unique_playlist_names
+    try:
+        return unique_playlist_names(playlist.name for playlist in playlists)
+    except ValueError as exc:
+        raise DualIpodError(str(exc)) from exc
 
 
 def _previous_rows_by_source(
@@ -1640,12 +1619,14 @@ def plan_dual_ipod_sync(
     source/device inventory. Explicit Repair uses the conservative default.
     Changed destinations and acquired payloads keep exact transaction checks.
     """
+    timings = PlanTimings('dual')
     display_rows = freeze_display_rows(library, display_rows, titles=title_overrides, artists=artist_overrides)
     started = time.monotonic()
     phase_started = started
 
-    def phase(label: str) -> None:
+    def phase(stage: str, label: str) -> None:
         nonlocal phase_started
+        timings.mark(stage)
         now = time.monotonic()
         LOG.info("Dual sync plan: %s (phase %.2fs, elapsed %.2fs)",
                  label, now - phase_started, now - started)
@@ -1740,7 +1721,7 @@ def plan_dual_ipod_sync(
         for item in playlist_additions
         if any(key in kept[item.playlist_key] for key in item.track_ids)
     )
-    phase("Playlist reconciliation complete")
+    phase('reconcile', "Playlist reconciliation complete")
     effective, missing, unsupported = _filtered_playlists(
         library, combined, source_presence={})
     device_playlist_names = _device_playlist_names(effective)
@@ -1840,7 +1821,7 @@ def plan_dual_ipod_sync(
                         "Composite manifest owns one source in both media stores: "
                         f"{source_text}")
                 prior_media[source_text] = value
-    phase(f"Media verification starting: {len(unique_sources)} unique sources, "
+    phase('source_setup', f"Media verification starting: {len(unique_sources)} unique sources, "
           f"{len(relocated_sources)} relocated")
     media_reported = time.monotonic()
     planned_media = {}
@@ -1896,7 +1877,7 @@ def plan_dual_ipod_sync(
                      len(planned_media), len(unique_sources), source_verifier.hits,
                      source_verifier.reads, source_verifier.bytes_read / 1e9, source.name)
             media_reported = now
-    phase(f"Media verification complete: {source_verifier.hits} proof hits, "
+    phase('source_verification', f"Media verification complete: {source_verifier.hits} proof hits, "
           f"{source_verifier.reads} source-proof reads, {source_verifier.bytes_read / 1e9:.2f} GB read")
     payloads: dict[Path, Path | PlannedRockboxMedia] = dict(planned_media)
     unique_source_names = {str(p) for p in unique_sources}
@@ -1975,7 +1956,7 @@ def plan_dual_ipod_sync(
     )
     planning_done += 1
     emit_planning("Stock library")
-    phase("Stock library complete")
+    phase('stock', "Stock library complete")
     stock_paths = stock_plan.source_device_paths
     planned_files, entries = sync_mod.plan(
         library,
@@ -1988,7 +1969,7 @@ def plan_dual_ipod_sync(
     )
     planning_done += 1
     emit_planning("Rockbox library")
-    phase("Rockbox paths complete")
+    phase('rockbox_paths', "Rockbox paths complete")
 
     prior_rockbox_media = _previous_rows_by_source(
         existing_manifest, "rockbox-media")
@@ -2421,9 +2402,10 @@ def plan_dual_ipod_sync(
 
     planning_done += 1
     emit_planning("Ownership manifest")
-    phase("Artwork, playlists, and ownership complete")
+    phase('artwork_ownership', "Artwork, playlists, and ownership complete")
 
     planning_session.revalidate()
+    timings.mark('finalize')
     return DualIpodSyncPlan(
         target=root,
         source_guard_paths=guard_paths,

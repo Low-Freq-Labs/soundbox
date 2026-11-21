@@ -10,7 +10,7 @@ from PySide6.QtCore import QCoreApplication, QEvent, Qt
 from PySide6.QtWidgets import QApplication
 
 from desktop.app import MainWindow
-from desktop.trees import NATIVE_BINDING_ROLE, PATH_ROLE, RB_NODE_ROLE, PlaylistTree
+from desktop.trees import NATIVE_BINDING_ROLE, PATH_ROLE, RB_NODE_ROLE, UnifiedPlaylistTree
 from soundbox.library import Library, Playlist
 
 
@@ -45,7 +45,7 @@ class _Host:
     _make_item = MainWindow._make_item
 
     def __init__(self):
-        self.tree = PlaylistTree()
+        self.tree = UnifiedPlaylistTree()
         self.lib = _library('First')
         self.custom = {}
         self.removals = {}

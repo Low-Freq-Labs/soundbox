@@ -2,13 +2,86 @@
 from __future__ import annotations
 
 from collections import Counter
+import json
 
-from PySide6.QtCore import QPoint, QPointF, Qt, Signal
+from PySide6.QtCore import QEvent, QMimeData, QPoint, QPointF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPolygonF
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QLabel, QPushButton, QToolButton, QWidget,
 )
 from . import theme
+from .choices import Menu as QMenu, exec_transient_menu
+from .trees import _start_chip_drag
+
+
+class _TagContent(QWidget):
+    def __init__(self, owner):
+        super().__init__(owner.popup)
+        self.owner = owner
+        self.setAcceptDrops(True)
+
+    def dragEnterEvent(self, event):
+        event.acceptProposedAction() if self.owner._tag_drag(event) is not None else event.ignore()
+
+    def dragMoveEvent(self, event):
+        destination = self.owner._tag_drop_target(event)
+        self.owner._insert_line = destination[2] if destination is not None else None
+        self.update()
+        event.acceptProposedAction() if destination is not None else event.ignore()
+
+    def dragLeaveEvent(self, event):
+        self.owner._insert_line = None;self.update();event.accept()
+
+    def dropEvent(self, event):
+        self.owner._drop_tag(event)
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        line = self.owner._insert_line
+        if line is not None:
+            painter = QPainter(self);painter.setPen(QColor(theme.PURPLE))
+            painter.drawLine(line[0], line[1], line[2], line[1]);painter.end()
+
+
+class _TagDragLabel(QWidget):
+    """Keep labels draggable while checkbox assignment itself is unavailable."""
+    def __init__(self, owner, tag_id):
+        super().__init__(owner.content)
+        self.owner, self.tag_id = owner, tag_id
+        self._press = None
+        self.setCursor(Qt.OpenHandCursor)
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(lambda point:
+            owner._tag_context_menu(self.mapTo(owner.content, point)))
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._press = event.position().toPoint(), self.owner.order_binding()
+            event.accept();return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if (self._press is not None and event.buttons() & Qt.LeftButton
+                and (event.position().toPoint() - self._press[0]).manhattanLength()
+                    >= QApplication.startDragDistance()):
+            _position, binding = self._press;self._press = None
+            if self.owner.order_binding() == binding and self.owner._order_available():
+                try:
+                    _start_chip_drag(self.owner.content, self.owner._tag_mime(self.tag_id),
+                                     self.owner._labels[self.tag_id], Qt.MoveAction)
+                finally:
+                    self.owner._insert_line = None;self.owner.content.update()
+            event.accept();return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        press, self._press = self._press, None
+        if event.button() == Qt.LeftButton and press is not None:
+            if self.rect().contains(event.position().toPoint()) and self.owner.order_binding() == press[1]:
+                box = self.owner.checkboxes.get(self.tag_id)
+                if box is not None and box.isEnabled():box.click()
+            event.accept();return
+        super().mouseReleaseEvent(event)
 
 
 class _TagPanel(QWidget):
@@ -21,12 +94,19 @@ class _TagPanel(QWidget):
 
     def popup(self, position):
         self.aboutToShow.emit()
+        # The hidden tool window can still have its initial native geometry.
+        # Derive every opening from the prepared content, without retaining
+        # native min/max constraints from the empty startup panel.
+        self.resize(self.sizeHint())
         screen = QApplication.screenAt(position) or self.screen()
         bounds = screen.availableGeometry()
         self.move(max(bounds.left(), min(position.x(), bounds.right() - self.width() + 1)),
                   max(bounds.top(), min(position.y(), bounds.bottom() - self.height() + 1)))
         self.show()
         self.raise_()
+
+    def sizeHint(self):
+        return self.childrenRect().size() + QSize(2, 2)
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Escape:
@@ -46,7 +126,9 @@ class _TagPanel(QWidget):
 class MyTagsButton(QToolButton):
     assignment_requested = Signal(str, bool)  # tag ID, desired membership
     creation_requested = Signal()
-    deletion_requested = Signal()
+    rename_requested = Signal(object, object)  # exact tag, captured source scope
+    deletion_requested = Signal(object, object)  # exact tag, captured source scope
+    order_requested = Signal(object, object)  # exact ID order, captured source/catalog binding
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -59,8 +141,11 @@ class MyTagsButton(QToolButton):
         # A tool panel's transient owner must be a top-level window, including
         # when this button later sits inside the native prep-toolbar child.
         self.popup = _TagPanel(self.window())
-        self.content = QWidget(self.popup)
+        self._insert_line = None
+        self.content = _TagContent(self)
         self.content.setObjectName('MyTagsContent')
+        self.content.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.content.customContextMenuRequested.connect(self._tag_context_menu)
         self.summary = QLabel("Select tracks to edit tags", self.content)
         self.summary.setObjectName("MyTagsSummary")
         self.summary.setTextFormat(Qt.PlainText)
@@ -70,19 +155,30 @@ class MyTagsButton(QToolButton):
         self.create_tag.setObjectName('MyTagsCreate')
         self.create_tag.setCursor(Qt.PointingHandCursor)
         self.create_tag.clicked.connect(self._create)
-        self.delete_tag = QPushButton('Delete Tag…', self.content)
-        self.delete_tag.setObjectName('MyTagsDelete')
-        self.delete_tag.setCursor(Qt.PointingHandCursor)
-        self.delete_tag.clicked.connect(self._delete)
+        self._context_menu = None
+        self._definitions = {}
+        self._deletion_reason = None
+        self._deletion_context = None
+        self._rename_reason = None
+        self._rename_context = None
+        self._pending_creations = set()
         self._labels = {}
         self._membership_tips = {}
         self.checkboxes: dict[str, QCheckBox] = {}
+        self._drag_labels = {}
+        self._order_context = None
+        self._order_identity = None
+        self._order_revision = 0
+        self._order_original = None
         self._signature = None
         self._rendering = False
         self._popup_layout=None
         self.set_state([], [], "Select tracks to edit tags")
 
     def dismiss_outside(self, global_position):
+        if (self._context_menu is not None and self._context_menu.isVisible()
+                and self._context_menu.rect().contains(self._context_menu.mapFromGlobal(global_position))):
+            return
         if (self.popup.isVisible()
                 and not self.popup.rect().contains(self.popup.mapFromGlobal(global_position))
                 and not self.rect().contains(self.mapFromGlobal(global_position))):
@@ -108,19 +204,41 @@ class MyTagsButton(QToolButton):
         painter.end()
 
     def set_state(self, tags, selected_tags: list[set[str]], reason: str = "", *,
-                  creation_reason: str | None = None, deletion_reason: str | None = None):
+                  creation_reason: str | None = None, deletion_reason: str | None = None,
+                  deletion_context=None, order_context=None, order_reason='',
+                  rename_reason: str | None = None, rename_context=None, assignment_reasons=None,
+                  pending_creations=()):
         """Each selected set is authoritative. An unavailable selection is [] + reason."""
         signature = tuple((tag.tag_id, tag.name, tag.category) for tag in tags)
+        context = deletion_context if order_context is None else order_context
+        identity = (context, tuple((tag.tag_id, tag.source_uuid, tag.category_id, tag.category_uuid,
+                                   tag.name, tag.category) for tag in tags))
+        if identity != self._order_identity:
+            self._order_revision += 1
+            self._order_identity = identity
+            self._order_original = None
+        self._order_context = context
+        self._order_reason = order_reason
+        self._definitions = {tag.tag_id: tag for tag in tags}
+        self._deletion_reason = deletion_reason
+        self._deletion_context = deletion_context
+        self._rename_reason = rename_reason
+        self._rename_context = rename_context
+        self._pending_creations = set(pending_creations)
         if signature != self._signature:
             for box in self.checkboxes.values():
                 box.hide()
                 box.deleteLater()
+            for label in self._drag_labels.values():label.hide();label.deleteLater()
             self.checkboxes = {}
+            self._drag_labels = {}
             self._labels = {}
             counts = Counter(tag.name for tag in tags)
             for tag in tags:
                 name = tag.name if counts[tag.name] == 1 else f"{tag.name} · {tag.category}"
-                box = QCheckBox(name, self.content)
+                box = QCheckBox(name.replace('&', '&&'), self.content)
+                box.setAccessibleName(name)
+                box.installEventFilter(self)
                 box.setObjectName("MyTagCheck")
                 box.setAttribute(Qt.WA_LayoutUsesWidgetRect, True)
                 box.setTristate(True)
@@ -130,6 +248,7 @@ class MyTagsButton(QToolButton):
                 box.clicked.connect(lambda checked=False, tid=tag.tag_id:
                                     self._request(tid))
                 self.checkboxes[tag.tag_id] = box
+                self._drag_labels[tag.tag_id] = _TagDragLabel(self, tag.tag_id)
                 self._labels[tag.tag_id] = name
             self._signature = signature
         self._rendering = True
@@ -139,16 +258,15 @@ class MyTagsButton(QToolButton):
             self.setAccessibleDescription(self.summary.text() + (': ' + reason if reason else ''))
             self.create_tag.setEnabled(creation_reason == '')
             self.create_tag.setToolTip(creation_reason or 'Create a new My Tag')
-            self.delete_tag.setEnabled(bool(tags) and deletion_reason == '')
-            self.delete_tag.setToolTip(deletion_reason or 'Delete a My Tag from the library')
             for tid, box in self.checkboxes.items():
                 count = sum(tid in assigned for assigned in selected_tags)
                 state = (Qt.Unchecked if not count else
                          Qt.Checked if count == len(selected_tags) else Qt.PartiallyChecked)
                 box.setCheckState(state)
-                box.setEnabled(bool(selected_tags) and not reason)
-                self._membership_tips[tid] = (f"Assigned to {count} of {len(selected_tags)} selected tracks; "
-                                "click to assign to all") if state == Qt.PartiallyChecked else ""
+                assignment_reason = (assignment_reasons or {}).get(tid, '')
+                box.setEnabled(bool(selected_tags) and not reason and not assignment_reason)
+                self._membership_tips[tid] = assignment_reason or ((f"Assigned to {count} of {len(selected_tags)} selected tracks; "
+                                "click to assign to all") if state == Qt.PartiallyChecked else "")
             self.setEnabled(bool(tags) or creation_reason == '')
             self.setToolTip('Create a My Tag, or select songs to assign tags'
                             if creation_reason == '' and not selected_tags
@@ -183,28 +301,96 @@ class MyTagsButton(QToolButton):
         for index, (tid, box) in enumerate(self.checkboxes.items()):
             cell_width = column_width
             label = box.fontMetrics().elidedText(self._labels[tid], Qt.ElideRight, max(1, cell_width - 24))
-            box.setText(label)
+            # Button text treats '&' as a mnemonic marker. Elide the literal
+            # source name first, then escape only its presentation for Qt.
+            box.setText(label.replace('&', '&&'))
             box.setGeometry(8 + (index // rows) * (column_width + 8),
                             first_y + (index % rows) * (row_height + 2), cell_width, row_height)
             box.show()
-        footer_y = first_y + max(0, rows * (row_height + 2) - 2) + 8
-        self.delete_tag.setFont(self.font())
-        self.delete_tag.setGeometry(8, footer_y, width, create_height)
-        self.content.setGeometry(1, 1, self.width() - 2, footer_y + create_height + 8)
+            handle = self._drag_labels[tid]
+            handle.setGeometry(box.geometry().adjusted(24, 0, 0, 0))
+            handle.setToolTip(box.toolTip())
+            handle.show();handle.raise_()
+        bottom = first_y + max(0, rows * (row_height + 2) - 2) + 8
+        self.content.setGeometry(1, 1, self.width() - 2, bottom)
         self.content.updateGeometry()
-        self.popup.setFixedSize(self.width(), self.content.height() + 2)
+        self.popup.resize(self.popup.sizeHint())
         self._sync_membership_tips()
 
     def _sync_membership_tips(self):
         for tid, box in self.checkboxes.items():
             tip = self._membership_tips.get(tid, '')
-            if box.text() != self._labels[tid]:
+            if box.text() != self._labels[tid].replace('&', '&&'):
                 tip = (tip + '\n' if tip else '') + self._labels[tid]
             box.setToolTip(tip)
+            self._drag_labels[tid].setToolTip('\n'.join(filter(None,(tip,self._order_reason))))
+
+    def order_binding(self):
+        return self._order_context, self._order_identity, self._order_revision
+
+    def _order_available(self):
+        definitions = self._definitions
+        return bool(not self._order_reason and self._order_context is not None and len(definitions) > 1
+            and self._order_original is None
+            and len(definitions) == len(self._order_identity[1])
+            and len({tag.source_uuid for tag in definitions.values()}) == len(definitions)
+            and all(tag.tag_id and tag.source_uuid for tag in definitions.values()))
+
+    def _tag_mime(self, tag_id):
+        mime = QMimeData()
+        mime.setData('application/x-soundbox-tag-order-v1', json.dumps(dict(
+            identity=tag_id, binding=self.order_binding(), order=list(self.checkboxes))).encode())
+        return mime
+
+    def _tag_drag(self, event):
+        if event.source() is not self.content or not self._order_available():return None
+        try:
+            raw = bytes(event.mimeData().data('application/x-soundbox-tag-order-v1'))
+            if len(raw) > 64 * 1024:return None
+            captured = json.loads(raw)
+            if (captured['binding'] != json.loads(json.dumps(self.order_binding()))
+                    or captured['order'] != list(self.checkboxes) or captured['identity'] not in self.checkboxes):return None
+            return captured['identity']
+        except (ValueError, TypeError, KeyError):return None
+
+    def _tag_drop_target(self, event):
+        identity = self._tag_drag(event)
+        if identity is None:return None
+        point = event.position().toPoint()
+        target = next((tid for tid, box in self.checkboxes.items() if box.geometry().contains(point)), None)
+        if target is None or target == identity:return None
+        rect = self.checkboxes[target].geometry()
+        after = point.y() > rect.center().y()
+        return target, after, (rect.left() + 24, rect.bottom() if after else rect.top(), rect.right())
+
+    def _drop_tag(self, event):
+        target = self._tag_drop_target(event)
+        self._insert_line = None;self.content.update()
+        if target is None:event.ignore();return
+        identity = self._tag_drag(event);anchor, after, _line = target
+        previous = tuple(self.checkboxes)
+        order = [tid for tid in previous if tid != identity]
+        order.insert(order.index(anchor) + int(after), identity)
+        if tuple(order) == previous:event.ignore();return
+        self._order_revision += 1
+        binding = self.order_binding()
+        self._order_original = binding, previous
+        self.checkboxes = {tid: self.checkboxes[tid] for tid in order}
+        self._popup_layout = None;self._size_popup()
+        self.order_requested.emit(tuple(order), binding)
+        event.acceptProposedAction()
+
+    def restore_order(self, binding):
+        if self._order_original is None or self._order_original[0] != binding or self.order_binding() != binding:return
+        previous = self._order_original[1]
+        self.checkboxes = {tid: self.checkboxes[tid] for tid in previous}
+        self._order_original = None
+        self._order_revision += 1
+        self._popup_layout = None;self._size_popup()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        if hasattr(self, 'delete_tag'):
+        if hasattr(self, '_popup_layout'):
             self._size_popup()
 
     def _request(self, tag_id: str):
@@ -216,6 +402,45 @@ class MyTagsButton(QToolButton):
         self.popup.close()
         self.creation_requested.emit()
 
-    def _delete(self):
-        self.popup.close()
-        self.deletion_requested.emit()
+    def _tag_context_menu(self, position):
+        tag_id = next((tid for tid, box in self.checkboxes.items()
+                       if box.geometry().contains(position)), None)
+        tag = self._definitions.get(tag_id)
+        if tag is None:
+            return
+        context = self._deletion_context
+        menu = QMenu(self.popup)
+        rename_context = self._rename_context
+        creating = 'Finish creating this tag before changing its definition' if tag_id in self._pending_creations else ''
+        rename = menu.addAction('Rename Tag…')
+        rename.setEnabled(not creating and self._rename_reason == '' and rename_context is not None)
+        rename.setToolTip(creating or self._rename_reason or '')
+        def rename_requested():
+            if (tag_id in self._pending_creations or self._rename_reason != '' or rename_context != self._rename_context
+                    or self._definitions.get(tag_id) != tag):
+                return
+            self.popup.close()
+            self.rename_requested.emit(tag, rename_context)
+        rename.triggered.connect(rename_requested)
+        action = menu.addAction('Delete Tag…')
+        action.setEnabled(not creating and self._deletion_reason == '' and context is not None)
+        action.setToolTip(creating or self._deletion_reason or '')
+        def requested():
+            if (tag_id in self._pending_creations or self._deletion_reason != '' or context != self._deletion_context
+                    or self._definitions.get(tag_id) != tag):
+                return
+            self.popup.close()
+            self.deletion_requested.emit(tag, context)
+        action.triggered.connect(requested)
+        self._context_menu = menu
+        try:
+            exec_transient_menu(menu, self.content.mapToGlobal(position))
+        finally:
+            self._context_menu = None
+
+    def eventFilter(self, watched, event):
+        # Disabled assignment controls still allow definition actions.
+        if event.type() == QEvent.ContextMenu and watched in self.checkboxes.values():
+            self._tag_context_menu(self.content.mapFromGlobal(event.globalPos()))
+            return True
+        return super().eventFilter(watched, event)

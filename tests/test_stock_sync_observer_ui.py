@@ -19,6 +19,7 @@ from soundbox.device_operations import DeviceOperationCoordinator, DeviceSession
 from soundbox.stock_ipod_info import read_stock_ipod_snapshot
 from soundbox.stock_ipod_shadow import StockIpodSyncStatus
 from tests import test_ipod_export_effective_snapshot as export_fixture
+from tests.support.ipod import play_counts, rewrite_catalog
 
 
 class StockSyncObserverUi(unittest.TestCase):
@@ -119,6 +120,60 @@ class StockSyncObserverUi(unittest.TestCase):
         self.stored_witness = result.catalog_witness
         self.assertEqual(self.scan().results[0][3],0)
         self.assertNotIn('unselected',{call.args[0].track_id for call in self.host._row_for.call_args_list})
+
+    def test_playback_changes_refresh_once_merge_from_native_and_keep_header_clean(self):
+        from desktop.stock_catalog_sync import has_sync_source, needs_sync
+        self.host.custom = {}
+        path = self.f.ipod / 'iPod_Control/iTunes/Play Counts'
+        initial = {row.dbid: (row.play_count, row.skip_count) for row in self.snapshot.tracks}
+        payload = play_counts([(2, 1, 80, 12000)] * len(self.snapshot.tracks))
+        path.write_bytes(payload)
+        observed = self.scan()
+        self.assertEqual(observed.results[0][3], 0)
+        self.host._drift_cache = {self.dev: observed.results[0][3]}
+        self.assertTrue(has_sync_source(self.host, self.dev))
+        self.assertFalse(needs_sync(self.host, self.dev))
+        MainWindow._publish_stock_sync_observations(self.host, observed)
+        self.assertEqual(set(self.host._stock_view_pending), {self.dev})
+        self.refresh_cached_view()
+        current = self.host._stock_view_cache[self.dev][0]
+        self.assertTrue(current.play_counts_sha256)
+        for row in current.tracks:
+            self.assertEqual((row.play_count, row.skip_count), (initial[row.dbid][0] + 2, initial[row.dbid][1] + 1))
+            self.assertEqual((row.rating, row.bookmark_time), (80, 12000))
+        for _ in range(2):
+            same = self.scan()
+            self.assertEqual(same.results[0][3], 0)
+            MainWindow._publish_stock_sync_observations(self.host, same)
+            self.assertFalse(self.host._stock_view_pending)
+        self.assertEqual(path.read_bytes(), payload)
+        path.unlink()
+        removed = self.scan()
+        MainWindow._publish_stock_sync_observations(self.host, removed)
+        self.assertEqual(set(self.host._stock_view_pending), {self.dev})
+        self.refresh_cached_view()
+        current = self.host._stock_view_cache[self.dev][0]
+        self.assertEqual(current.play_counts_sha256, '')
+        self.assertEqual({row.dbid: (row.play_count, row.skip_count) for row in current.tracks}, initial)
+
+    def test_external_addition_refreshes_warm_and_cold_views_without_sync_or_repeated_reads(self):
+        self.host.custom = {}
+        rewrite_catalog(self.f.ipod, external=True)
+        for cold in (False, True):
+            with self.subTest(cold=cold):
+                self.host._stock_view_cache[self.dev] = (self.snapshot, None)
+                if cold:self.host._stock_catalog_witness_cache.clear()
+                observed = self.scan(cold=cold)
+                self.assertIn(observed.results[0][3], (None, 0))
+                MainWindow._publish_stock_sync_observations(self.host, observed)
+                self.assertEqual(set(self.host._stock_view_pending), {self.dev})
+                self.refresh_cached_view()
+                current = self.host._stock_view_cache[self.dev][0]
+                self.assertIn('External playlist', {row.title for row in current.playlists})
+                clean = self.scan()
+                self.assertEqual(clean.results[0][3], 0)
+                MainWindow._publish_stock_sync_observations(self.host, clean)
+                self.assertFalse(self.host._stock_view_pending)
 
     def test_cold_persisted_witness_without_projected_rows_is_unknown(self):
         worker = self.scan(cold=True)

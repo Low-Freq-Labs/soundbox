@@ -21,7 +21,23 @@ from soundbox.rekordbox_tags import (
 from .task_owner import TaskOwner
 from .cue_session import display, intent_for, native_key, overlay
 from .native_timing import CommandTiming, now, phase
-from .tag_assignment_intents import TagAssignmentIntents, _VerifiedTagReadback, verified_readback
+from .tag_assignment_intents import TagAssignmentIntents, _VerifiedTagReadback, verified_readback, restore_request
+
+
+def device_blocks_library_work(window) -> bool:
+    """iPod device ownership is independent of the shared desktop source lane."""
+    if not getattr(window, '_device_operation_owned', lambda:False)():
+        return False
+    active = getattr(getattr(window, '_device_coordinator', None), 'active', None)
+    targets = set(getattr(window, '_device_finalization_mounts', {}))
+    if active is not None:
+        targets.add(active.command.target.path)
+    targets.update(row.get('dev', '') for row in getattr(window, '_source_sync_waiting', None) or ())
+    if not targets:
+        return True
+    profiles = getattr(window, '_device_profiles', {})
+    return any(getattr(profiles.get(target), 'kind', '') not in
+               {'stock_ipod', 'dual_boot', 'rockbox'} for target in targets)
 
 
 class _TagTask(QThread):
@@ -91,6 +107,7 @@ class TagEditController(TagAssignmentIntents, QObject):
         self.metadata_update_status = ''
         self.admission_paused = False
         self._state_commit_token = None
+        self._source_ack_tokens=set()
         self.foreground_waiting = False
         self._init_tag_intents(intent_owner if intent_owner is not None else
             parent if parent is not None and hasattr(parent, 'settings') and hasattr(parent, '_save_state') else None)
@@ -103,6 +120,20 @@ class TagEditController(TagAssignmentIntents, QObject):
 
     @property
     def state_commit_owned(self):return getattr(self,'_state_commit_token',None) is not None
+
+    @property
+    def source_ack_pending(self):return bool(self._source_ack_tokens)
+
+    def reserve_source_ack(self,token):self._source_ack_tokens.add(token)
+
+    def release_source_ack(self,token):
+        self._source_ack_tokens.discard(token);self.changed.emit()
+        if not self.busy and not self.state_commit_owned:self.idle.emit()
+
+    def source_ack_only(self,token):
+        return (self._source_ack_tokens=={token} and not (self.busy or self.checking or self._cue_queue
+            or self.grid_waiting or self.admission_paused or self.state_commit_owned or self.assignment_reserved
+            or self.tag_ack_pending or self.tag_state_lane.pending or self.tag_state_lane.failed))
 
     def reserve_state_commit(self,token):
         if self._state_commit_token is not None or self.busy or self.checking:return False
@@ -140,6 +171,10 @@ class TagEditController(TagAssignmentIntents, QObject):
             return 'Updating song details…'
         if self.busy and self._busy_kind == 'tags':
             return 'Updating My Tags…'
+        if self.tag_state_lane.error:
+            return 'My Tags need attention — ' + self.tag_state_lane.error
+        if self.tag_state_lane.pending:
+            return 'Saving My Tags…'
         if self.pending and not self.queue_error():
             return ('My Tags need attention — ' + self.pending[0]['error'] if self.pending[0]['error']
                     else 'My Tags pending — quit rekordbox to save' if self._tag_waiting else 'Updating My Tags…')
@@ -164,7 +199,11 @@ class TagEditController(TagAssignmentIntents, QObject):
     @property
     def owned(self):
         return (self.busy or self.checking or bool(self._cue_queue) or self.grid_waiting
-                or self.admission_paused or self.state_commit_owned or self.assignment_reserved or self.tag_ack_pending)
+                or self.admission_paused or self.state_commit_owned or self.source_ack_pending or self.tag_ack_pending
+                or self.tag_state_lane.pending or bool(self.tag_state_lane.failed)
+                or self.assignment_owned
+                or bool(getattr(getattr(self._tag_intent_owner,'tag_definition_controller',None),
+                                'publication_retry_pending',False)))
 
     @property
     def source_job_owned(self):
@@ -174,7 +213,7 @@ class TagEditController(TagAssignmentIntents, QObject):
         source controller's turn may pass deferred cue/grid logical holds;
         active work, recovery/prepared reservations and fresh guards remain.
         """
-        return (self.busy or self.checking or self.admission_paused or self.state_commit_owned or self.assignment_reserved or self.tag_ack_pending
+        return (self.busy or self.checking or self.admission_paused or self.state_commit_owned or self.source_ack_pending or self.assignment_reserved or self.tag_ack_pending
                 or (bool(self._cue_queue) or self.grid_waiting) and not self._fair_source_turn())
 
     def _fair_source_turn(self, kind=None):
@@ -288,6 +327,19 @@ class TagEditController(TagAssignmentIntents, QObject):
             if authority is None:
                 raise RuntimeError('Tag deletion recovery needs its accepted library authority; evidence preserved')
             TagDeletionStore(authority, root).recover()
+        elif record.get('format') == 'soundbox-native-tag-definition-rename-v1':
+            from soundbox.rekordbox_tag_rename import TagRenameStore,load_authority as rename_authority,AUTHORITY_FILE
+            authority=rename_authority(self.data_root/AUTHORITY_FILE,Path(lib.source),lib.source_library_id)
+            if authority is None:
+                raise RuntimeError('Tag rename recovery needs its separately accepted library authority; evidence preserved')
+            TagRenameStore(authority,root).recover()
+        elif record.get('format') == 'soundbox-native-tag-order-v1':
+            from soundbox.rekordbox_tag_order import TagOrderStore, load_authority as order_authority
+            authority = order_authority(self.data_root / 'rekordbox-tag-order-authority.json',
+                                        Path(lib.source), lib.source_library_id)
+            if authority is None:
+                raise RuntimeError('Tag order recovery needs its separately accepted library authority; evidence preserved')
+            TagOrderStore(authority, root).recover()
         elif record.get('format') == 'soundbox-native-metadata-v1':
             from soundbox.rekordbox_metadata_store import SourceMetadataStore, load_authority as metadata_authority
             authority = metadata_authority(self.data_root / 'rekordbox-metadata-authority.json',
@@ -358,12 +410,14 @@ class TagEditController(TagAssignmentIntents, QObject):
         from soundbox.rekordbox_analysis_store import load_authority as load_analysis_authority
         from soundbox.rekordbox_cbr_analysis_store import load_authority as load_cbr_authority
         from soundbox.rekordbox_tag_definitions import load_authority as load_definition_authority, load_deletion_authority
+        from soundbox.rekordbox_tag_rename import load_authority as load_rename_authority,AUTHORITY_FILE as RENAME_AUTHORITY_FILE
         from soundbox.rekordbox_metadata_store import load_authority as load_metadata_authority
         source = Path(source)
         for filename, loader in (('rekordbox-cue-authority.json', load_cue_authority),
                                  ('rekordbox-tag-authority.json', load_authority),
                                  ('rekordbox-tag-definition-authority.json', load_definition_authority),
                                  ('rekordbox-tag-definition-delete-authority.json', load_deletion_authority),
+                                 (RENAME_AUTHORITY_FILE,load_rename_authority),
                                  ('rekordbox-metadata-authority.json', load_metadata_authority),
                                  ('rekordbox-grid-authority.json', load_grid_authority),
                                  ('rekordbox-playlist-authority.json', load_playlist_authority),
@@ -386,15 +440,18 @@ class TagEditController(TagAssignmentIntents, QObject):
 
     def reason(self, selected_ids) -> str:
         if self.queue_error():return self.queue_error()
-        if self.pending:return self.pending[0]['error'] or (self._probe_error if self._tag_ack_conflict else '') or 'Updating My Tags…'
-        if self._analysis_blocks_source():return 'Analyzing audio before database updates…'
-        if self.prep_priority:return 'Confirming cue/grid saves…'
-        if self.admission_paused or self.state_commit_owned:return 'Finishing a library save…'
+        asynchronous = self.tag_state_lane.enabled
+        if self.tag_state_lane.error:return 'My Tag save needs attention — ' + self.tag_state_lane.error
+        if self.pending and (not asynchronous or self.pending[0]['error'] or self._tag_ack_conflict):
+            return self.pending[0]['error'] or self._probe_error or 'Updating My Tags…'
+        if not asynchronous and self._analysis_blocks_source():return 'Analyzing audio before database updates…'
+        if not asynchronous and self.prep_priority:return 'Confirming cue/grid saves…'
+        if self.admission_paused or not asynchronous and self.state_commit_owned:return 'Finishing a library save…'
         if self.owner.stopping or self._closing:
             return 'Finishing tag work…'
-        if self.busy:
+        if self.busy and not asynchronous:
             return self.status_text
-        if self.checking:
+        if self.checking and not asynchronous:
             return 'Checking tag editing…'
         lib = self.lib
         if not lib or lib.source_kind != 'rekordbox-db' or not self.verified or not lib.source_library_id:
@@ -420,7 +477,6 @@ class TagEditController(TagAssignmentIntents, QObject):
             return
         self._source_admitted()
         self.checking = True
-        self._ready = False
         self._probe_error = ""
         lib, identity = self.lib, self._store_identity
 
@@ -454,14 +510,20 @@ class TagEditController(TagAssignmentIntents, QObject):
                           or lib.tracks_by_id[tid].source_tag_ids is None for tid in ids):
             return []
         result = []
-        pending = self._pending
+        requests = ([restore_request(job['request']) for job in self.pending
+                     if self._tag_source_current(job)] if self._tag_intent_owner is not None
+                    and not self.queue_error() else [self._pending] if self._pending else [])
+        requests.extend(self.tag_state_lane.requests())
+        projected = {}
+        for request in requests:
+            for target in request.tracks:
+                projected.setdefault((target.track_id, target.source_uuid), []).append((request.tag_id, request.present))
         for tid in ids:
-            tags = set(lib.tracks_by_id[tid].source_tag_ids or [])
-            if pending and any(target.track_id == lib.tracks_by_id[tid].native_id for target in pending.tracks):
-                if pending.present:
-                    tags.add(pending.tag_id)
-                else:
-                    tags.discard(pending.tag_id)
+            track = lib.tracks_by_id[tid]
+            tags = set(track.source_tag_ids or [])
+            for tag_id, present in projected.get((track.native_id, track.source_uuid), ()):
+                if present:tags.add(tag_id)
+                else:tags.discard(tag_id)
             result.append(tags)
         return result
 
@@ -471,13 +533,19 @@ class TagEditController(TagAssignmentIntents, QObject):
         if self.reason(ids):
             return False
         lib = self.lib
-        tag = next((tag for tag in lib.source_tags if tag.tag_id == tag_id), None)
+        definitions=getattr(self._tag_intent_owner,'tag_definition_controller',None)
+        available=getattr(definitions,'available_tags',None)
+        tags=available(lib.source_tags) if callable(available) else lib.source_tags
+        tag = next((tag for tag in tags if tag.tag_id == tag_id), None)
         if tag is None or not tag.source_uuid:
             return False
+        rename_reason=getattr(definitions,'assignment_reason',None)
+        if callable(rename_reason) and rename_reason(tag.tag_id,tag.source_uuid):
+            self.changed.emit();return False
         targets = {}
-        for tid in ids:
+        for tid, assigned in zip(ids, self.selected_tags(ids)):
             track = lib.tracks_by_id[tid]
-            target = SelectedTagTrack(track.native_id, track.source_uuid, tag_id in track.source_tag_ids)
+            target = SelectedTagTrack(track.native_id, track.source_uuid, tag_id in assigned)
             if target.track_id in targets and targets[target.track_id] != target:
                 return False
             targets[target.track_id] = target
@@ -485,7 +553,7 @@ class TagEditController(TagAssignmentIntents, QObject):
                                   bool(present), tag.name, self.new_operation_id() if self._tag_intent_owner else '')
         if self._tag_intent_owner is not None:
             assignment = smart_playlist_order.capture(lib, list(ids), tag_id, present)
-            return self._queue_tag_request(request, assignment)
+            return self._queue_tag_request(request, assignment, ids)
         self._pending = request
         return self._start_tag_request(lib, request, self._finish)
 
@@ -496,7 +564,8 @@ class TagEditController(TagAssignmentIntents, QObject):
         self._pending = request
         self.changed.emit()
         captured = self._tag_recency_assignment
-        assignment = captured[1] if captured is not None and captured[0] == request.operation_id else None
+        assignment = self._tag_recency_assignments.get(request.operation_id,
+            captured[1] if captured is not None and captured[0] == request.operation_id else None)
         durable_ack = self.durable_assignment_ack
 
         def save():
@@ -608,7 +677,7 @@ class TagEditController(TagAssignmentIntents, QObject):
 
     def _run_source_job(self, kind, callback, finished) -> bool:
         """Grid work uses this same worker lane and finished/join ownership."""
-        if self.assignment_reserved:return False
+        if self.assignment_reserved or self.source_ack_pending:return False
         if (kind not in ('registration', 'registration-cancel', 'analysis')
                 and self._analysis_blocks_source()):return False
         if self.busy or self.checking or self.admission_paused or self.state_commit_owned or self.owner.stopping or self._closing:
@@ -634,7 +703,7 @@ class TagEditController(TagAssignmentIntents, QObject):
         return True
 
     def _start_next_cue(self):
-        if self.assignment_reserved:return
+        if self.assignment_reserved or self.source_ack_pending:return
         if self.busy or self.checking or self.admission_paused or self.state_commit_owned or self.prep_priority or self.owner.stopping:return
         if self._analysis_blocks_source():
             QTimer.singleShot(500, self, self._start_next_cue)
@@ -757,6 +826,7 @@ class TagEditController(TagAssignmentIntents, QObject):
         # Keep Qt dispatching so retirement can start the next queued write.
         self._closing = True
         self._tag_timer.stop()
+        self.tag_state_lane.drain()
         loop = QEventLoop()
         self.idle.connect(loop.quit)
         try:

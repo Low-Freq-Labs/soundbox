@@ -74,7 +74,8 @@ A sole target is preselected; multiple devices
 can be checked. One action queues each checked target through the existing
 serialized device lane, with source identity/playlist rebinding and target
 mount/UUID guards before each target. Cancellation clears remaining targets;
-iPod-specific first-generation review remains in place. USB Export and drops
+iPod exports likewise continue through their own guarded planning/commit path
+without an extra first-generation plan confirmation. USB Export and drops
 are additive to the existing library: only the selected playlists are reconciled,
 without applying later source edits to unrelated previously exported playlists;
 Save to USB applies explicit preference edits. None adds a second prepared-plan
@@ -209,8 +210,8 @@ an8MiB limit and decoded from those bytes off-thread. It never substitutes the
 Mac artwork cache or reads other covers, catalogs or audio for the information
 request. Discovery finishes before that selected read, and device admission is
 held until its decoder retires. Info fields also appear as optional
-browser columns. Prepared row cache schema3 and library cache schema11 carry the
-new display inputs without resetting curation, analysis or artwork. New optional
+browser columns. These display inputs were introduced with prepared row cache
+schema3/library cache11 and remain in current schemas4/13 without resetting curation, analysis or artwork. New optional
 fields stay hidden when older header state is restored; deliberate selections
 that exceed the viewport can scroll. Progress/count/Cancel share a fixed-height
 footer and cannot resize the browser.
@@ -238,7 +239,8 @@ erase from starting. These corrections were installed in personal build165 and
 remain in build167. Source was local and
 unpublished at that installation checkpoint; the subsequent whole-app wrap-up
 authorizes publication without changing its signed bytes. The dated USB audit
-receipts retain that165 signed provenance; HANDOFF records current167 provenance.
+receipts retain that165 signed provenance; HANDOFF records the actual current
+installed provenance, separately from those historical builds.
 Formatting owns a separate worker
 and reserves every mounted partition on its physical disk. Once confirmation is
 accepted, another USB can open Export and use the ordinary export lane. Discovery

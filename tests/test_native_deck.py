@@ -36,6 +36,55 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+class TagPopupNativeGeometry(unittest.TestCase):
+    """Check Cocoa's real surface, which a QWidget grab alone cannot prove."""
+
+    def test_hidden_startup_and_reopened_catalogs_fit_the_native_tool_surface(self):
+        from PySide6.QtCore import QPoint
+        from desktop.prep_tags import MyTagsButton
+        from soundbox.library import LibraryTag
+
+        app = QApplication.instance() or QApplication([])
+        owner = QWidget()
+        button = MyTagsButton(owner)
+        self.addCleanup(owner.deleteLater)
+        self.addCleanup(owner.close)
+        self.addCleanup(button.popup.close)
+        # Materialize the native window at its empty startup size before the
+        # toolbar and asynchronous catalog supply their complete dimensions.
+        button.popup.winId()
+        owner.show()
+
+        class Rect(ctypes.Structure):
+            _fields_ = [(name, ctypes.c_double) for name in ('x', 'y', 'width', 'height')]
+
+        objc = ctypes.CDLL('/usr/lib/libobjc.A.dylib')
+        selector = objc.sel_registerName
+        selector.argtypes = [ctypes.c_char_p]
+        selector.restype = ctypes.c_void_p
+        send = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)(('objc_msgSend', objc))
+        frame = ctypes.CFUNCTYPE(Rect, ctypes.c_void_p, ctypes.c_void_p)(('objc_msgSend', objc))
+        for width, count in ((192, 11), (240, 17), (192, 3)):
+            with self.subTest(width=width, tags=count):
+                button.setFixedWidth(width)
+                button.set_state([LibraryTag(str(i), f'Tag {i}') for i in range(count)],
+                                 [set()], creation_reason='', deletion_reason='')
+                button.popup.popup(QPoint(100, 100))
+                app.processEvents()
+                view = int(button.popup.winId())
+                window = send(view, selector(b'window'))
+                expected = button.popup.size()
+                self.assertEqual(expected.width(), width)
+                for native in (view, window):
+                    bounds = frame(native, selector(b'frame'))
+                    self.assertEqual((bounds.width, bounds.height),
+                                     (expected.width(), expected.height()))
+                for control in (button.create_tag, *button.checkboxes.values()):
+                    rect = control.geometry().translated(button.content.pos())
+                    self.assertTrue(button.popup.rect().contains(rect), control.text())
+                button.popup.close()
+
+
 class WaveformStreamRepair(unittest.TestCase):
     def test_soundbox_pwv5_color_is_restored_from_compact_overview(self):
         # Preserve each low seven-bit height/control payload while replacing

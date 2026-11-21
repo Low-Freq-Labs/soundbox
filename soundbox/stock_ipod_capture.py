@@ -33,6 +33,11 @@ class StockIpodNativeCapture:
     play_counts: bytes | None
     includes_artwork: bool
 
+    @property
+    def play_counts_sha256(self) -> str:
+        """Observed playback state for view invalidation, never write authority."""
+        return hashlib.sha256(self.play_counts).hexdigest() if self.play_counts is not None else ""
+
     def require_target(self, target: Path) -> None:
         if self.target != target:
             raise StockIpodCaptureError("Stock catalog capture belongs to another target")

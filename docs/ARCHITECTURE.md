@@ -15,8 +15,9 @@ continuation; admission alone never acknowledges a source edit. Publication
 merges only the committed leaves into current GUI owners, fencing repository
 replacement/restore and preserving unrelated navigation preferences.
 Ordinary UI preferences use the same ordered lane with an explicit leaf
-allowlist and latest-value coalescing. Native/controller boolean save APIs still
-mean durable success; they never report success merely because work was queued.
+allowlist and latest-value coalescing. Canonical persistence boolean save APIs still mean durable success. Controller
+gesture admission separately reports owned RAM staging; it never acknowledges a
+canonical or native save merely because work was queued.
 `desktop.ipod_export_capture` uses an ordered read-only checkpoint on that lane
 to freeze a durably saved selected generation while bulk metadata work is paused
 or running. It does not drain unrelated source queues or write a new canonical
@@ -36,11 +37,16 @@ it grants no historical source authority. If no managed key remains current,
 the initial safe route asks for explicit selection rather than guessing deletion.
 My Tags verifies all matching native aliases on the existing readback worker and
 consumes that exact private Library/request proof once. Queue retirement and
-smart-playlist recency share one ordered durable ACK; presentation waits for it.
+smart-playlist recency share one ordered durable ACK. Verified source publication
+waits for it; captured checkbox and future-tag projections paint immediately.
 Current source, repository epoch, queued request and affected order owners are
 rechecked before admission/publication. A durable commit whose GUI owner changed
 retains newer RAM and reports the publication conflict for explicit receipt Retry.
-Initial intention admission, Retry and Discard still use durable boolean saves.
+Small source intentions use `SourceIntentAdmission` to own immediate staged RAM
+feedback while the ordered canonical save finishes. Native dispatch waits for its
+durable acknowledgement; Retry/Discard retain their exact queue ownership and
+visible storage errors. Pending definition dependencies wait for verified native
+creation and ACK before their own source dispatch.
 Sparse canonical and GUI patches share `apply_state_patch`, copying each affected
 dictionary ancestor once rather than once per selected song. Whole recency-state
 validation remains bounded by100,000ranks; it is a separately measured residual.
@@ -427,14 +433,18 @@ each retains its FIFO, per-song prerequisites and fresh source guards. General
 ownership still protects refresh/export/shutdown. Only the synchronously selected
 source opportunity may pass deferred cue/grid logical holds, while physical work,
 prepared-prep/recovery reservations and foreground prerequisites remain guarded.
-There is no elapsed-time deadline. Interactive Tags remain busy during active
-DSP; an admitted single-flight assignment persists before presentation and
-remains until exact native readback and durable acknowledgement. Failed songs
+There is no elapsed-time deadline. Interactive Tags capture exact selected songs
+into an immediate bounded RAM FIFO. The existing canonical worker durably admits
+each captured batch before the shared native writer can run; checkbox previews
+remain usable while earlier saves or DSP work finish. Verified full native
+readback and durable acknowledgement retire only the completed head. Failed songs
 retain their intentions while other local jobs continue. Captured
 cue gestures remain immediately usable while canonical and native saves wait;
 their owned overlays do not claim durable acknowledgement before verification.
 Normal Quit keeps the window and source pumps usable while captured saves finish;
-teardown then drains accepted cue jobs before stopping their owner.
+the original close request then completes. Exact background canonical proof can
+retain failed source queues unchanged for restart. RAM/storage/recovery errors
+remain blockers; teardown drains accepted cue jobs before stopping their owner.
 Automatic detection off admits waveform-only prerequisites for native imports,
 without invoking either detector or creating fabricated musical results. Explicit
 waveform-only repair continues through its existing cache repair route.
@@ -555,7 +565,7 @@ remain explicit; see [compatibility limits](cdj-media-compatibility.md).
 Stable logical IDs project with `native_identity` while `Track.native_id` retains
 the native SQL ID. `Track.native_path` preserves a raw native alias separately
 from its canonical playback/cache path. `native_paths` captures/rechecks alias
-inode/epoch proofs. Cache11 retains these fields; cue/grid/tag/CDJ adapters translate
+inode/epoch proofs. Introduced in cache11, these fields remain in current cache13; cue/grid/tag/CDJ adapters translate
 to native SQL IDs while UI/cache/curation retain logical IDs. Independent existing
 native-ID curation blocks activation until a reviewed merge. Import injection and
 late metadata probes cannot overwrite projected native data. Bare registration
@@ -836,7 +846,8 @@ track loading. Comments spans the Info row; Lyricist is omitted from that form.
 Global My Settings and Keyboard put their scrollbars at the window's right edge.
 Flexible prep
 gaps redistribute around it. FooterBar draws a single full-width top separator at a fixed28-point height.
-Its progress/count/Cancel controls fit inside without changing browser geometry.
+Its progress/Cancel/count/status order keeps the controls anchored across phase
+and count changes without changing browser geometry. Long status text elides.
 
 `desktop.browser_scrollbar.BrowserScrollBar` overlays a visible row scrollbar
 at the frame’s right edge in TrackTable, Artists and USB playlist views. Qt’s
@@ -1163,7 +1174,11 @@ attached. A locator index skips unchanged JPEGs, and manual art changes queue
 only affected tracks while connected. Successful commits
 atomically publish a Mac-side `stock_ipod_state/` shadow keyed by library
 persistent ID plus volume UUID. Exact database/artwork fingerprints activate
-the fast path; mismatch performs full reconciliation. Because a valid shadow can
+the writer fast path; mismatch performs full reconciliation. Advisory pending
+status separately compares saved live playlist/song identities through
+`stock_ipod_observation`; unrelated foreign catalog growth grants neither Sync
+drift nor a renewed witness. Captured playback digests request owned read-only
+view refreshes, with history-only rows patched in place. Because a valid shadow can
 be playlist-scoped, selected sources absent from its acceleration index are
 narrowly reconciled against size/suffix candidates in live device media using
 exact content hashes before any copy is planned. Incremental art preserves image
@@ -1381,12 +1396,31 @@ refresh, preserving compressed waveform payloads.
   source owner. `desktop.tag_creation` supplies the full-width My Tags header
   button and creation forms, defaulting smart conditions to My Tag/ANY. Smart
   creation requires the playlist authority's explicit capability and profile,
-  exact tag/category/parent pins and full source readback before presentation.
-  The accepted root/nonempty smart-only placement windows preserve existing
-  rules and relative order; empty/mixed folders and existing smart rename/rule/reorder changes
-  remain guarded. Deletion has its separate capability above. SQL/XML phase clocks and renewed shared-parent clocks persist
-  before admission. The November12 pilot/native reopen and installed package
-  complete this scope; no cache or prior ordinary-playlist authority enables it.
+  exact tag/category/parent pins and full source readback before verified
+  publication. Pending rows may project their captured intentions sooner. Separate
+  accepted creation profiles cover the current library’s root, mixed/empty-folder
+  and normalized/gapped sibling placements; the November12 baseline alone does
+  not grant those later scopes. Context creation captures the clicked sibling as
+  the insertion anchor. Existing rule edits remain guarded; rename/order/move and
+  deletion have their independent capabilities. SQL/XML phase clocks and renewed
+  shared-parent clocks persist before source admission. HANDOFF records exact
+  native acceptance; neither cache nor ordinary-playlist authority enables it.
+- **Existing intelligent metadata is independently gated.** `rename_smart` and
+  `reorder_smart` carry their own default-off profiles, exact UUID/parent/rule
+  pins and the existing DB/XML writer/recovery owner. The local name-only
+  profile follows the November19 inline +1 row/counter/XML window. Mixed
+  ordering follows the separate native direct-move protocol: target first,
+  displaced siblings in old sequence, independent per-row SQL clocks, and only
+  target/non-root parent XML clocks. Full private reference replays cover long
+  moves in both directions, mixed neighbors and root folder neighbors; intelligent
+  rows preserve their native local history 0 or 1, zero status/deletion flags and
+  absent cloud USNs. Both profiles require independent source/native reopen
+  acceptance; current exact-library activation is recorded in HANDOFF.
+  Neither grants rule edits. Reparenting has its separate accepted Move profile,
+  including regular playlists, smart playlists and nested folders. A folder-row
+  center drop appends inside; its edge zones place above/below, whether expanded
+  or collapsed. Unsupported identities/profiles reject before a doomed FIFO
+  entry. Read-only proposals and generated TEMP publication grant no authority.
 - **Cue planning is pure; the accepted writer binds one track.** `rekordbox_cues` produces exact
   four-table deltas from raw snapshots, separate from normalized display cues.
   Full revisions and explicit cue IDs/UUIDs guard stale chronological deletion;
@@ -1535,6 +1569,7 @@ refresh, preserving compressed waveform payloads.
   Native preferences bind source path/library ID/playlist ID/UUID; stale menus
   reject changed identities. The delegate uses a catalog-scoped row index and
   dictionary lookup, and a successful local save only repaints the viewport.
+  Smart rows add a small gear badge to the selected base icon.
   Folder icons, Collection home and Artists person remain fixed. Legacy local
   rename/delete moves or removes only its own preference in the same state save.
 - **Track/display preparation is bounded.** Path decoding is cached against its
@@ -1750,7 +1785,9 @@ and moves only the minimum required, preventing unrelated device-art drift. The
 settings payload also stores the last
 closed window geometry, table columns, and Playlists/Devices splitter
 heights plus waveform zoom and beat-jump mode; startup restores
-the outer geometry before applying inner pane sizes.
+the outer geometry before applying inner pane sizes. The browser/sidebar divider
+paints one plain pixel while Qt retains an overlapping invisible mouse grab and
+its resize cursor; no grip ornament is drawn.
 
 The source-validated metadata migration freezes effective Title AND Artist from
 one immutable SoundBox snapshot before either native field can change. Cleanup,
@@ -1944,7 +1981,12 @@ or absent files receive ordinary preparation. Selected sync still verifies hashe
 
 ## Build / install
 
-    ./check.sh                 # native deck/process/CDJ builds and complete gates
+Small local fixes use focused affected tests; complete validation is required
+before commit/push. See [test workflow](test-release-gate.md). Package/isolated
+checks and state-preserving install/reopen remain required for local app delivery.
+
+    ./check.sh --focus tests/test_name.py  # local selected tests
+    ./check.sh --render        # complete publication/wrap-up gate, including render
     ./build_native.sh          # deck + process-guard dylibs
     ./build_app.sh             # PyInstaller → dist/personal/Soundbox.app (self-signed)
 
@@ -2116,7 +2158,10 @@ the Tag/Cue/Grid TaskOwner, waits for closed native apps, verifies source saves,
 and persists renewed retry identities/clocks before publication. A committed
 operation replays unchanged. Unstarted intents survive restart. UI close/Cmd+Q
 keeps the app, input and pumps open while captured import/detection/source saves
-remain; the next Quit proceeds when they finish. Explicit teardown still retains
+remain, then completes that original close request. A failed source queue can be
+retained only after a fresh canonical checkpoint proves its exact saved bytes;
+unsaved RAM admissions and recovery failures remain visible blockers.
+Explicit teardown still retains
 unstarted durable intents. Durable matching-source/UUID delete intents project
 onto the sidebar immediately without changing the verified catalog/revision;
 source failure/discard restores the newest catalog presentation. Persisted create,
@@ -2353,3 +2398,24 @@ recovery checks remain. Optional provider scopes check actual receives on suppor
 owned SocketIO adapters without bypassing top-level decoding/error methods. Their
 cooperative budgets do not forcibly interrupt DNS/pre-response opaque work.
 See performance-audit.md for measurements, exact limits and retained tradeoffs.
+
+## November19 iPod/source lane and naming follow-up
+
+`desktop.tag_controller.device_blocks_library_work` keeps generic/unknown targets
+conservative while allowing tag definition/assignment, metadata, playlist, prep and dependent native
+analysis queues to progress beside known iPod device work. The existing source
+owner still serializes actual DB writers; frozen selected export inputs do not
+follow later smart-playlist membership. The device footer retains its own owner.
+`stock_device_view` dispatches the same prepared primary action as the header,
+without borrowing a restored nonselectable current row. `prep_tags` binds deletion
+to the right-clicked tag/source and rechecks after the single confirmation.
+
+`playlist_names` provides the shared normalized claim rule; desktop admission
+checks authoritative native/custom and pending name claims. Stock/dual titles are
+leaf names, and `playlist_retirement` handles only exact manifest-owned Rockbox
+flat-playlist migration after replacement publication. Retained pending path
+provenance prevents a later broad prune from bypassing refused byte/entity guards.
+`stock_ipod_shadow.retained_source_rows` carries unchanged source proofs verbatim
+through stock-only partial updates after exact native-shadow matching. It excludes
+ambiguous, relocated and rewritten payloads, while independent selected-source
+verification remains live.

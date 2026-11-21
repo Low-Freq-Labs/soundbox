@@ -6,5 +6,5 @@ These validate numerical/render contracts against production helpers without rep
 Keep oracle calculations independent and preserve the pinned waveform/reference inputs.
 No device/source discovery or live application state belongs here.
 
-Run the affected native suites and the complete root `./check.sh`.
+Run affected native suites locally; the complete root gate remains required before publication.
 See [player invariants](../../docs/PLAYER.md) and [release gate](../../docs/test-release-gate.md).

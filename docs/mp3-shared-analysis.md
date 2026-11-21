@@ -157,8 +157,10 @@ DAT/EXT/2EX, audio/XML and all non-registry tables remained exact; five native
 startup registry housekeeping changes remain explicitly recorded. Counter368171
 stayed unchanged. Its acceptance SHA-256 is
 `48a2134d188351bd9e5b2a2a6da027d1f6b00975bbaa46e99add489f8203adea`.
-The pilot is terminal; never replay its approval/source helper. Its full recovery
-archive and original `pilot-tested-source/` remain protected.
+The pilot is terminal; never replay its approval/source helper. Its compact
+acceptance/operation evidence remains protected. Current recovery and required
+reference inputs follow the current retention contract; completed historical full
+DB diagnostics are not permanently retained merely because this pilot once used them.
 
 That proof provisions only the independent CBR library/schema/version authority
 at `rekordbox-cbr-analysis-authority.json`; the9existing authorities remain exact,

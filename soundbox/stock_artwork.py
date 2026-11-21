@@ -776,15 +776,8 @@ def _retained_links(tracks, native):
         and int(getattr(track, 'mhii_link', 0) or 0) == native[dbid][1]))
 
 
-def read_stock_artwork_slots(
-    existing_artwork_dir: str | Path,
-) -> tuple[bytes, dict[int, StockArtworkSlot], dict[int, tuple[int, int]]]:
-    """Read ArtworkDB linkage/offsets without reading any ithmb pixels."""
-    artwork_dir = Path(existing_artwork_dir)
-    database = artwork_dir / "ArtworkDB"
-    if not database.is_file():
-        return b"", {}, {}
-    data = database.read_bytes()
+def parse_stock_artwork_slots(data: bytes) -> dict[int, StockArtworkSlot]:
+    """Parse captured ArtworkDB records without filesystem or pixel reads."""
     if len(data) < 132 or data[:4] != b"mhfd":
         raise StockArtworkError("Existing ArtworkDB has an invalid MHFD header")
 
@@ -797,6 +790,20 @@ def read_stock_artwork_slots(
         images = _images(raw,formats)
         slots[image_id] = StockArtworkSlot(image_id,_u64(raw,20),_u32(raw,48),
             tuple(sorted((fid,row[0]) for fid,row in images.items())),raw=raw)
+    return slots
+
+
+def read_stock_artwork_slots(
+    existing_artwork_dir: str | Path,
+) -> tuple[bytes, dict[int, StockArtworkSlot], dict[int, tuple[int, int]]]:
+    """Read ArtworkDB linkage/offsets without reading any ithmb pixels."""
+    artwork_dir = Path(existing_artwork_dir)
+    database = artwork_dir / "ArtworkDB"
+    if not database.is_file():
+        return b"", {}, {}
+    data = database.read_bytes()
+    slots = parse_stock_artwork_slots(data)
+    formats = _PROFILES[_database_profile(data)]
 
     files: dict[int, tuple[int, int]] = {}
     for format_id, (width, height) in formats.items():

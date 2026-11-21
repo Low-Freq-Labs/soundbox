@@ -1,4 +1,58 @@
-# Performance audit — November 2–18, 2026
+# Performance audits and measured limits — November 2026
+
+## Current follow-up — November19–20
+
+The dated measurements below retain their original workload and build scope;
+they are not timings for the current installed app. [HANDOFF](HANDOFF.md) records
+source/package/installed identity. The current changes preserve native audio,
+waveform rendering, source bytes and independently accepted writer profiles.
+
+Tag/playlist gestures now stage bounded exact intentions for sparse canonical
+admission instead of synchronously saving unrelated state. Checkboxes, future tag
+choices and pending organization update immediately; native publication still
+waits for durable admission, exact prerequisites and the shared guarded writer.
+Success waits for fresh readback plus durable acknowledgement. The source FIFO
+retains later clicks, selection and failure/retry ownership. Cue/grid identity
+renewal also saves only its selected queue delta. This is a change in work scope
+and scheduling, not a claim that all storage or database operations are O(1).
+
+Cue-only v2 preparation no longer reads DAT/EXT for an unrelated grid. An existing
+private grid cache may need one post-save companion observation; legacy intent
+reconciliation retains its original proof. Native playlist fresh-transition
+results can reuse the current call's verified committed edge; historical receipt
+replay still reconstructs its independent proof. Native membership reading
+selects content IDs instead of materializing every full ORM content object.
+Artists refresh separates organization inputs from changed rendered tag labels,
+preserving existing prepared rows when their actual inputs remain unchanged.
+
+Desktop tag and prep work can proceed during iPod export/sync/delete. An export
+keeps its frozen source generation; later edits are eligible for a later sync.
+This does not permit concurrent native source writers or borrow an iPod lease.
+Stock/dual planning records bounded named phase durations and counts. A bounded
+negative-only memo reuses definite unsupported-WAV observations only for the same
+stable source epoch; it never admits media or weakens full capture/hash checks.
+Retained stock source proofs remain bound to their original exact epochs rather
+than being renewed from timestamps. New/changed media, recovery and affected
+destination checks keep their independent proof costs.
+
+These changes remove specific repeated work and make feedback independent of
+background saving; no new end-to-end latency, compositor, hardware-throughput or
+firmware-playback speedup is established here. Native-command phase/publication
+logs distinguish execution, dispatch and final GUI acknowledgement. The domain
+review matrix below still covers tag, Hot/Memory cue, grid, playlist/folder,
+registration/locator, conversion, deletion and initial-analysis operations;
+fresh authority/process/source/recovery checks remain required in every domain.
+
+Development validation can now select named areas at cumulative quick,
+integration or recovery depth, combine areas, or run an exact test selector.
+USB/CDJ and iPod remain separate suites. Previewing a plan imports neither Qt nor
+test modules. Focused reports identify their scope and cannot pass the full
+release verifier. Scheduling weights change worker assignment only; the complete
+bare render gate still runs every discovered test exactly once with no skips or
+expected failures before publication. These are coverage and scheduling rules,
+not permission to substitute quick smoke for native writer recovery tests.
+See [the test-runtime audit](testing-runtime-audit.md) and
+[the release gate](test-release-gate.md) for measured runner cost and exact usage.
 
 ## Connected iTunes export — November18 observation
 
@@ -1222,8 +1276,10 @@ disposable TEMP directory. Five real changed-state saves measured 26.715 ms
 median and 28.162 ms maximum. The profile identified repeated validation and
 deep copying in `StateRepository.save` and backup validation. The later broader
 pass implements exact-byte reuse of validated backup input, with corruption,
-external-edit and recovery tests. Per-edit durability and backups remain intact;
-moving a durable intent behind its visible effect is not an acceptable speedup.
+external-edit and recovery tests. Per-edit durability and backups remain intact.
+The later explicit cue/tag/playlist pending presentations above may precede
+canonical admission, with bounded retained intentions and failure handling;
+native writes and saved-success claims must still wait for their durable proof.
 
 `ArtCache.status_kinds` already captures one exclusion-policy snapshot. The earlier default-photo
 lookup checked assigned files per track; the later broader pass captures

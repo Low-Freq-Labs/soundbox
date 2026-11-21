@@ -173,16 +173,16 @@ class DeviceWaitLifecycle(unittest.TestCase):
         self.assertFalse(self.host._exporting)
         self.assertFalse(self.host._cancelling)
 
-    def test_begin_deferred_source_change_finishes_batch_once(self):
+    def test_begin_deferred_track_uuid_change_finishes_batch_once(self):
         batch, _worker, release, repeat = self.deferred()
-        self.host.lib.tracks_by_id['alpha'].name = 'Newer displayed title'
+        self.host.lib.tracks_by_id['alpha'].source_uuid = 'replacement-track-uuid'
         release.set(); self.assert_terminal(batch, 'changed')
         repeat(True); repeat(False)
         self.assertEqual(len(batch['results']), 1)
 
-    def test_prepare_deferred_source_change_finishes_batch_once(self):
+    def test_prepare_deferred_native_path_change_finishes_batch_once(self):
         batch, _worker, release, repeat = self.deferred(prepare=True)
-        self.host.lib.tracks_by_id['alpha'].artist = 'Newer displayed artist'
+        self.host.lib.tracks_by_id['alpha'].source_native_path = '/synthetic/replacement.wav'
         release.set(); self.assert_terminal(batch, 'changed')
         repeat(True)
         self.assertEqual(len(batch['results']), 1)

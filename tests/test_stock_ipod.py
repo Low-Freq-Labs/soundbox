@@ -131,7 +131,7 @@ class StockPlaylistCapacity(unittest.TestCase):
             self.assertEqual(len(parsed_payloads), 2)
             self.assertEqual(parsed_payloads[0], before)
 
-    def test_duplicate_native_names_keep_first_identity_and_requested_order(self):
+    def test_duplicate_native_names_refuse_ambiguous_export_and_preserve_catalog(self):
         with tempfile.TemporaryDirectory() as area:
             root = Path(area) / "synthetic-ipod"
             itunes = root / "iPod_Control/iTunes"
@@ -146,15 +146,10 @@ class StockPlaylistCapacity(unittest.TestCase):
             before = (itunes / "iTunesDB").read_bytes()
             selected = [Playlist("Another", [], [], pid="a"),
                         Playlist("Repeated", [], [], pid="b")]
-            plan = plan_stock_ipod_sync(
-                Library({}, selected, Path(area) / "synthetic-source"), selected,
-                root, model_number="MA446", filesystem="msdos", usb_family='iPod Video')
-            candidate = Path(area) / "candidate"
-            candidate.write_bytes(plan.rendered_database)
-            result = stock_ipod.parse_itunesdb(str(candidate))
-            rows = [(row["Title"], row["playlistID"])
-                    for row in result["mhlp"] if not row.get("isMaster")]
-            self.assertEqual(rows, [("Keep", 103), ("Another", 104), ("Repeated", 101)])
+            with self.assertRaisesRegex(StockIpodError, 'already uses the name'):
+                plan_stock_ipod_sync(
+                    Library({}, selected, Path(area) / "synthetic-source"), selected,
+                    root, model_number="MA446", filesystem="msdos", usb_family='iPod Video')
             self.assertEqual((itunes / "iTunesDB").read_bytes(), before)
 
 

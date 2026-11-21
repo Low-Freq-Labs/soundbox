@@ -49,6 +49,32 @@ def context(window):
     )
 
 
+def artists_context(window):
+    """Exact visible pool for Artists, independent of native organization.
+
+    Complete media compatibility and registry/row dirtiness are checked by the
+    publication owner. Playlist membership/order and tag definitions affect the
+    native tree; changed rendered tag labels have their own detached row inputs.
+    """
+    lib = window.lib
+    if lib is None:
+        return None
+    return (str(lib.source), lib.source_kind, lib.source_library_id,
+            tuple(track.track_id for track in window._visible_collection_tracks()),
+            _freeze(window.settings.get('track_info', {})))
+
+
+def artist_tag_inputs(library, tracks=None):
+    """Detach the ordered labels used by complete rendered MyTags cells."""
+    if library is None:
+        return {}
+    labels = tuple((tag.tag_id, tag.name) for tag in library.source_tags)
+    tracks = library.tracks_by_id.values() if tracks is None else tracks
+    return {track.track_id: (bool(track.source_tag_ids), tuple(
+                label for label in labels if label[0] in (track.source_tag_ids or ())))
+            for track in tracks}
+
+
 def clean_row(row):
     return {key: value for key, value in row.items() if key != '_hay'}
 

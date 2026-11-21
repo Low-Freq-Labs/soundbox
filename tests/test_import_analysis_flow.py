@@ -827,20 +827,24 @@ class ImportAnalysisFlow(unittest.TestCase):
         with mock.patch.object(pb.player,'set_grid'),mock.patch.object(pb,'_update_transport'):
             self.assertTrue(self.win._edit_grid('shift',1))
             self.win.tag_controller.busy=True
-            self.assertTrue(self.win._edit_local_cue(track,'hot',0,'add',777))
-            intended=deepcopy(controller.state_lane.queue[-1]['job']['operations'])
-            self.assertTrue(controller.state_lane.queue[-1]['job']['identity_pending'])
-            def verified(work,completed):
-                completed(SimpleNamespace(result=work(),error=''))
-                return True
-            with mock.patch.object(controller.tags,'run_prep_job',side_effect=verified):
-                controller._check_identity(deepcopy(controller.job(track.track_id)),self.win.lib,track)
+            try:
+                self.assertTrue(self.win._edit_local_cue(track,'hot',0,'add',777))
+                intended=deepcopy(controller.state_lane.queue[-1]['job']['operations'])
+                self.assertTrue(controller.state_lane.queue[-1]['job']['identity_pending'])
+                def verified(work,completed):
+                    completed(SimpleNamespace(result=work(),error=''))
+                    return True
+                with mock.patch.object(controller.tags,'run_prep_job',side_effect=verified):
+                    controller._check_identity(deepcopy(controller.job(track.track_id)),self.win.lib,track)
+            finally:
+                # This fixture owns the fake source hold. Release it even if a
+                # proof assertion fails so normal shutdown can drain its lane.
+                self.win.tag_controller.busy=False
+        self.wait(lambda:not controller.admission_pending)
+        self.assertFalse(controller.admission_error)
         renewed=deepcopy(controller.job(track.track_id))
         self.assertNotIn('identity_pending',renewed)
         self.assertEqual(renewed['epoch'],analysis.identity(track.path.stat()))
-        self.win.tag_controller.busy=False
-        self.wait(lambda:not controller.admission_pending)
-        self.assertFalse(controller.admission_error)
         job=StateRepository(self.win._data_file).load()['settings']['pending_prep_edits'][0]
         self.assertEqual(job['operations'],intended)
         self.assertEqual((job['sha256'],job['epoch']),(renewed['sha256'],renewed['epoch']))

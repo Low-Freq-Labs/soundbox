@@ -268,6 +268,40 @@ def create_smart(playlists, counter, *, identity, uuid, name, tag_ids, timestamp
                 windows=[first['window'], 'combined-name-rule-definition+2'])
 
 
+def smart_append_parent_reason(playlists, parent):
+    """Measured append into a nonempty local folder; no sibling mutation."""
+    if parent == 'root':return 'Root smart creation uses its existing constructor profile'
+    try:
+        parents=[row for row in playlists if row['ID']==parent]
+        if len(parents)!=1 or parents[0]['Attribute']!=1:
+            return 'The smart-playlist folder is unavailable'
+        _ordinary(parents[0],folder=True)
+        siblings=_siblings(playlists,parent)
+        if not siblings:return 'Smart creation in an empty folder needs its native constructor reference'
+        if len(siblings)>4096:return 'Smart creation exceeds the bounded folder inventory'
+        for row in siblings:
+            local(row)
+            if row['Attribute'] not in (0,1,4):return 'The folder contains an unverified native playlist type'
+    except (KeyError,TypeError,ValueError,AttributeError):
+        return 'The smart-playlist folder has unverified native metadata'
+    return ''
+
+
+def create_smart_append(playlists,counter,*,identity,uuid,name,tag_ids,timestamp,definition_timestamp,parent):
+    """Native direct folder append +1, then the measured new-definition +2."""
+    reason=smart_append_parent_reason(playlists,parent)
+    if reason:raise ValueError(reason)
+    first=create(playlists,counter,identity=identity,uuid=uuid,name='Untitled Intelligent List',
+                 timestamp=timestamp,parent=parent)
+    new={**first['playlist'],'Attribute':4,'SmartList':None}
+    first['changes'][0]['after']=new
+    definition=smart_definition_window(new,first['counter'],name=name,
+        rule=smart_tag_rule(identity,tag_ids),timestamp=definition_timestamp)
+    return dict(changes=[*first['changes'],*definition['changes']],playlist=definition['playlist'],
+        counter=definition['counter'],source_write_authority=False,
+        windows=['nonempty-folder-append-constructor+1','combined-name-rule-definition+2'])
+
+
 def smart_definition_window(playlist, counter, *, name, rule, timestamp):
     """Pure observed +2 window; source exposes this only inside new creation.
 
@@ -331,6 +365,23 @@ def _result(before,members,counter,current,*,playlists_before=(),playlists_after
     return dict(changes=changes,members=members,counter=current,source_write_authority=False)
 
 
+def _created_node(playlists,counter,*,identity,uuid,name,timestamp,parent,folder,sequence):
+    if (not isinstance(identity,str) or not identity.isascii() or not identity.isdecimal()
+            or not 0<int(identity)<2**32 or str(int(identity))!=identity or str(UUID(uuid))!=uuid):
+        raise ValueError('Invalid native playlist identity')
+    if any(r.get('ID')==identity or r.get('UUID')==uuid for r in playlists):
+        raise ValueError('Native playlist identity collides with retained history')
+    if type(sequence) is not int or sequence<1:raise ValueError('Invalid constructor position')
+    current=_counter(counter)
+    row=dict(ID=identity,Seq=sequence,Name=_name(name),ImagePath=None,
+             Attribute=int(folder),ParentID=parent,SmartList=None,UUID=uuid,rb_data_status=0,
+             rb_local_data_status=0,rb_local_deleted=0,rb_local_synced=0,usn=None,
+             rb_local_usn=current['int_1'],created_at=timestamp,updated_at=timestamp)
+    return dict(changes=[dict(table='djmdPlaylist',id=identity,before=None,after=row),
+                         dict(table='agentRegistry',id='localUpdateCount',before=deepcopy(counter),after=current)],
+                playlist=row,counter=current,source_write_authority=False)
+
+
 def create(playlists,counter,*,identity,uuid,name,timestamp,parent='root',folder=False):
     if (not isinstance(identity,str) or not identity.isascii() or not identity.isdecimal()
             or not 0<int(identity)<2**32 or str(int(identity))!=identity or str(UUID(uuid))!=uuid):
@@ -342,15 +393,9 @@ def create(playlists,counter,*,identity,uuid,name,timestamp,parent='root',folder
         if len(targets)!=1 or targets[0].get('Attribute')!=1:
             raise ValueError('Parent is not an active native folder')
         _ordinary(targets[0],folder=True)
-    siblings=_siblings(playlists,parent);current=_counter(counter)
-    row=dict(ID=identity,Seq=len(siblings)+1,Name=_name(name),ImagePath=None,
-             Attribute=int(folder),ParentID=parent,SmartList=None,UUID=uuid,rb_data_status=0,
-             rb_local_data_status=0,rb_local_deleted=0,rb_local_synced=0,usn=None,
-             rb_local_usn=current['int_1'],created_at=timestamp,updated_at=timestamp)
-    return dict(changes=[dict(table='djmdPlaylist',id=identity,before=None,after=row),
-                         dict(table='agentRegistry',id='localUpdateCount',before=deepcopy(counter),after=current)],
-                playlist=row,counter=current,source_write_authority=False)
-
+    siblings=_siblings(playlists,parent)
+    return _created_node(playlists,counter,identity=identity,uuid=uuid,name=name,timestamp=timestamp,
+                         parent=parent,folder=folder,sequence=len(siblings)+1)
 
 def rename(playlist,counter,*,name,timestamp):
     _ordinary(playlist,folder=True);name=_name(name)
@@ -362,7 +407,7 @@ def rename(playlist,counter,*,name,timestamp):
                 playlist=after,counter=current,source_write_authority=False)
 
 
-def reorder(playlists,counter,*,identity,anchor_id,after=False,timestamp,sibling_timestamp=None):
+def reorder(playlists,counter,*,identity,anchor_id,after=False,timestamp,sibling_timestamp=None,_candidate_smart=False):
     """Compose native adjacent swaps within one existing parent.
 
     The November 2 native reference updates the dragged row first (+1), then
@@ -375,7 +420,8 @@ def reorder(playlists,counter,*,identity,anchor_id,after=False,timestamp,sibling
     if len(selected)!=1 or len(anchors)!=1 or identity==anchor_id or type(after) is not bool:
         raise ValueError('Expected distinct exact native reorder identities')
     target,anchor=selected[0],anchors[0]
-    _ordinary(target,folder=True);_ordinary(anchor,folder=True)
+    guard = _smart_editable if _candidate_smart else lambda row:_ordinary(row,folder=True)
+    guard(target);guard(anchor)
     if target['ParentID']!=anchor['ParentID']:
         raise ValueError('Reordering cannot transfer a playlist to another folder')
     siblings=_siblings(playlists,target['ParentID'])
@@ -387,7 +433,7 @@ def reorder(playlists,counter,*,identity,anchor_id,after=False,timestamp,sibling
         index=order.index(identity);step=1 if index<wanted.index(identity) else -1
         neighbor_id=order[index+step]
         old_target,old_neighbor=by_id[identity],by_id[neighbor_id]
-        _ordinary(old_neighbor,folder=True)
+        guard(old_neighbor)
         first=_counter(current);second=_counter(first)
         new_target={**old_target,'Seq':old_neighbor['Seq'],'updated_at':timestamp,'rb_local_usn':first['int_1']}
         new_neighbor={**old_neighbor,'Seq':old_target['Seq'],'updated_at':sibling_timestamp or timestamp,
@@ -399,6 +445,85 @@ def reorder(playlists,counter,*,identity,anchor_id,after=False,timestamp,sibling
         order[index],order[index+step]=order[index+step],order[index]
     return dict(changes=changes,playlists=[by_id[r['ID']] for r in nodes],counter=current,
                 source_write_authority=False)
+
+
+def _smart_editable(row):
+    """Measured local intelligent histories; cloud/unknown statuses stay excluded."""
+    if row.get('Attribute') != 4:
+        _ordinary(row, folder=True);return
+    local(row)
+    if type(row.get('SmartList')) is not str or not row['SmartList']:
+        raise ValueError('The candidate smart profile requires an exact local intelligent rule')
+
+
+def smart_rename_candidate(playlist,counter,*,name,timestamp):
+    """Measured local inline-name +1; definition-editor +2 stays separate."""
+    _smart_editable(playlist)
+    if playlist.get('Attribute') != 4:raise ValueError('Expected an intelligent playlist')
+    if playlist['rb_local_usn']>counter.get('int_1',-1):raise ValueError('Intelligent playlist clock exceeds its source counter')
+    if _name(name) == playlist['Name']:
+        return dict(changes=[],playlist=deepcopy(playlist),counter=deepcopy(counter),source_write_authority=False)
+    current=_counter(counter)
+    after={**playlist,'Name':name,'updated_at':timestamp,'rb_local_usn':current['int_1']}
+    return dict(changes=[dict(table='djmdPlaylist',id=playlist['ID'],before=deepcopy(playlist),after=after),
+                        dict(table='agentRegistry',id='localUpdateCount',before=deepcopy(counter),after=current)],
+                playlist=after,counter=current,source_write_authority=False)
+
+
+def smart_reorder_rows(playlists,*,identity,anchor_id,after=False):
+    """Exact local target plus displaced siblings, in native old-Seq order."""
+    selected=[row for row in playlists if row['ID']==identity]
+    anchors=[row for row in playlists if row['ID']==anchor_id]
+    if len(selected)!=1 or len(anchors)!=1 or identity==anchor_id or type(after) is not bool:
+        raise ValueError('Expected distinct exact native reorder identities')
+    target,anchor=selected[0],anchors[0];_smart_editable(target);_smart_editable(anchor)
+    if target['ParentID']!=anchor['ParentID']:
+        raise ValueError('Reordering cannot transfer a playlist to another folder')
+    siblings=_siblings(playlists,target['ParentID']);order=[row['ID'] for row in siblings]
+    wanted=[key for key in order if key!=identity];wanted.insert(wanted.index(anchor_id)+int(after),identity)
+    final={key:index+1 for index,key in enumerate(wanted)}
+    shifted=[row for row in siblings if row['ID']!=identity and row['Seq']!=final[row['ID']]]
+    for row in shifted:_smart_editable(row)
+    return target,shifted,final
+
+
+def smart_reorder_candidate(playlists,counter,*,identity,anchor_id,after=False,timestamp,sibling_timestamps):
+    """Measured native direct move: target first, then shifted rows in old Seq order."""
+    target,shifted,final=smart_reorder_rows(playlists,identity=identity,anchor_id=anchor_id,after=after)
+    if any(row['rb_local_usn']>counter.get('int_1',-1) for row in (target,*shifted)):
+        raise ValueError('Intelligent playlist clock exceeds its source counter')
+    if set(sibling_timestamps)!={row['ID'] for row in shifted}:
+        raise ValueError('Intelligent ordering requires every exact displaced sibling clock')
+    current=deepcopy(counter);changes=[]
+    if target['Seq']!=final[identity]:
+        for row in (target,*shifted):
+            current=_counter(current)
+            changed={**row,'Seq':final[row['ID']],
+                     'updated_at':timestamp if row['ID']==identity else sibling_timestamps[row['ID']],
+                     'rb_local_usn':current['int_1']}
+            changes.append(dict(table='djmdPlaylist',id=row['ID'],before=deepcopy(row),after=changed))
+        changes.append(dict(table='agentRegistry',id='localUpdateCount',before=deepcopy(counter),after=current))
+    return dict(changes=changes,counter=current,source_write_authority=False)
+
+
+def ordinary_request_reason(catalog,request):
+    """Reject unaccepted intelligent effects before a desktop FIFO is persisted."""
+    if request['operation'] not in {'rename','reorder','delete','append','remove'}:return ''
+    nodes=catalog['nodes'];target=next((row for row in nodes if row['ID']==request['playlist_id']),None)
+    if target is None:return 'The selected playlist disappeared; refresh and choose it again'
+    try:
+        def ordinary_kind(row):
+            if row.get('Attribute') not in (0,1) or row.get('SmartList') not in ('',None):
+                raise ValueError('Intelligent metadata has a separate profile')
+        ordinary_kind(target)
+        if request['operation']=='reorder':
+            siblings=_siblings(nodes,target['ParentID']);ids=[row['ID'] for row in siblings]
+            if request['anchor_id'] not in ids:raise ValueError('The reorder anchor changed parent')
+            start,end=sorted((ids.index(target['ID']),ids.index(request['anchor_id'])))
+            for row in siblings[start:end+1]:ordinary_kind(row)
+    except (ValueError,KeyError,TypeError):
+        return 'Existing intelligent playlist changes require their separate native acceptance'
+    return ''
 
 
 def append(playlist,members,counter,content,*,identity,uuid,timestamp,allow_duplicate=False):

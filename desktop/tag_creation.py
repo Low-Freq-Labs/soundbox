@@ -13,6 +13,13 @@ from .choices import ComboBox
 from soundbox.rekordbox_write import WriteProofError
 
 
+def available_tags(window, library):
+    """Presentation may include exact pending definitions; Library stays verified."""
+    controller = getattr(window, 'tag_definition_controller', None)
+    project = getattr(controller, 'available_tags', None)
+    return tuple(project(library.source_tags) if callable(project) else library.source_tags)
+
+
 def _name(value):
     value = value.strip()
     if not value or len(value) > 255 or any(ord(char) < 32 or ord(char) == 127 for char in value):
@@ -38,40 +45,6 @@ def tag_deletion_effects(library, tag):
         except WriteProofError:
             unknown = True
     return assigned, tuple(references), unknown
-
-
-class DeleteTagDialog(QDialog):
-    def __init__(self, tags, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle('Delete Tag')
-        self.setMinimumWidth(360)
-        layout = QVBoxLayout(self)
-        layout.addWidget(QLabel('Choose the My Tag to delete:', self))
-        self.tag = ComboBox(self)
-        labels = Counter((tag.category, tag.name) for tag in tags)
-        for tag in tags:
-            suffix = f' · {tag.category_id}' if labels[(tag.category, tag.name)] > 1 else ''
-            self.tag.addItem(f'{tag.category} / {tag.name}{suffix}', tag)
-        layout.addWidget(self.tag)
-        buttons = QDialogButtonBox(QDialogButtonBox.Cancel, self)
-        self.continue_button = buttons.addButton('Continue', QDialogButtonBox.AcceptRole)
-        self.continue_button.setEnabled(bool(tags))
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-
-    def value(self):
-        tag = self.tag.currentData()
-        if not tag or not all((tag.tag_id, tag.source_uuid, tag.category_id, tag.category_uuid)):
-            raise ValueError('Refresh the library before deleting a tag.')
-        return tag
-
-    def accept(self):
-        try:
-            self.value()
-        except ValueError:
-            return
-        super().accept()
 
 
 class NewTagDialog(QDialog):
@@ -134,6 +107,55 @@ class NewTagDialog(QDialog):
     def accept(self):
         self._validate()
         if self.create.isEnabled():
+            super().accept()
+
+
+class RenameTagDialog(QDialog):
+    def __init__(self, tag, tags, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle('Rename My Tag')
+        self.setMinimumWidth(360)
+        self._tag, self._tags = tag, tuple(tags)
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        self.name = QLineEdit(tag.name, self)
+        self.name.setMaxLength(255)
+        self.name.selectAll()
+        form.addRow('Name', self.name)
+        layout.addLayout(form)
+        self.message = QLabel(self)
+        self.message.setObjectName('Hint')
+        self.message.setWordWrap(True)
+        layout.addWidget(self.message)
+        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel, self)
+        self.save = buttons.button(QDialogButtonBox.Save)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self.name.textChanged.connect(self._validate)
+        self._validate()
+
+    def value(self):
+        name = _name(self.name.text())
+        if any(tag.tag_id != self._tag.tag_id and tag.category_id == self._tag.category_id
+               and tag.name.casefold() == name.casefold() for tag in self._tags):
+            raise ValueError('A tag with that name already exists in this category.')
+        return name
+
+    def _validate(self):
+        try:
+            self.value()
+        except ValueError as exc:
+            self.save.setEnabled(False)
+            self.message.setText(str(exc))
+        else:
+            self.save.setEnabled(True)
+            self.message.clear()
+
+    def accept(self):
+        self._validate()
+        if self.save.isEnabled():
             super().accept()
 
 
@@ -263,12 +285,15 @@ class TagCreationMixin:
 
     def _publish_created_library(self, library, *, changed_ids=(),projected_bindings_owner=None,projected_scope=None):
         seat = self._browser_seat() if self.stack.currentIndex() == 0 else None
+        diagnostic=getattr(self,'_browser_selection_diagnostic',None)
+        before=diagnostic() if seat is not None and callable(diagnostic) else None
         rows = self.model._rows if seat is not None else None
         projection=({'projected_bindings_owner':projected_bindings_owner,'projected_scope':projected_scope}
                     if projected_scope is not None else {})
         self._on_refresh_done(library,prepared_native_ids=changed_ids,**projection)
         if (seat is not None and self.stack.currentIndex() == 0
                 and self.model._rows is not rows):self._restore_browser_seat(seat)
+        if before is not None:self._log_browser_selection('tag-definition-refresh',before=before)
         self._finish_tag_refresh()
         self._finish_edit_status()
 
@@ -281,7 +306,7 @@ class TagCreationMixin:
             return False
         library = self.lib
         context = str(library.source), library.source_library_id
-        dialog = NewTagDialog(tuple(library.source_tags), tuple(library.source_tag_categories), self)
+        dialog = NewTagDialog(available_tags(self, library), tuple(library.source_tag_categories), self)
         try:
             if dialog.exec() != QDialog.Accepted:
                 return False
@@ -298,29 +323,63 @@ class TagCreationMixin:
         finally:
             dialog.deleteLater()
 
-    def _delete_tag(self):
+    def _rename_tag(self, tag, context):
+        from soundbox import rekordbox_tag_rename
+        controller = self.tag_definition_controller
+        reason = controller.rename_reason(tag.tag_id, tag.source_uuid)
+        if reason:
+            self._flash_status(reason, 10)
+            return False
+        def current():
+            library = self.lib
+            if (library is None or (str(library.source), library.source_kind,
+                    library.source_library_id) != context):
+                raise ValueError('The library changed; choose the tag again.')
+            if sum(item == tag for item in library.source_tags) != 1:
+                raise ValueError('The selected tag changed; refresh the library before renaming it.')
+            return library
+        dialog = None
+        try:
+            library = current()
+            dialog = RenameTagDialog(tag, library.source_tags, self)
+            if dialog.exec() != QDialog.Accepted:
+                return False
+            library = current()
+            name = dialog.value()
+            if name == tag.name:
+                return True
+            if any(item.tag_id != tag.tag_id and item.category_id == tag.category_id
+                   and item.name.casefold() == name.casefold() for item in library.source_tags):
+                raise ValueError('A tag with that name already exists in this category.')
+            request = rekordbox_tag_rename.request_for(context[2], tag.category_id, tag.category_uuid,
+                tag.tag_id, tag.source_uuid, tag.name, name)
+            return controller.enqueue_rename(request)
+        except (ValueError, KeyError, WriteProofError) as exc:
+            self._flash_status(str(exc), 10)
+            return False
+        finally:
+            if dialog is not None:
+                dialog.deleteLater()
+
+    def _delete_tag(self, tag, context):
         from soundbox import rekordbox_tag_definitions as definitions
         controller = self.tag_definition_controller
         reason = controller.deletion_reason()
         if reason:
             self._flash_status(reason, 10)
             return False
-        library = self.lib
-        context = str(library.source), library.source_library_id
-        dialog = DeleteTagDialog(tuple(library.source_tags), self)
-        try:
-            if dialog.exec() != QDialog.Accepted:
-                return False
-            if not self.lib or (str(self.lib.source), self.lib.source_library_id) != context:
-                self._flash_status('The library changed; choose the tag again', 10)
-                return False
-            tag = dialog.value()
-            current = [item for item in self.lib.source_tags
-                       if (item.tag_id, item.source_uuid, item.category_id, item.category_uuid, item.name)
-                       == (tag.tag_id, tag.source_uuid, tag.category_id, tag.category_uuid, tag.name)]
-            if len(current) != 1:
+        def current():
+            library = self.lib
+            if (library is None or (str(library.source), library.source_kind,
+                    library.source_library_id) != context):
+                raise ValueError('The library changed; choose the tag again.')
+            matches = [item for item in library.source_tags if item == tag]
+            if len(matches) != 1:
                 raise ValueError('The selected tag changed; refresh the library before deleting it.')
-            assigned, references, unknown = tag_deletion_effects(self.lib, tag)
+            return library
+        try:
+            library = current()
+            assigned, references, unknown = tag_deletion_effects(library, tag)
             rule_note = ('Some intelligent-playlist references could not be counted. ' if unknown else '')
             if QMessageBox.question(self, 'Delete My Tag',
                     f'Delete “{tag.name}” from {tag.category}?\n\n'
@@ -329,32 +388,41 @@ class TagCreationMixin:
                     'Songs and audio files are preserved.',
                     QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
                 return False
-            if not self.lib or (str(self.lib.source), self.lib.source_library_id) != context:
-                raise ValueError('The library changed; choose the tag again.')
-            request = definitions.deletion_request_for(context[1], tag.category_id, tag.category_uuid,
+            current()
+            request = definitions.deletion_request_for(context[2], tag.category_id, tag.category_uuid,
                                                        tag.tag_id, tag.source_uuid, tag.name)
             return controller.enqueue_deletion(request)
         except (ValueError, KeyError, WriteProofError) as exc:
             self._flash_status(str(exc), 10)
             return False
-        finally:
-            dialog.deleteLater()
 
-    def _new_smart_playlist(self, parent='root'):
+    def _new_smart_playlist(self, parent='root', *, placement=None):
         from soundbox.rekordbox_playlist_store import request_for
-        from soundbox.rekordbox_playlist_plan import smart_parent_reason
         controller = self.playlist_controller
-        reason = controller.smart_reason()
+        reason = controller.smart_creation_reason()
         if reason:
             self._flash_status(reason, 10)
             return False
+        if placement is not None:
+            if not self._native_creation_anchor_current(placement,parent):
+                self._flash_status('The playlist position changed; open its menu again',10)
+                return False
+            reason=controller.node_move_reason()
+            if reason:
+                self._flash_status(reason,10)
+                return False
         library = self._native_presentation()
         context = str(library.source), library.source_library_id
-        tags = tuple(library.source_tags)
+        tags = available_tags(self, library)
+        dependency=getattr(self.tag_definition_controller,'creation_dependency',None)
+        captured_dependencies=({(tag.tag_id,tag.source_uuid):dependency(tag.tag_id,tag.source_uuid)
+                                for tag in tags} if callable(dependency) else {})
         catalog = library.source_playlist_catalog
         dialog = NewSmartPlaylistDialog(tags, catalog['nodes'], parent_id=parent, parent=self,
-            parent_reason=lambda identity: ('This folder is not supported for smart playlist creation yet. Choose another folder.'
-                                           if smart_parent_reason(catalog['nodes'], identity) else ''))
+            parent_reason=lambda identity:controller.smart_creation_operation(identity,catalog)[1])
+        position=[placement]
+        if placement is not None:
+            dialog.folder.currentIndexChanged.connect(lambda _index:position.__setitem__(0,None))
         try:
             if dialog.exec() != QDialog.Accepted:
                 return False
@@ -366,9 +434,32 @@ class TagCreationMixin:
             if len(selected) != len(values['tags']):
                 self._flash_status('The selected tag identities are ambiguous; refresh the library', 10)
                 return False
-            request = request_for(catalog, 'create_smart', name=values['name'],
+            current=self._native_presentation()
+            fresh_tags=available_tags(self,current)
+            if any(sum(tag == fresh for fresh in fresh_tags) != 1 for tag in selected):
+                self._flash_status('The selected tag changed; reopen the smart playlist form',10)
+                return False
+            for tag in selected:
+                captured=captured_dependencies.get((tag.tag_id,tag.source_uuid))
+                fresh=dependency(tag.tag_id,tag.source_uuid) if callable(dependency) else None
+                if captured is not None and fresh is not None and captured!=fresh:
+                    self._flash_status('The selected tag creation changed; reopen the smart playlist form',10)
+                    return False
+            catalog=current.source_playlist_catalog
+            destination=self._native_parent_scope(values['folder'][0])
+            if destination is None or destination[3]!=values['folder'][1]:
+                self._flash_status('The destination folder changed; create the smart playlist again',10)
+                return False
+            if position[0] is not None and not self._native_creation_anchor_current(position[0],values['folder'][0]):
+                self._flash_status('The playlist position changed while naming; open its menu again',10)
+                return False
+            operation,reason=controller.smart_creation_operation(values['folder'][0],catalog)
+            if reason:
+                self._flash_status(reason,10);return False
+            constructor=controller.creation_catalog(catalog,values['folder'][0])
+            request = request_for(constructor, operation, name=values['name'],
                                   parent=values['folder'][0], tags=selected, match='any')
-            return controller.enqueue(request)
+            return controller.enqueue(request,**({'placement':position[0]} if position[0] is not None else {}))
         except (ValueError, KeyError, WriteProofError) as exc:
             self._flash_status(str(exc), 10)
             return False

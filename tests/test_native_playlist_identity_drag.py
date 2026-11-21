@@ -9,7 +9,7 @@ from PySide6.QtCore import QPointF,Qt
 from PySide6.QtGui import QDropEvent
 from PySide6.QtWidgets import QApplication,QTreeWidgetItem
 from desktop.trees import (UnifiedPlaylistTree,DeviceTree,PATH_ROLE,RB_NODE_ROLE,NATIVE_TREE_ROLE,
-    DEVPATH_ROLE,NATIVE_BINDING_ROLE,NATIVE_PLAYLIST_MIME)
+    DEVPATH_ROLE,NATIVE_BINDING_ROLE,NATIVE_PLAYLIST_MIME,RB_NODE_KIND_ROLE)
 from soundbox.library import Library,Playlist
 
 
@@ -29,6 +29,7 @@ class NativePlaylistIdentityDrag(unittest.TestCase):
         for identity in (1000,2000):
             item=QTreeWidgetItem(['Same']);item.setData(0,PATH_ROLE,'Same')
             item.setData(0,RB_NODE_ROLE,str(identity));item.setData(0,NATIVE_TREE_ROLE,True)
+            item.setData(0,RB_NODE_KIND_ROLE,0)
             item.setData(0,NATIVE_BINDING_ROLE,binding(identity));tree.addTopLevelItem(item);rows.append(item)
         self.app.processEvents();return tree,rows
 

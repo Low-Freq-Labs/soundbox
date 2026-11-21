@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import math
 import json
+from dataclasses import dataclass
 from uuid import UUID
 
 from PySide6.QtCore import QEvent, QMimeData, QModelIndex, QPersistentModelIndex, QPoint, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QBrush, QColor, QDrag, QFontMetrics, QIcon, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtGui import QBrush, QColor, QDrag, QFontMetrics, QIcon, QPainter, QPainterPath, QPalette, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QLineEdit, QStyledItemDelegate, QTableView,
     QTreeWidget, QTreeWidgetItem, QStyle, QStyleOptionViewItem,
@@ -352,6 +353,32 @@ def sidebar_choice_icon(kind):
     return QIcon(pixmap)
 
 
+def _sidebar_smart_badge(painter, box, panel, widget):
+    """A small gear modifies the chosen base icon without changing row geometry."""
+    center=box.bottomRight()-QPoint(4,4)
+    halo=QPainterPath();halo.addEllipse(QRectF(center.x()-4,center.y()-4,8,8))
+    painter.save()
+    painter.setRenderHint(QPainter.Antialiasing,True)
+    painter.setClipPath(halo,Qt.IntersectClip)
+    # Repaint the same row panel under the badge, including selected/alternate
+    # and item backgrounds. A fixed dark halo would fail on a white accent.
+    painter.fillRect(box,panel.palette.brush(QPalette.Base))
+    widget.style().drawPrimitive(QStyle.PE_PanelItemViewItem,panel,painter,widget)
+    painter.restore()
+    gear=QPainterPath();gear.setFillRule(Qt.OddEvenFill)
+    for tooth in range(6):
+        angle=-math.pi/2+tooth*math.pi/3
+        for offset,radius in ((-.36,2.3),(-.25,3.2),(.25,3.2),(.36,2.3)):
+            point=(center.x()+radius*math.cos(angle+offset),
+                   center.y()+radius*math.sin(angle+offset))
+            if tooth==0 and offset==-.36:gear.moveTo(*point)
+            else:gear.lineTo(*point)
+    gear.closeSubpath()
+    gear.addEllipse(QRectF(center.x()-1.1,center.y()-1.1,2.2,2.2))
+    painter.save();painter.setRenderHint(QPainter.Antialiasing,True)
+    painter.fillPath(gear,painter.pen().color());painter.restore()
+
+
 class _PlaylistDelegate(QStyledItemDelegate):
     def createEditor(self, parent, option, index):
         context = getattr(self.parent(), '_inline_rename', None)
@@ -393,6 +420,8 @@ class _PlaylistDelegate(QStyledItemDelegate):
         selected=bool(option.state & QStyle.State_Selected)
         painter.setPen(QColor(theme.ON_ACCENT if selected else theme.TEXT))
         _sidebar_icon(painter,icon,kind,bool(option.state & QStyle.State_Open))
+        if index.data(PATH_ROLE) and index.data(RB_NODE_KIND_ROLE)==4:
+            _sidebar_smart_badge(painter,icon,panel,option.widget)
         painter.drawText(text,Qt.AlignVCenter|Qt.AlignLeft,
                          option.fontMetrics.elidedText(label,Qt.ElideRight,max(0,int(text.width()))))
         painter.restore()
@@ -572,6 +601,7 @@ class SoundBoxTree(PlaylistFolderTree):
         self._hover = QPersistentModelIndex()
         self._insert_row: int | None = None  # reorder line position (top-level row)
         self._insert_y = None
+        self._hover_outline = False
 
     @staticmethod
     def _drag_line(it) -> str:
@@ -607,9 +637,10 @@ class SoundBoxTree(PlaylistFolderTree):
         label = items[0].text(0) + (f"   +{len(items) - 1}" if len(items) > 1 else "")
         _start_chip_drag(self, self.mimeData(items), label, actions)
 
-    def _set_hover(self, item):
+    def _set_hover(self, item, *, outline=False):
         index = QPersistentModelIndex(self.indexFromItem(item)) if item is not None else QPersistentModelIndex()
-        if index == self._hover:
+        outline=bool(item is not None and outline)
+        if index == self._hover and outline==self._hover_outline:
             return
         # Source readback can rebuild the sidebar during a Finder drag. Qt
         # invalidates this index when its row is deleted; a Python item wrapper
@@ -617,8 +648,10 @@ class SoundBoxTree(PlaylistFolderTree):
         if self._hover.isValid():
             self.itemFromIndex(QModelIndex(self._hover)).setBackground(0, QBrush())
         self._hover = index
-        if item is not None:
+        self._hover_outline=outline
+        if item is not None and not outline:
             item.setBackground(0, QColor(theme.PURPLE))  # glow the playlist target
+        self.viewport().update()
 
     def _first_custom_row(self) -> int:
         """Row of the first custom playlist — the pinned Collection/Artists rows
@@ -746,6 +779,13 @@ class SoundBoxTree(PlaylistFolderTree):
 
     def paintEvent(self, e):
         super().paintEvent(e)
+        if self._hover_outline and self._hover.isValid():
+            rect=self.visualItemRect(self.itemFromIndex(QModelIndex(self._hover)))
+            p=QPainter(self.viewport());p.setPen(QPen(QColor(theme.PURPLE_LIGHT),2))
+            for edge in (rect.top(),rect.bottom()):
+                y=max(1,min(edge,self.viewport().height()-1))
+                p.drawLine(0,y,self.viewport().width(),y)
+            p.end();return
         if self._insert_y is not None:
             p = QPainter(self.viewport()); p.setPen(QPen(QColor(theme.PURPLE_LIGHT), 2))
             y = max(1, min(self._insert_y, self.viewport().height() - 1))
@@ -768,11 +808,22 @@ NATIVE_TREE_ROLE = Qt.UserRole + 80
 PINNED_TREE_ROLE = Qt.UserRole + 81
 
 
+@dataclass(frozen=True)
+class _NativePlaylistMove:
+    parent: str
+    y: int | None = None
+    anchor_id: str = ''
+    after: bool = False
+    inside: bool = False
+
+
 class UnifiedPlaylistTree(SoundBoxTree):
     """One navigation surface for native and not-yet-migrated local playlists."""
     native_tracks_dropped = Signal(str,list)
     native_files_dropped = Signal(str,list)
     native_reordered = Signal(str,str,bool)  # dragged ID, anchor ID, after
+    native_moved = Signal(str,str)  # node ID, destination parent ID; append
+    native_placed = Signal(str,str,str,bool)  # node, parent, anchor, after
     _native_mime = 'application/x-soundbox-native-playlist'
 
     def mimeData(self,items):
@@ -820,22 +871,56 @@ class UnifiedPlaylistTree(SoundBoxTree):
         source=next((item for item in self.findItems('',Qt.MatchContains|Qt.MatchRecursive)
                      if item.data(0,RB_NODE_ROLE)==identity),None)
         if source is None or source.data(0,PINNED_TREE_ROLE):return None
-        parent=source.parent();root=parent or self.invisibleRootItem()
+        if source.data(0,RB_NODE_KIND_ROLE) not in (0,1,4):return None
+        parent=source.parent()
+
+        def pinned_ancestor(item):
+            while item is not None:
+                if item.data(0,PINNED_TREE_ROLE):return True
+                item=item.parent()
+            return False
+
+        def below_source(item):
+            while item is not None:
+                if item is source:return True
+                item=item.parent()
+            return False
+
+        root=parent or self.invisibleRootItem()
         candidates=[root.child(i) for i in range(root.childCount())
                     if root.child(i).data(0,NATIVE_TREE_ROLE) and not root.child(i).data(0,PINNED_TREE_ROLE)
                     and root.child(i) is not source]
-        if not candidates:return None
         item=self.itemAt(pos)
+        # Folder rows have three explicit targets: upper quarter before,
+        # middle half inside, lower quarter after.
+        if (item is not None and item.data(0,NATIVE_TREE_ROLE)
+                and item.data(0,RB_NODE_KIND_ROLE)==1 and not pinned_ancestor(item)):
+            rect=self.visualItemRect(item)
+            band=max(2,rect.height()//4)
+            if rect.top()+band <= pos.y() <= rect.bottom()-band:
+                if below_source(item) or pinned_ancestor(source):return None
+                folder=item.data(0,RB_NODE_ROLE)
+                if item is not parent or not candidates:return _NativePlaylistMove(folder,inside=True)
+                return _NativePlaylistMove(folder,anchor_id=candidates[-1].data(0,RB_NODE_ROLE),after=True,inside=True)
         if item is None:
-            if parent is not None:return None
+            if pinned_ancestor(source):return None
+            if parent is not None:
+                roots=[self.topLevelItem(i) for i in range(self.topLevelItemCount())
+                       if self.topLevelItem(i).data(0,NATIVE_TREE_ROLE)
+                       and not self.topLevelItem(i).data(0,PINNED_TREE_ROLE)]
+                last=roots[-1] if roots else None
+                while last is not None and last.isExpanded() and last.childCount():
+                    last=last.child(last.childCount()-1)
+                y=self.visualItemRect(last).bottom() if last is not None else self.viewport().height()-1
+                return _NativePlaylistMove('root',y)
+            if not candidates:return None
             item=candidates[-1];after=True
-        elif parent is None and item.data(0,PINNED_TREE_ROLE):
+        elif item.data(0,PINNED_TREE_ROLE):
+            if parent is not None or not candidates:return None
             item=candidates[0];after=False
         else:
-            # Hovering an expanded root folder's contents still addresses
-            # that root sibling; no drag implicitly reparents native items.
-            while item is not None and item.parent() is not parent:item=item.parent()
-            if item not in candidates:return None
+            if (not item.data(0,NATIVE_TREE_ROLE) or below_source(item)
+                    or pinned_ancestor(item)!=pinned_ancestor(source)):return None
             after=pos.y()>self.visualItemRect(item).center().y()
         rect=self.visualItemRect(item)
         if after:
@@ -843,6 +928,10 @@ class UnifiedPlaylistTree(SoundBoxTree):
             while last.isExpanded() and last.childCount():last=last.child(last.childCount()-1)
             rect=self.visualItemRect(last)
         y=rect.bottom() if after else rect.top()
+        if item.parent() is not parent:
+            if pinned_ancestor(source) or pinned_ancestor(item):return None
+            destination=item.parent().data(0,RB_NODE_ROLE) if item.parent() is not None else 'root'
+            return _NativePlaylistMove(destination,y,item.data(0,RB_NODE_ROLE),after)
         return item.data(0,RB_NODE_ROLE),after,y
 
     def _native_drag(self,event):
@@ -870,6 +959,13 @@ class UnifiedPlaylistTree(SoundBoxTree):
             _identity,destination=reorder
             self._set_hover(None);self._set_insert(None)
             if destination is None:event.ignore();return
+            if isinstance(destination,_NativePlaylistMove):
+                if destination.inside:
+                    folder=next((item for item in self.findItems('',Qt.MatchContains|Qt.MatchRecursive)
+                                 if item.data(0,RB_NODE_ROLE)==destination.parent),None)
+                    self._set_hover(folder,outline=True)
+                self._insert_y=destination.y
+                self.viewport().update();event.acceptProposedAction();return
             self._insert_y=destination[2];self.viewport().update();event.acceptProposedAction();return
         item=self.itemAt(event.position().toPoint())
         if item and item.data(0,NATIVE_TREE_ROLE):
@@ -881,6 +977,11 @@ class UnifiedPlaylistTree(SoundBoxTree):
         if reorder is not None:
             identity,destination=reorder;self._set_hover(None);self._set_insert(None)
             if destination is None:event.ignore();return
+            if isinstance(destination,_NativePlaylistMove):
+                if destination.anchor_id:
+                    self.native_placed.emit(identity,destination.parent,destination.anchor_id,destination.after)
+                else:self.native_moved.emit(identity,destination.parent)
+                event.acceptProposedAction();return
             anchor,after,_y=destination
             self.native_reordered.emit(identity,anchor,after);event.acceptProposedAction();return
         item=self.itemAt(event.position().toPoint())

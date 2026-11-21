@@ -12,6 +12,23 @@ def key(kind, code, modifiers=Qt.NoModifier, repeat=False):
 
 
 class Keymaps(unittest.TestCase):
+    def test_select_all_is_a_library_default_separate_from_plain_a(self):
+        self.assertEqual(BY_ID['browser.select_all'].group, 'Library')
+        mapping = Keymap({'bindings': {'grid.downbeat': ['A']}})
+        self.assertEqual(mapping.action('A'), 'grid.downbeat')
+        self.assertEqual(mapping.action('Ctrl+A'), 'browser.select_all')
+        mapping.remove('browser.select_all', 'Ctrl+A')
+        self.assertEqual(Keymap(mapping.dump()).bindings('browser.select_all'), [])
+        self.assertEqual(mapping.action('A'), 'grid.downbeat')
+
+    def test_select_all_default_preserves_existing_command_a_override(self):
+        mapping = Keymap({'bindings': {'grid.downbeat': ['Ctrl+A']}})
+        self.assertEqual(mapping.action('Ctrl+A'), 'grid.downbeat')
+        self.assertEqual(mapping.bindings('browser.select_all'), [])
+        mapping.assign('browser.select_all', 'Ctrl+A', move=True)
+        self.assertEqual(mapping.action('Ctrl+A'), 'browser.select_all')
+        self.assertEqual(mapping.bindings('grid.downbeat'), [])
+
     def test_set_cue_follows_page_toggle_and_does_not_displace_existing_bindings(self):
         ids=[c.id for c in COMMANDS];self.assertEqual(ids[ids.index('cues.toggle_page')+1],'cues.set')
         mapping=Keymap();self.assertEqual(mapping.bindings('cues.set'),[])

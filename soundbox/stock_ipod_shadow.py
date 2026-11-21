@@ -18,10 +18,11 @@ import stat
 import sys
 import tempfile
 from collections.abc import Mapping, Sequence
+from collections import Counter
 from copy import deepcopy
 from dataclasses import dataclass, field as dataclass_field, replace
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 from threading import Lock, RLock
 
@@ -192,6 +193,32 @@ class StockIpodSyncStatus:
     committed_at: str = ""
     database_sha256: str = ""
     artwork_database_sha256: str | None = None
+    play_counts_sha256: str | None = None
+
+
+def retained_source_rows(shadow: StockIpodShadow, before: Sequence[tuple[int, str, int]],
+                         after: Sequence[tuple[int, str, int]], rewritten_paths: Sequence[str]) -> dict[str, dict]:
+    """Carry accepted old observations verbatim only across unchanged payload identities.
+
+    The caller has proved the exact native-before shadow. These rows remain
+    acceleration, with fresh source epoch/profile checks required at next use.
+    """
+    old_counts = Counter(row[0] for row in before)
+    new_counts = Counter(row[0] for row in after)
+    source_counts = Counter(int(row.get('dbid') or 0) for row in shadow.sources.values())
+    old = {dbid: (path, size) for dbid, path, size in before}
+    new = {dbid: (path, size) for dbid, path, size in after}
+    rewritten = {str(PurePosixPath(path)).casefold() for path in rewritten_paths}
+    kept = {}
+    for source, row in shadow.sources.items():
+        dbid = int(row.get('dbid') or 0)
+        path = str(row.get('device_path') or '')
+        payload = path, int(row.get('size') or 0)
+        if (dbid > 0 and old_counts[dbid] == new_counts[dbid] == source_counts[dbid] == 1
+                and path and old.get(dbid) == new.get(dbid) == payload
+                and str(PurePosixPath(path)).casefold() not in rewritten):
+            kept[source] = dict(row)
+    return kept
 
 
 def rebase_deleted_shadow(

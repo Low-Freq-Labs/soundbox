@@ -1,5 +1,25 @@
 # SoundBox gotchas & niche facts
 
+## November20 current tag and playlist refinements
+
+- Preserve literal printable tag names: Qt mnemonic ampersands must render as
+  text, so `R&B` stays `R&B` in both the panel and dialogs. Immediate future-tag
+  definitions and assignment projections are owned RAM intentions, not durable
+  saves. Dependent writes wait for canonical admission, native creation and ACK.
+- Smart/regular playlists and folders use independently accepted Move profiles
+  for cross-parent placement. The folder center appends inside at the bottom;
+  top/bottom edge zones insert above/below. The same zones apply to expanded and
+  collapsed folders. Inside feedback shows both white edge lines. Context
+  creation captures the clicked sibling for insertion immediately below it.
+- Deleted playlist names become available once their native claim is inactive;
+  retained XML identity history still prevents reusing native IDs. Do not confuse
+  a protected historical ID with a permanently reserved display name. Current
+  normalized/gapped creation profiles and exact-library activation are in HANDOFF.
+- Tag Rename/Order and guarded new-local Delete have separate accepted native
+  profiles. Older sections below preserve their narrower original scopes; a
+  source UI preference or creation acceptance never grants another write domain.
+
+
 ## Independent iPod policy and terminal cancellation — November18
 
 - A failed CDJ compatibility conversion is not an unfinished iPod export.
@@ -403,10 +423,11 @@ test, after unchanged source-identity and native/manual provenance guards.
   distinct logical/native IDs and raw native alias paths;
   encode its catalog one row at a time, as with tracks. Intelligent memberships
   retain their computed keys when their containing folder is renamed.
-- Acceptance captures keep full encrypted pairs. Normal retention keeps
-  the latest full pair and permanent row/XML/operation receipts. Older completed
-  DB payload retirement must verify receipts/hashes, journal its own progress and
-  resume safely; it must never touch unresolved or native-acceptance evidence.
+- Current required native references and pending-acceptance/recovery keep their
+  full encrypted pairs. Normal retention keeps the latest full pair and permanent
+  compact row/XML/operation receipts. Completed duplicate diagnostic payloads
+  follow current bounded-retention rules; retirement verifies receipts/hashes,
+  journals progress and resumes safely without touching required unresolved proof.
 
 
 ## Float-WAVE import conversion — November1
@@ -462,7 +483,10 @@ test, after unchanged source-identity and native/manual provenance guards.
 - **NEVER pipe `./check.sh` through `tail`/`grep` in a `&&` chain** — the
   pipeline exit code is `tail`'s `0`, so a FAILING gate gets masked and the
   build/commit proceeds. (Real incident: a syntax-broken module shipped + got
-  committed.) Run `./check.sh` bare (or `> file 2>&1; echo $?`), then build.
+  committed.) Preserve the actual command exit status. Use focused checks for
+  small local fixes; run the complete bare `./check.sh --render` before commit/push.
+  See [test workflow](test-release-gate.md); do not require a global suite before
+  every small-fix build/install.
 - Project uses local `main`, tracking `origin/main` on the Low Freq Labs GitHub
   repository. Preserve any existing dirty tree and inspect `git status` at
   handoff. Do not commit or push unless Sonny explicitly asks; saying
@@ -589,10 +613,22 @@ test, after unchanged source-identity and native/manual provenance guards.
   changed to Tool flags can expose internal helper widgets over the header.
   Explicit checkbox rectangles avoid macOS layout-item margin overlap. Keep two
   columns at the deck button width, filling down the left and then the right in
-  source order; elide long labels with full-name tooltips. Create New Tag spans
-  the header and Delete Tag is a separate footer action. Availability changes
+  source-defined order (or the legacy local preference where no accepted order
+  writer applies); elide long labels with full-name tooltips. Create New Tag spans
+  the header. Right-click an exact tag for Rename Tag or Delete Tag; there is no footer or
+  second tag picker. Recheck the captured source and tag after confirmation,
+  including when assignment is unavailable. Availability changes
   update state/tooltips without relayout. Verify both catalog/layout changes
   and outside-click delivery on Cocoa, not only offscreen.
+  Drag labels independently of checkbox availability and use the application
+  drag threshold before moving. Bind each gesture to source, catalog identities
+  and layout revision; use the independently accepted native order writer for a verified source,
+  and restore a refused order. Legacy local-only presentation preference never
+  grants native tag-definition authority.
+  Derive the tool window's opening size from its prepared content every time;
+  do not retain fixed native min/max bounds from the empty startup panel.
+  Verify actual Cocoa view/window bounds too: a QWidget grab can paint a larger
+  surface than the native window exposes.
 - **SVG CSS custom properties need a Qt adapter.** Keep the supplied SVG intact
   in assets; Wordmark resolves SOUND/BOX fills in memory and crops its viewBox
   to the outline. Preserve the former 270×55 header footprint. Include the SVG
@@ -710,7 +746,12 @@ test, after unchanged source-identity and native/manual provenance guards.
   the row edge while headers use the full frame width. Qt’s hidden native bar
   retains scrolling/range ownership; synchronize the visible control both ways,
   including pageStep and viewport geometry. Do not reintroduce a reserved gutter
-  or automatic last-column stretching. Artists and USB use the same overlay. There is no utility rail. The circle-i opens Summary/Info from a
+  or automatic last-column stretching. Artists, USB, dialog lists and scroll
+  areas use the same overlay and gesture feedback. Install once per host; exclude
+  custom-painted combo popups and clear feedback on Hide when ScrollEnd is lost.
+  When installing during Show, explicitly derive overlay visibility from the
+  visible host and native range; a hidden bar can still paint in a QWidget grab.
+  There is no utility rail. The circle-i opens Summary/Info from a
   bordered prep control before My Tags; Info and Settings share the 44×28 size,
   three-point corners and BG fill of the grid controls. Draw both icons centered
   on QRectF geometry; integer QRect centers and font bearings shift the ink.
@@ -1770,7 +1811,45 @@ their accepted selected export/recovery contract is below and in the CDJ guide.
   XML node change. Keep SQL/XML clocks independent and persist renewed sibling
   clocks before causal FIFO admission. Rechain shared-parent XML clocks through
   later folder edits after renewal. Empty/mixed folders remain outside this
-  profile. Current source acceptance and install status live in [HANDOFF](HANDOFF.md).
+  original profile; later separately accepted normalized/gapped creation profiles
+  cover current root and mixed/empty-folder cases. Current source acceptance and
+  install status live in [HANDOFF](HANDOFF.md).
+- **Creation feedback precedes durability; source publication never does.**
+  Smart-create and tag-definition controllers stage bounded exact intentions
+  outside settings and show them immediately. `SourceIntentAdmission` publishes
+  only the queue leaf through StateCommitter, with the source lane reserved;
+  the native pump waits for its durable callback. Retain failed RAM admissions
+  for explicit retry or default-No discard, including a save that reached disk
+  after its source/view owner changed. Retry the exact replacement idempotently;
+  a failed discard retries the discard. Source changes require returning to the
+  original library; restored generations cannot accept old RAM intentions.
+  Quit/source selection/restore include these admissions, and shutdown flushes
+  them before stopping controllers. Ordinary playlist batches and migrations
+  retain their paired full-state admission because their local mappings must
+  persist with the native queue.
+- **A source success still needs a sparse durable queue acknowledgement.**
+  Definition creation/deletion/order and direct smart creation use
+  `SourceQueueAcknowledgement`; do not return to full GUI `_save_state` on their
+  completion path. Reserve the logical source lane while awaiting canonical
+  admission, then retain StateCommitter's reservation through publication.
+  Verify exact permitted queue alternatives under the repository lock so lost
+  GUI acknowledgements cannot erase a hidden durable job. Rebase only owned
+  staged successors across the verified causal edge. Release logical holds in
+  `finally` if a view continuation throws. A restored repository/controller
+  retires only its old inactive readback/token; same-generation source changes
+  require the original library. Quit may drop a failed ACK continuation only
+  after proving its exact durable BEFORE or desired queue on a fresh checkpoint.
+- **Native My Tag order has independent acceptance.**
+  `rekordbox_tag_order` composes bounded adjacent swaps within one category;
+  it cannot rename/move categories, alter assignments/rules or adopt creation/
+  deletion permission. The historical profile preserves status257/synced1 and
+  its remote USN; the separately observed v2 also admits status0/NULL-remote-USN
+  leaves with local-synced0 or1. Each adjacent swap changes only the two Seq,
+  updated_at and local USN values, with independent row clocks and counter+2.
+  Deleted history, categories and all other row bytes remain exact. Three saved
+  native before/after pairs match every table on TEMP reconstruction. No profile
+  constant provisions its default-off exact-library authority; source pilot,
+  native reopen acceptance and conditional activation remain separate proofs.
 - **Definition and smart deletion have different counter windows.** The native
   local leaf deletion shifts later tags with one counter per row and then adds
   one for deletion; removing its local associations adds no counter. Local
@@ -2404,6 +2483,16 @@ none of those optional modules.
   across every captured generation; pair it with the macOS volume UUID when
   remembering a confirmed model. `stock_ipod_info` owns read-only UI snapshots
   and may merge `Play Counts` only in memory.
+- **Playback is an observation, not pending Sync.** Compare the captured Play
+  Counts digest and refresh through the owned view lane. Always merge into a
+  fresh native parse, never an already merged snapshot. Preserve interaction
+  state on history-only updates. External unrelated catalog growth is advisory
+  and scoped to known live bindings; it cannot renew an exact writer witness.
+  Missing/truncated prior artwork storage and ambiguous links stay pending
+  comparison rather than inventing a clean or Sync result.
+- **Storage rows must share precision.** Independent one-decimal TB formatting
+  can show Capacity and Free equal despite tens of GB used. Use common GB for
+  the three large-device totals, balanced rounding and exact byte tooltips.
 - **An empty SysInfo is not a missing Classic capability.** Prefer bounded
   existing metadata and exact current macOS records; unrelated historical USB
   IDs never supply identity. The isolated native identity helper can issue
@@ -2705,6 +2794,9 @@ through publication and recovery. Full protocol: [prep plan](rekordbox-prep.md).
   Test the actual ten-to28 transition, not only same-count round trips.
 - FooterBar has a fixed28-point height. Cancel is20, progress18 and the count20
   with zero label margin; showing them cannot resize the footer or viewport.
+  Place progress and Cancel before both count and phase text so Planning,
+  Copying, Verifying and Finalizing retain the same control positions. Counts
+  may disappear or grow; long phase text elides in the remaining space.
 - Display-only native USB reads may copy a stable exportLibrary.db/WAL pair into
   a local workspace and parse it there. Never copy SHM locks or open live USB SQL.
   Include WAL/journal in freshness stamps. This is presentation, not publication
@@ -2871,7 +2963,12 @@ through publication and recovery. Full protocol: [prep plan](rekordbox-prep.md).
   only against unchanged exact media/native inventory and visibility.
   Retaining model rows after a full row rebuild still blocks scrolling. A
   compatible ACK must rebind the prepared Artists owner and compute only dirty
-  Collection rows. Capture detached visibility/tag/organization boundaries;
+  Collection rows. Artists eligibility uses its exact visible collection/order,
+  source and info overlays, independently of native playlist organization.
+  Keep detached ordered tag-label inputs and refresh affected complete Artists
+  rows, including hidden MyTags cells; an already-mutated Track is not a painted
+  baseline. Native smart membership/count/order still uses its full tree context.
+  Capture detached visibility/tag/organization boundaries;
   reject sparse reuse after an intervening invalidation, different model owner
   or global registry change. Preserve full native playlist occurrence rendering.
   Scalar input memos also require the unchanged presentation generation, so a

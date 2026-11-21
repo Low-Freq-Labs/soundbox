@@ -1,6 +1,6 @@
 # SoundBox roadmap
 
-Reviewed November18,2026. [HANDOFF](HANDOFF.md) records the actual source, installed
+Reviewed November20,2026. [HANDOFF](HANDOFF.md) records the actual source, installed
 app, release checks and pending acceptance. This page tracks current work;
 [dated release evidence](test-release-gate.md) and the
 [earlier roadmap](archive/roadmap-through-2026-11-05.md) retain historical results.
@@ -40,11 +40,28 @@ Physical first export, reconnect and firmware acceptance remain separate from
 disposable fixtures and package verification.
 
 Sonny accepted the installed iTunes deletion/export/navigation and one-added-song
-reconnect/Sync workflow on November18. His next-session requests are to anchor the
-shared iPod/USB progress controls as phase messages change and reconcile the
-lower-left explicit playlist Sync wording with the clean header's Export action.
-He also plans a larger tag/metadata Sync test. These are deferred for the requested
-wrap; [HANDOFF](HANDOFF.md) preserves the exact observations and implementation leads.
+reconnect/Sync workflow on November18. The November19 follow-up anchors shared
+progress/Cancel, mirrors Export/Sync across both primary buttons, fixes My Tags
+bounds and moves deletion into the exact tag's context menu. It also separates
+nonphysical source saves from iPod IO, uses unique leaf playlist names and retains
+unchanged source proofs across partial updates. Current validation/install status
+is in [HANDOFF](HANDOFF.md); larger metadata coexistence, external-exporter and
+Rockbox/dual physical acceptance remain separate user workflow checks.
+
+The November20 follow-up makes newly created tags immediately usable through
+exact dependent intentions, preserves literal ampersands in My Tags, adds a gear
+to each smart playlist's chosen icon and keeps the sidebar divider thin/plain.
+Smart/native playlist rename, reorder and cross-folder moves retain independently
+accepted exact-library protocols; folder-centre drops append inside either a
+collapsed or expanded folder. Guarded new-local tag/smart deletion remains
+separate from older/synced history. These changes never rewrite source names or
+rules through presentation alone; current evidence is in HANDOFF.
+
+Developer validation now offers named areas and cumulative quick/integration/
+recovery depths, including separate core USB/CDJ and iPod areas. Exact selectors
+remain available. Small local fixes use affected coverage and guarded package/
+install checks; the complete zero-skip gate remains required before publication.
+See [the test workflow](test-release-gate.md).
 
 ## Shared rekordbox persistence
 

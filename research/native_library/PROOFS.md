@@ -310,7 +310,9 @@ production authority remain separate. Sonny explicitly approved the exact CBR
 pilot and accepted native load/opening/middle/tail/normal quit. Complete readback
 preserves target/packets/XML/audio/non-registry data, with five startup registry
 deltas explicit. The pilot is terminal and must never be replayed. Its original
-code and full native recovery remain protected. The core scanner/planner promotion
+code, compact acceptance receipts and currently required native-reference/recovery
+payloads remain protected. Completed duplicate diagnostics follow the current
+bounded-retention policy. The core scanner/planner promotion
 retains exact old proposal outputs; research wrappers reexport those APIs.
 Production uses its own accepted CBR authority/store/FIFO and contains no research
 modules. The original build155 delivery passed2200tests/package/native/curation

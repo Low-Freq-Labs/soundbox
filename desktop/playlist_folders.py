@@ -138,7 +138,7 @@ class PlaylistFoldersMixin:
             folders.name(value); custom = self.custom
             if kind == 'folder':node['name'] = value
             else:
-                if self._custom_name_taken(value):raise ValueError('That playlist name is already used')
+                if self._custom_name_taken(value, exclude_custom=key):raise ValueError('That playlist name is already used')
                 node['playlist'] = value
                 custom = {value if name == key else name:ids for name, ids in self.custom.items()}
             folders.validate(nodes)

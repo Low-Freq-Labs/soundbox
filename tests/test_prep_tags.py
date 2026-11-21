@@ -91,6 +91,39 @@ class TagInterface(unittest.TestCase):
         self.assertEqual(emitted[-1],('tag',False))
         button.deleteLater()
 
+    def test_literal_ampersands_survive_checkbox_rendering_elision_and_assignment(self):
+        button = MyTagsButton()
+        self.addCleanup(button.deleteLater)
+        button.setFixedWidth(600)
+        names = ['R&B', 'Drum & Bass', 'Rock && Roll', '&First', 'Last&', '音 & Bass']
+        tags = [LibraryTag(str(i), name) for i, name in enumerate(names)]
+        emitted = []
+        button.assignment_requested.connect(lambda *args: emitted.append(args))
+        button.set_state(tags, [set()])
+        for tag in tags:
+            with self.subTest(name=tag.name):
+                box = button.checkboxes[tag.tag_id]
+                # Qt's actual mnemonic text metrics expose the disappearing
+                # glyph even on Cocoa, where shortcut() remains empty.
+                metrics = box.fontMetrics()
+                self.assertEqual(metrics.size(Qt.TextShowMnemonic, box.text()),
+                                 metrics.size(0, tag.name))
+                self.assertEqual(box.accessibleName(), tag.name)
+                self.assertEqual(box.toolTip(), '')
+                self.assertIs(button._definitions[tag.tag_id], tag)
+                box.click()
+                self.assertEqual(emitted[-1], (tag.tag_id, True))
+        self.assertEqual([tag.name for tag in tags], names)
+        long_name = 'R&B / Drum & Bass / Rock && Roll / More music'
+        button.setFixedWidth(240)
+        button.set_state([LibraryTag('long', long_name)], [set()])
+        box = button.checkboxes['long']; metrics = box.fontMetrics()
+        visible = metrics.elidedText(long_name, Qt.ElideRight, box.width() - 24)
+        self.assertNotEqual(visible, long_name)
+        self.assertEqual(metrics.size(Qt.TextShowMnemonic, box.text()), metrics.size(0, visible))
+        self.assertEqual(box.toolTip(), long_name)
+        self.assertEqual(box.accessibleName(), long_name)
+
     def test_popup_reads_down_left_column_then_down_right_in_source_order(self):
         button = MyTagsButton()
         button.setFixedWidth(300)
@@ -180,12 +213,11 @@ class TagInterface(unittest.TestCase):
                 position = button.create_tag.mapTo(button.popup, QPoint(x, 8))
                 self.assertIs(button.popup.childAt(position), button.create_tag)
             self.assertFalse(button.summary.isVisible())
-            self.assertTrue(button.delete_tag.isEnabled())
+            self.assertFalse(hasattr(button, 'delete_tag'))
+            self.assertTrue(button.create_tag.isEnabled())
             self.assertTrue(all(not box.isEnabled() for box in boxes))
-            requested = []
-            button.deletion_requested.connect(lambda: requested.append(button.popup.isVisible()))
-            button.delete_tag.click()
-            self.assertEqual(requested, [False])
+            last_bottom = max(box.geometry().bottom() for box in boxes)
+            self.assertLess(button.popup.height() - last_bottom, 20)
         finally:
             button.popup.close()
 

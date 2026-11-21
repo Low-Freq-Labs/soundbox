@@ -17,8 +17,8 @@ and automatic Follow Global/Custom propagation remain deferred. The earlier
 build160/2564-test release had dirty-source base c2415d5…, separate from Git
 release `4a3d29a`; these are dated proofs. The later build163/2595-test USB delivery
 and its physical fixture evidence are historical, as is build165/2779-test.
-Current build167/2795-test delivery and exact runtime/source identities are in
-HANDOFF. Selected
+The build167/2795-test delivery is another historical checkpoint. Actual current
+runtime/source identities are in HANDOFF. Selected
 exports now preserve unrelated per-format differences and reclaim only removed
 members unused by other USB playlists; the historical whole-fixture equivalence
 checks below do not impose a global equality requirement on ordinary export.

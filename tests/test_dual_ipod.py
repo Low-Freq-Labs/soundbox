@@ -1608,7 +1608,7 @@ class DualIpodSyncTests(unittest.TestCase):
         self.assertFalse(unchanged.stock.requires_commit)
         self.assertFalse(any(item.changed for item in unchanged.playlists))
 
-    def test_device_playlist_names_use_leaf_and_disambiguate_collisions(self):
+    def test_device_playlist_names_use_leaf_and_refuse_duplicate_names(self):
         unique = [
             Playlist("Dubstep", ["GENRES"], [], pid="dubstep"),
             Playlist("House", ["GENRES"], [], pid="house"),
@@ -1622,10 +1622,8 @@ class DualIpodSyncTests(unittest.TestCase):
             Playlist("Warmup", ["HOUSE"], [], pid="house-warmup"),
             Playlist("Warmup", ["DUBSTEP"], [], pid="dubstep-warmup"),
         ]
-        self.assertEqual(
-            dual_ipod._device_playlist_names(duplicated),
-            ["HOUSE / Warmup", "DUBSTEP / Warmup"],
-        )
+        with self.assertRaisesRegex(DualIpodError, 'must be unique'):
+            dual_ipod._device_playlist_names(duplicated)
 
     def test_reordered_manifest_sequence_drives_stock_and_rockbox_order(self):
         commit_dual_ipod_sync(self._plan())

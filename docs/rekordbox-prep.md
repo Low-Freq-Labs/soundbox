@@ -72,8 +72,10 @@ default-false capability and explicit profile, activated separately for this
 accepted library after that check. Its creation-only
 plan composes the observed constructor/placement window with one combined
 name/rule definition save (+2); separate name-only and rule-only reference windows
-must not be added together. Root creation and nonempty folders containing only
-local smart playlists have references; empty/mixed folders remain unavailable.
+must not be added together. That original profile covers root creation and
+nonempty folders containing only local smart playlists; it does not admit
+empty/mixed folders. The independently accepted later constructor profiles below
+cover those destinations without widening the original permission.
 Fresh source guards preserve exact tag/category and folder identities. Queued
 sibling clocks renew only after a proven causal result or explicit retry, and the
 whole affected XML clock chain persists before admission. Existing smart mutations
@@ -81,6 +83,37 @@ remain outside ordinary playlist authority and the new create-only capability.
 UI intents persist before admission;
 full authoritative source readback precedes new-item publication. See [HANDOFF](HANDOFF.md)
 for exact authority, source and installed-app provenance.
+
+### November19–20 constructor, move and admission follow-up
+
+Separate accepted profiles cover smart append in a local folder and normalized
+smart/ordinary/folder creation after native moves leave sequence gaps. Each keeps
+its own default-off exact-library marker, native phase clocks, counter arithmetic
+and DB/XML transition proof. A retry can recapture a new normalized intention only
+through explicit retry or a proven unstarted causal edge; applying an old request
+cannot silently upgrade its authority. Empty folders and mixed regular/smart/folder
+siblings use only the profile independently observed and enabled for this library.
+
+Smart rename and mixed sibling ordering have independent capabilities. Generic
+node placement separately covers regular playlists, smart playlists and folders,
+including anchored moves and nested folders. Folder center drops append inside,
+whether collapsed or expanded; upper/lower edges place before/after. Self or
+descendant cycles are refused. Creation from a row's context menu retains an exact
+after-row placement intention, applied only after verified construction. Deleted
+native names are reusable; historical migration copies do not reserve old names.
+Active and pending playlist names remain globally unique after normalization.
+
+GUI tag/playlist intentions admit through bounded sparse canonical saves and
+exact queue comparisons. Pending checkboxes, future tags and playlist rows can be
+shown immediately; they are distinct from verified Library/export state. New-tag
+dependencies preserve exact operation, source, category and tag identities, and
+the creation must be durable before a dependent intention is saved. Native
+creation, verified readback and durable acknowledgement/publication precede its
+dependent source write. Failed admission retains RAM intentions for explicit
+retry/discard; unknown storage/recovery cannot become a saved-success claim.
+The shared writer/lock/journal still serializes native changes. iPod operations
+retain their frozen capture while desktop tag and prep work proceeds independently.
+Exact accepted profiles and installed identity remain in [HANDOFF](HANDOFF.md).
 
 The pilot created only the approved unassigned Genre tag and two GENRES smart
 playlists: one Dubstep condition and Dubstep OR the new tag. Sonny confirmed the
@@ -101,6 +134,36 @@ cache/default-order check puts STINK MODE first in the reported example. One
 build169 rollback was pending user acceptance at that checkpoint. These are dated
 delivery/retention facts; [HANDOFF](HANDOFF.md) governs current installation and
 protected fallback retention.
+
+### November19 existing My Tag rename
+
+The exact tag context menu has a Rename action, separate from creation, deletion
+and ordering. It captures the old label, destination, source/category/tag IDs and
+UUIDs. `rekordbox_tag_rename` uses a separate default-off exact-library authority
+and the existing shared source lease, journal, encrypted baseline and durable
+intent/ACK owners. Creation's new-row naming permission does not enable existing
+tag rename. Six native rename/restore windows separately prove historical
+status257/synced1/remote-USN, local status0/synced1/NULL-USN and local
+status0/synced0/NULL-USN leaves. Each changes only Name, updated_at and local USN,
+with counter+1. All other rows, assignments, rules, schema, metadata and XML remain
+exact. Encrypted TEMP compilation matches every complete native result. This
+registers the measured protocol, not its default-off per-library authority;
+tests provision no production permission.
+
+Pending target assignments must settle before renaming that tag. A pending rename
+blocks new assignments only for its own source/tag identity; other checkboxes
+remain available with their original captured labels and operation IDs. Duplicate
+active or queued destination names in the same category are refused; another
+category can retain the same label. Verified readback must retain IDs, category,
+other definitions, known song assignments, smart rules and computed memberships.
+Only then may the new label become authoritative. Storage failure retains the
+exact intention/readback for retry; a restore cannot publish an older result.
+
+The November19 exact-library source pilot, native reopen verification and
+conditional activation are complete for Sonny's current library. Original tag
+labels and user playlist order were restored; RAP remains in GENRES. Other
+libraries retain default-off authority. Current package, proof and installed
+identity are recorded separately in [HANDOFF](HANDOFF.md).
 
 ## Original October26 scope, with subsequently accepted grid behavior
 
@@ -252,22 +315,27 @@ tables, encryption/baseline checks and repeated-operation results. The fresh
 temporary databases are removed after the proof, leaving only the small report.
 Actual final validation is recorded in [HANDOFF](HANDOFF.md).
 
-## My Tags layout and deletion follow-up — in progress
+## My Tags layout and deletion follow-up
 
 The checklist keeps two columns even when names are long; elided labels retain
 full-name tooltips. Create New Tag spans the header. Its modeless tool panel
 avoids native-menu helper widgets painting over that button, while preserving
-outside-click delivery. Delete Tag opens a separate choice/confirmation, and
-smart playlists expose Delete in their context menu. Native references and encrypted TEMP replays now cover local unsynced tags
+outside-click delivery. Right-clicking a tag offers Delete Tag for that exact
+definition and captured source, followed by one default-No confirmation; there is
+no dedicated footer or second picker. Smart playlists expose Delete in their
+context menu. Native references and encrypted TEMP replays now cover local unsynced tags
 with local unsynced assignments, unchanged intelligent rules and retained XML,
 and local unsynced smart-list deletion in a folder or at the top level.
 Definition deletion advances once per shifted tag sibling plus once for deletion;
 smart deletion uses one shared new counter for all shifted playlist siblings.
-Each publisher requires independent exact-library acceptance; production
-activation and installation remain pending. The SONNY/ZYKO reference windows additionally cover measured synced tag/assignment
+Each publisher requires independent exact-library acceptance. November19 approved
+source pilots, native reopen checks and the complete4836-case gate/package passed;
+the exact-library local v1 tag/smart deletion profiles are now active. Guarded
+installation is recorded separately in HANDOFF. The SONNY/ZYKO reference windows additionally cover measured synced tag/assignment
 tombstones and synced smart-list deletion under separate v2 profile markers.
 Surviving synced tag siblings, synced tags without active synced associations and
-unobserved metadata remain guarded. The accidental ZYKO deletion was separately
+unobserved metadata remain guarded. Those historical deletion profiles remain
+disabled; local v1 acceptance does not enable them. The accidental ZYKO deletion was separately
 repaired and accepted; no more destructive reference steps are needed.
 Remote USN is independent from the local writer clock: supported historical
 target and read-only category validators retain any valid signed nonnegative
@@ -304,11 +372,26 @@ resolve duplicate names. It acts on selected browser rows, supports mixed
 assignments and preserves surviving selected rows after refresh. Imported or
 unverified tracks disable editing. The popup matches the button width and uses
 two columns, reading down the left before down the right. Long labels elide
-with full-name tooltips. A full-width Create New Tag header and separate Delete
-Tag footer work independently of song selection. The plain modeless tool panel
+with full-name tooltips. A full-width Create New Tag header works independently
+of song selection. Checkbox labels escape Qt mnemonic markers only after eliding
+the literal name, so names such as `R&B` retain their ampersands. Native names,
+tag identities, drag labels, tooltips and accessibility names remain literal.
+Rename and Delete belong to the exact tag's right-click menu;
+there is no deletion footer. Dragging tags saves their accepted native order.
+The plain modeless tool panel
 avoids native-menu helpers covering its header. Explicit row geometry avoids
-checkbox/label overlap; tooltip/status text explains unavailable actions. A pending save shows its intended assignment
-and blocks another action until verified. Opening the menu probes availability
+checkbox/label overlap; tooltip/status text explains unavailable actions. A pending
+save shows its intended assignment immediately and admits rapid later gestures
+into the ordered durable queue. A newly captured tag is immediately available
+in My Tags and smart-playlist creation. Dependent clicks keep their exact future
+identity while the tag saves; the creation intent is saved first, and native
+creation plus verified publication precedes dependent native writes. Creation
+failure retains those intentions for retry instead of silently losing them.
+Pending sidebar refreshes reuse already rendered artwork statuses for unchanged
+tracks; unknown art keeps the ordinary fresh lookup. Select All acts on the current visible browser
+rows. Bounded diagnostic records capture full/visible/selected counts, selection
+hashes and at most eight lost native IDs around definition publication; existing
+durable receipts retain the exact assignment targets. Opening the menu probes availability
 off the GUI thread; a running rekordbox/agent produces a close-first explanation.
 
 `rekordbox_tags.LiveTagStore` owns My Tag writes. It requires an explicitly
@@ -375,7 +458,10 @@ native saves in the background. An overlay is not durable success; pending and
 failed tails remain owned for reconciliation. Grid intentions retain their
 separate durable admission contract.
 Normal UI Quit keeps the usable app and source pumps open until captured saves
-finish. The old RAM-tail loss descriptions below are historical, not current
+finish, then completes the original close request. Exactly verified durable
+failed queues can remain for the next launch; unsaved RAM/storage failures and
+canonical recovery still require attention. No queue is silently discarded.
+The old RAM-tail loss descriptions below are historical, not current
 admission or persistence requirements. Exact installed proof is in HANDOFF.
 
 Native reference captures now cover WAV (No Trust), MP3 (Juice), AIFF (Back
@@ -420,11 +506,13 @@ and cache loads never grant authority. Shared admission, locking and encrypted
 connection mechanics live in `soundbox.native_transaction.NativeTransactionLease`;
 the cue store retains compatibility hooks and owns cue planning/publication and
 recovery. Other domains retain their independent authorities and SQL scopes.
-Native cue saves require only the accepted cue authority. Their fresh companion
-grid snapshot reads the selected track's UUID-bound DAT/EXT under the cue lease;
-it grants no grid-writing permission. Missing, corrupt or unreadable analysis
-does not veto a DB-only cue save: source analysis bytes and the retained private
-grid cache remain unchanged. A bare native track can therefore save cues before
+Native cue saves require only the accepted cue authority. Current v2 cue
+prepare/prewrite capture does not acquire unrelated DAT/EXT. After a verified cue
+save, an existing private grid cache may require one fresh UUID-bound companion
+snapshot under the cue lease; that read grants no grid-writing permission. Legacy
+v1 intentions retain their original reconciliation proof. Missing, corrupt or
+unreadable analysis does not veto a DB-only cue save: source analysis bytes and
+the retained private grid cache remain unchanged. A bare native track can save cues before
 analysis is available. This does not broaden accepted cue row states or codecs.
 The bound store shares the tag store's exact recovery root, writer lock and pending-journal path;
 an unresolved other-domain operation blocks admission. Exact snapshot revisions,
@@ -616,8 +704,9 @@ baselines. Preserve encrypted baselines, reference files and receipts.
 
 `desktop.grid_controller` probes only the loaded accepted track through the
 shared TagEditController TaskOwner lane. Buttons require loaded audio, matching
-track/path identity, an unlocked valid saved grid and no conflicting library/device
-operation. Manual SoundBox-owned cache rows remain protected. The BPM field accepts manual constant-tempo entry only with the separate
+track/path identity, an unlocked valid saved grid and no conflicting source-lane
+operation. iPod device ownership alone does not veto desktop prep capture;
+source publication retains the shared writer's exact guards. Manual SoundBox-owned cache rows remain protected. The BPM field accepts manual constant-tempo entry only with the separate
 `manual_bpm_accepted` authority. Enter captures track/value and queues the edit;
 Escape/focus loss cancels typing. Track switches discard unfinished input. Simultaneous source writes with rekordbox/agent running fail closed;
 reopen rekordbox after saving to see changes.
@@ -652,9 +741,13 @@ saves remain, with editing/pumps live. Explicit teardown still drains accepted
 active work and preserves unstarted durable intentions. Passing synthetic tests
 or source pilots alone does not certify physical device behavior.
 
-Every user-facing milestone requires the full release/render gate, inspected UI,
-safe build/install/relaunch and curated-state verification. Current validation,
-installed provenance and remaining user review are in [HANDOFF](HANDOFF.md).
+Small local changes use affected named suites or exact focused regressions at
+the required depth; native writer/SQL/journal/ACK changes require their recovery
+coverage. Local installs also require relevant UI/native checks, guarded package/
+install/relaunch and curated-state verification. The complete bare render gate
+remains mandatory before commit/push or wrap-up. See [the test gate](test-release-gate.md)
+for coverage/report boundaries. Current validation, installed provenance and
+remaining user review are in [HANDOFF](HANDOFF.md).
 No commit/push without explicit permission or wrap up.
 
 

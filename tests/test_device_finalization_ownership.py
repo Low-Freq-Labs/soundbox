@@ -67,8 +67,8 @@ class DeviceFinalizationOwnership(unittest.TestCase):
         h.progress.setRange(0,1000)
         h.eject_btn, h.device_sync_btn, h.cancel_btn = (QPushButton(self.frame) for _ in range(3))
         h.stock_ipod_pages = SimpleNamespace(set_loading=mock.Mock(), set_snapshot=mock.Mock(),
-            set_playlist_deletion_available=mock.Mock(), set_playlist_actions_available=mock.Mock(),
-            set_error=mock.Mock())
+            set_playlist_deletion_available=mock.Mock(), set_primary_action=mock.Mock(),
+            set_error=mock.Mock(), restore_playlist_order_seat=mock.Mock())
         h.stock_catalog_witness_store = SimpleNamespace(load=lambda *_:None)
         h._stored_stock_model = lambda *_:''
         h._sync_playlists = lambda:[]
@@ -144,6 +144,7 @@ class DeviceFinalizationOwnership(unittest.TestCase):
         self.assertEqual(completed,[(None,False,True,self.dev)])
         self.assertEqual(h._device_coordinator.last_result.refresh,'complete')
         self.assertEqual(h._stock_view_callbacks,{})
+        h.stock_ipod_pages.restore_playlist_order_seat.assert_called_once_with()
         self.warning.assert_not_called()
 
     def test_export_from_collection_refreshes_cached_catalog_without_navigation(self):

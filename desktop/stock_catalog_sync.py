@@ -37,6 +37,10 @@ def _playlists(host, *, names=(), keys=()):
 
 def _display(host, selected):
     tracks={track.track_id:track for playlist in selected for track in host.lib.resolve(playlist)}
+    return _display_tracks(host, tracks)
+
+
+def _display_tracks(host, tracks):
     return {tid:{'id':tid,**{field:row.get(field,'') for field in CATALOG_METADATA_FIELDS},
                  'bpm_estimated':row.get('bpm_estimated',False)}
             for tid,track in tracks.items() for row in (host._row_for(track),)}
@@ -231,6 +235,32 @@ def _source(host, keys):
         source_paths(host.lib))
 
 
+def _source_still_matches(host, keys, captured):
+    """Later musical edits advance independently of this frozen generation."""
+    if (str(host.lib.source), host.lib.source_kind, host.lib.source_library_id) != captured[0]:
+        return False
+    selected = _selected(host, keys)
+    if selected is None or len(selected) != len(captured[1]):
+        return False
+    for playlist, (previous, _members) in zip(selected, captured[1]):
+        current = catalog_source_playlist(host.lib, playlist)
+        if ((current.key, current.native_id, current.uuid, current.identity_error)
+                != (previous.key, previous.native_id, previous.uuid, previous.identity_error)):
+            return False
+    tracks = {row[0]: host.lib.tracks_by_id.get(row[0]) for row in captured[2]}
+    if any(track is None for track in tracks.values()):
+        return False
+    current_tracks = tuple((tid, track.native_id, track.source_uuid, str(track.path), str(track.native_path),
+        track.size, track.total_time)
+        for tid, track in tracks.items())
+    return current_tracks == tuple(row[:-1] for row in captured[2]) and source_paths(host.lib) == captured[3]
+
+
+def _repository_token(host):
+    repository = getattr(host, '_state_repository', None)
+    return (repository, repository.generation, repository.area.generation) if repository is not None else None
+
+
 def _mount(host, device):
     return (host._device_mount_tokens.get(device,0),device_facts(device,cached_only=True).volume_uuid)
 
@@ -306,6 +336,7 @@ class CatalogRequest:
     artwork:Any
     batch:Any=None
     batch_target:Any=None
+    repository:Any=None
 
     def current(self, host):
         profile=host._device_profiles.get(self.device)
@@ -321,7 +352,8 @@ class CatalogRequest:
                     (self.snapshot.identity_key,self.snapshot.database_sha256,self.snapshot.artwork_database_sha256,
                      self.snapshot.stock_format,self.snapshot.usb_family,
                      getattr(self.snapshot,'firewire_guid',''),self.snapshot.usb_serial)
-                and _source(host,self.keys)==self.source)
+                and _repository_token(host)==self.repository
+                and _source_still_matches(host,self.keys,self.source))
         except (ValueError,TypeError,KeyError):return False
 
 
@@ -359,7 +391,7 @@ def request_sync(host, selected, *, device=None, confirmed=False, source_playlis
             capture_export(host.lib,sources,titles=host.titles,artists=host.overrides,
                            playlist_identities=True),
             json.dumps(display,allow_nan=False).encode(),json.dumps(labels,allow_nan=False).encode(),_witness(host,device),
-            host.art_cache.selection_token(display),batch,batch_target)
+            host.art_cache.selection_token(display),batch,batch_target,_repository_token(host))
     except (ValueError,TypeError,KeyError) as exc:
         host._flash_status(str(exc),15);return
     _begin(host,request,confirmed)

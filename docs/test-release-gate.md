@@ -1,8 +1,126 @@
 # Release test gate
 
-Release procedure reviewed November18, 2026; dated results below retain their
-original scope. [HANDOFF](HANDOFF.md) records the latest source and installed
-validation separately. `./check.sh` checks authored-folder guides, local links
+Local validation workflow revised November20, 2026 at Sonny's request. Dated
+results below retain their original scope. [HANDOFF](HANDOFF.md) records source
+validation and installed identity separately.
+
+Older sections are dated evidence, including their original retention statements.
+Keep compact receipts and required current/unresolved recovery or acceptance
+payloads; completed duplicate payloads follow the bounded retention contract.
+Historical paths do not imply all original full captures remain on disk.
+
+## Fast local fixes and complete publication checks
+
+- Small fix: run its regression and affected integration/lifecycle/error cases,
+  plus relevant lint/types. Use Cocoa or an inspected render for UI changes when
+  needed. Reuse passing evidence until inputs change or a concern remains.
+- Local install: focused evidence is sufficient with the existing strict package,
+  isolated startup and guarded state-preserving install/reopen checks.
+- Before any commit/push or wrap-up: run `./check.sh --render` on the final tree.
+  The complete suite and both Qt phases remain required. A broad change may need
+  this earlier when a confident focused selection is not possible.
+
+```sh
+./check.sh --focus tests/test_sidebar_layout.py
+./check.sh --focus test_prep_tags.TagInterface --cocoa
+.venv/bin/python -m pyflakes desktop/prep_tags.py tests/test_prep_tags.py
+./check.sh --render
+```
+
+## Choose an area and depth
+
+```sh
+./check.sh --list-suites
+./check.sh --suite rb-db --level quick
+./check.sh --suite tags playlists --level integration
+./check.sh --suite player waveform --level quick
+./check.sh --suite usb --level integration
+./check.sh --suite usb --level recovery --plan
+```
+
+| Depth | Coverage |
+| --- | --- |
+| `quick` (default) | Small behavior/reader/guard checks and selected native smoke tests. |
+| `integration` | Quick plus related controllers, workers, publication and lifecycle interactions. |
+| `recovery` | Integration plus the area's transaction, durability, cancellation and process-loss proofs. |
+| Complete gate | `./check.sh --render`: every discovered case, native/CDJ builds, fixtures and static checks. |
+
+Choose independently or combine these maintained areas:
+
+| Area | Main responsibility |
+| --- | --- |
+| `library` | Collection, browsing, imports, registration and retained organization. |
+| `rb-db` | Rekordbox readers, identity, authority, source writers, readback and ACKs. |
+| `metadata` | Titles, artists, aliases and curation protection. |
+| `tags` | My Tags, rapid assignments, create/rename/delete and ordering. |
+| `playlists` | Regular/smart lists, folders, membership, moves and presentation. |
+| `prep` | Hot/Memory cues, grid, BPM and pending prep writes. |
+| `player` | Playback, decode, seek, transport and keyboard gestures. |
+| `waveform` | Waveform packets, geometry, palettes, zoom and Metal presentation. |
+| `analysis` | BPM/key/grid detection, analysis packets and scheduling. |
+| `artwork` | Source images, defaults, review, thumbnails and export derivatives. |
+| `usb` | **Generic USB/CDJ core:** explicit exports, catalogs, settings, selected metadata, eject and filesystem writes. |
+| `ipod` | **Separate iPod core:** stock/dual/Rockbox exports, sync/drift, playlists, deletion and recovery. |
+| `state` | Canonical records, sparse saves, backup/restore, worker ownership and shutdown. |
+| `ui` | Shared layout, theme, dialogs, browsing and saved preferences. |
+| `providers` | Provider admission, connections, cancellation and socket boundaries. |
+| `tooling` | Test routing, catalog, release inventory, packaging and provenance. |
+
+Levels add coverage; they do not change assertions or fixture behavior. A quick
+RB DB run is reader/guard smoke, not a substitute for affected source-write
+recovery tests. Use `rb-db` plus the changed domain for native edits; use that
+domain's recovery level when SQL, authority, journal or ACK logic changes. Combine
+`player prep` for cue/grid edits during playback, `waveform analysis` for packet
+changes, `usb artwork` or `ipod artwork` for exported covers, and add `state` for
+cross-worker ownership/restore/quit changes. Exact `--focus` selection remains
+available for smaller regressions; it can also supplement a named run.
+
+`--plan` prints selectors and planned platforms; it runs no tests and imports no
+Qt/test modules. Named groups automatically route native-deck cases to a separate
+Cocoa process after offscreen finishes. `--cocoa` can explicitly run all selected
+UI checks on Cocoa. Overlapping areas, modules and individual tests execute once
+per run. Required platform/fixture prerequisites stay real; they never become
+skips. Rebuild affected native/CDJ components separately when their code changes.
+
+Named runs write `build/check/focused/suites.json` with requested areas, depth,
+selectors, planned phases and actual results. Phase receipts/logs live alongside
+it under `suites-phases/`; `--report PATH` selects another receipt and sibling
+phase directory. Reports start failed/running, clear old aggregate/phase JSON,
+and cannot become green with a failed/missing/mismatched child. Scope remains
+focused, so complete-release verification rejects these results.
+
+The editable registry is `scripts/test-suites.json`; `scripts/test_suites.py`
+validates its static references without loading tests. The deepest union includes
+every complete test module, enforced by the catalog test; new tests must be mapped.
+The complete release gate still discovers independently, so the registry never
+filters its inventory. Small runs are serial within each selected Qt phase; use
+the parallel complete gate for whole-app validation rather than combining every
+recovery area merely to emulate it. All source/device fixtures remain isolated;
+these groups do not certify physical players or authorize live source/device tests.
+
+## Exact selectors
+
+Focused selectors accept `tests/test_name.py`, `test_name`, `test_name.Class` or
+`test_name.Class.test_method`. Overlapping selections run once, with module/class
+fixtures grouped. Only selected modules import; Qt AppData/Cache/Config remain
+private. `--cocoa` runs the selected tests on Cocoa; it is required for native-deck
+cases. Use the default offscreen platform for ordinary checks. Repeat on another
+platform only when the behavior requires it, rather than automatically doubling
+all checks.
+
+Focused results go to `build/check/focused/offscreen.json` or `native.json`; use
+`--report PATH` for an explicit receipt. They declare `scope="focused"`, fail on
+skips/xfails/unrun cases, cannot overwrite the full aggregate paths and are rejected
+by the full-release verifier. A failed selection removes its old report before
+loading, so it cannot reuse an earlier green result. The command runs tests only:
+run relevant static checks and rebuild changed native components separately.
+It does not perform unrelated native/CDJ builds, global fixture preflight or a
+full-suite discovery. No focused result grants source/device authority or permission
+to weaken fixtures, recovery coverage or the install procedure.
+
+## Complete gate
+
+`./check.sh` checks authored-folder guides, local links
 and static dependency directions, builds native deck/process-guard/CDJ code, runs lint/types, validates the
 required offline fixtures, then executes every discovered test exactly once.
 Ordinary/UI/GPU modules use three isolated offscreen Qt processes; module fixtures
@@ -30,6 +148,36 @@ The [November2 runtime audit](testing-runtime-audit.md) records the complete
 timing review, isolation checks and a controlled encrypted-subset comparison.
 Each case still runs with its existing cipher/recovery settings. Module weights
 affect scheduling only; new tests cannot be excluded by missing timing hints.
+Refresh hints from a complete passing offscreen report with:
+
+```sh
+.venv/bin/python scripts/update_test_costs.py build/check/offscreen.json
+```
+
+The updater rejects focused/failed/incomplete timing evidence. It changes only
+whole-module scheduling weights, not inventory or fixture behavior. The dated
+[November20 audit](testing-runtime-audit.md#focused-workflow-and-scheduling-review--november20)
+distinguishes the measured current imbalance from the projected scheduling gain.
+
+## Complete wrap gate — November20
+
+The final bare `./check.sh --render` passes5,083 discovered cases:5,015 offscreen
+in744.538s and68 Cocoa in84.204s. Inventories reconcile exactly, with zero skips
+or expected failures. All924 frozen inputs were exact at completion. Publication
+normalizes one superfluous EOF newline in `test_playlist_sparse_state.py`, with
+identical compiled code, AST and positions; the other923 inputs remain byte-exact.
+Lint, layout/links/instruction parity, engine types, native/CDJ builds, pinned
+vendor integrity and required offline fixtures pass. The synthetic12-song,
+zero-device render was inspected. Reports and frozen inputs are retained under
+`~/Library/Logs/Soundbox/wrapup-20261120/final-gate/`.
+
+This also validates the new focused/named routing and complete area catalog on
+the current source. Read-only installed verification matches233 runtime modules,
+startup code and four native code sections to the same tested runtime88b6.
+Ordinary deep signature verification passes; saved-color Finder/Dock metadata
+outside signed Contents is preserved under the install contract. No rebuild,
+restamp, live-source/device test or automated real-app control occurred during
+this wrap. [HANDOFF](HANDOFF.md) records delivery and retention separately.
 
 ## Historical offline shared-library source gate — November13
 

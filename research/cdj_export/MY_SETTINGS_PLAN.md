@@ -223,6 +223,7 @@ Run focused prototype checks from the repository root:
 
     .venv/bin/python -m unittest discover -s tests -p test_cdj_mysettings_codec.py
 
-Production UI/runtime work still requires the full project check/render and safe
-build/install/relaunch gates. This research-only handoff does not require restarting
+Production UI/runtime work uses focused affected checks for small local changes,
+the full check/render gate before publication or wrap-up, and the guarded
+build/install/relaunch procedure for runtime delivery. This research-only handoff does not require restarting
 the installed app and does not implement the production profile state/queue/UI.

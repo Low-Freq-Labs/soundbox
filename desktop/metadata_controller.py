@@ -14,6 +14,7 @@ from soundbox.rekordbox_write import WriteProofError,assert_rekordbox_closed
 from soundbox.state_repository import VerificationChanged
 from .task_owner import TaskOwner
 from .workers import OneShotTask
+from .tag_controller import device_blocks_library_work
 
 KEY='pending_metadata_edits'
 ACKS='metadata_receipt_acks'
@@ -225,7 +226,7 @@ class MetadataController(QObject):
     def _background_state_busy(self):
         w=self.window
         return bool(self.tags.source_job_owned or self.tags.prep_priority or w._refresh_worker is not None
-                    or w._device_operation_owned())
+                    or device_blocks_library_work(w))
 
     def stage_source_scope(self,incoming,*,previous=None,bootstrap=False):
         """Stage RAM only; caller saves source selection and curation together.
@@ -1441,7 +1442,7 @@ class MetadataController(QObject):
         if self.pending[0]['error']:
             self.status('Metadata save needs attention — '+self.pending[0]['error'],attention=True);return
         if (self.tags.source_job_owned or self.tags.prep_priority or w._refresh_worker is not None
-                or w._state_maintenance or w._device_operation_owned()):self.timer.start(2000);return
+                or w._state_maintenance or device_blocks_library_work(w)):self.timer.start(2000);return
         imports=getattr(w,'shared_import_controller',None)
         if imports and imports.source_priority:self.timer.start(2000);return
         reason=self.reason()

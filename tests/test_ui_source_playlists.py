@@ -404,9 +404,10 @@ class NativePlaylistGestures(unittest.TestCase):
             self.window.lib.source_playlist_catalog['nodes'][0],ID='2000',Seq=2,Name='Empty',Attribute=1,
             UUID='00000000-0000-4000-8000-000000000002'))
         tree=engine.playlist_tree(self.window.lib)
-        self.assertEqual(tree['children'][1],dict(name='Empty',type='folder',pid='2000',children=[]))
+        self.assertEqual(tree['children'][1],dict(name='Empty',type='folder',pid='2000',attribute=1,children=[]))
         item=QTreeWidgetItem(['Empty']);item.setData(0,RB_NODE_ROLE,'2000')
-        menu=self.window._native_menu(item)
+        with mock.patch.object(self.controller,'node_move_reason',return_value=''):
+            menu=self.window._native_menu(item)
         self.assertEqual([a.text() for a in menu.actions()],['New Playlist','New Smart Playlist','New Folder','Rename','Delete'])
         self.assertTrue(all(a.isEnabled() for a in menu.actions()));menu.deleteLater()
 

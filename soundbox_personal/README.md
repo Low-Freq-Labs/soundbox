@@ -11,5 +11,5 @@ Core owns curation, artwork publication, workers and device authority.
 Startup readiness never means starting a search or accessing live credentials in tests.
 Never log tokens or store them in library state, backups or build output.
 
-Check both package profiles and isolated provider tests through `./check.sh`.
+Use isolated provider tests locally; check both profiles and the complete gate before publication.
 See [provider boundaries](../docs/release-boundaries.md) and [connection behavior](../docs/soundcloud-connection.md).

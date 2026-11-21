@@ -1039,6 +1039,7 @@ def run(
     validate_artwork: Callable[[str], None] | None = None,
     expected_manifest_payload: bytes | None = None,
     expected_manifest_absent: bool = False,
+    concise_playlists: bool | None = None,
 ) -> SyncReport:
     """Execute (or simulate, if dry_run) the sync. All writes are under target.
 
@@ -1047,6 +1048,11 @@ def run(
     True the copy stops cleanly (files already copied are kept).
     """
     target = target.expanduser().resolve()
+    if concise_playlists is None:
+        concise_playlists = rockbox_media_cache is not None or (target / '.rockbox').is_dir()
+    if concise_playlists:
+        from .playlist_names import unique_playlist_names
+        unique_playlist_names(playlist.name for playlist in selected)
     guard_paths = list(source_paths(lib))
     assert_target_safe(target, guard_paths)
     session = _session
@@ -1372,7 +1378,7 @@ def run(
         if layout in ("tree", "both"):
             out_paths.append(pl_mod.tree_playlist_path(playlists_root, plist.folder_path, plist.name))
         if layout in ("flat", "both"):
-            out_paths.append(pl_mod.flat_playlist_path(playlists_root, plist.folder_path, plist.name))
+            out_paths.append(pl_mod.flat_playlist_path(playlists_root, [] if concise_playlists else plist.folder_path, plist.name))
 
         resolved_paths: list[Path] = []
         playlist_identity = manifest.playlist_key(plist)
@@ -1395,6 +1401,9 @@ def run(
                 previous_playlist = managed_files.get(
                     device_playlist_path) or {}
                 try:
+                    from .playlist_retirement import PENDING_RETIREMENT
+                    if PENDING_RETIREMENT in previous_playlist:
+                        raise OSError(f'pending old playlist retirement at {op}; its file was preserved')
                     if op.exists() and not previous_playlist:
                         raise OSError(
                             f"unowned playlist conflict at {op}")
@@ -1431,6 +1440,18 @@ def run(
 
     # Record what we put on the device (by stable playlist ID) so later syncs can
     # detect drift. Writes only under target (<device>/.soundbox/manifest.json).
+    name_retirements = {}
+    if concise_playlists:
+        from .playlist_retirement import legacy_flat_playlists, remember_retirement
+        for key, (relative, old_row) in legacy_flat_playlists(previous_manifest, selected).items():
+            device_path = '/' + relative.as_posix()
+            retained = managed_files.get(device_path)
+            if (retained is not None and retained.get('kind') == 'playlist'
+                    and retained.get('owned') is True and retained.get('source') == key
+                    and retained.get('size') == old_row.get('size')
+                    and retained.get('sha256') == old_row.get('sha256')):
+                managed_files[device_path] = remember_retirement(relative, retained)
+                name_retirements[key] = relative, old_row
     report.cancelled = cancelled
     if not dry_run:
         try:
@@ -1448,6 +1469,37 @@ def run(
             if report.playlists:
                 report.playlists[0].errors.append(
                     f"ERROR writing SoundBox manifest: {exc}")
+        else:
+            if concise_playlists and not cancelled and not incomplete and not global_errors:
+                from .playlist_retirement import retire_playlist
+                retired = False
+                by_key = {manifest.playlist_key(playlist): item for playlist, item in zip(selected, report.playlists)}
+                for key, (relative, old_row) in name_retirements.items():
+                    if should_cancel is not None and should_cancel():
+                        report.cancelled = True
+                        incomplete.update(selected_keys)
+                        break
+                    playlist = next(playlist for playlist in selected if manifest.playlist_key(playlist) == key)
+                    desired = '/' + pl_mod.flat_playlist_path(Path('Playlists'), [], playlist.name).as_posix()
+                    published = managed_files.get(desired) or {}
+                    if published.get('kind') != 'playlist' or published.get('source') != key:
+                        continue
+                    try:
+                        with cancellation_disabled():
+                            retire_playlist(session, relative, old_row)
+                        managed_files.pop('/' + relative.as_posix(), None)
+                        retired = True
+                    except (OSError, RuntimeError) as exc:
+                        incomplete.add(key)
+                        by_key[key].errors.append(f'Old playlist name retained: {exc}')
+                if retired or incomplete:
+                    try:
+                        manifest.record_export(target, selected, incomplete,
+                            hidden=getattr(lib, 'hidden_ids', frozenset()),
+                            removals=getattr(lib, 'removed_by_playlist', None), managed_files=managed_files,
+                            completed=not incomplete, session=session)
+                    except (OSError, RuntimeError) as exc:
+                        report.playlists[0].errors.append(f'ERROR saving playlist-name cleanup: {exc}')
     return report
 
 
@@ -1484,8 +1536,11 @@ def _prune_manifest_owned(
     """Delete only unreferenced paths explicitly owned by manifest v2."""
     removed = 0
     emptied: set[Path] = set()
+    from .playlist_retirement import PENDING_RETIREMENT
     for device_path, row in list(rows.items()):
-        if row.get("playlists"):
+        # Retained migration evidence has its own exact-byte/claim retirement.
+        # Even an invalid proof must never fall through to generic unlink.
+        if row.get("playlists") or PENDING_RETIREMENT in row:
             continue
         kind = str(row.get("kind") or "")
         if kind != "playlist" and not media:
@@ -1602,6 +1657,9 @@ def resync(
 
     drift = manifest.diff(m, lib, extra)
     drifted_keys = {k for k, *_ in (drift.renamed + drift.moved + drift.changed)}
+    from .playlist_retirement import legacy_flat_playlists
+    name_migrations = legacy_flat_playlists(m, wanted)
+    drifted_keys.update(name_migrations)
     # Explicit Sync checks current managed inputs; idle diff remains a bounded
     # playlist-only hint for schema 2. Source observations are metadata only:
     # payload capture/hashing is reserved for playlists that actually changed.
@@ -1651,7 +1709,8 @@ def resync(
     # 1) Re-export ONLY the drifted playlists (copy any new files + rewrite their m3u8s
     #    + upsert their manifest entries). Unchanged playlists are skipped entirely —
     #    the big win: no re-verifying every file of every synced playlist each time.
-    report = run(lib, to_export, target, layout="tree", dry_run=False,
+    report = run(lib, to_export, target, layout="both" if name_migrations else "tree", dry_run=False,
+                 concise_playlists=True,
                  on_progress=on_progress, should_cancel=should_cancel,
                  artist_overrides=artist_overrides, title_overrides=title_overrides,
                  art_cache=art_cache,

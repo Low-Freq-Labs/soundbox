@@ -8,9 +8,9 @@ import tempfile
 import unittest
 from unittest import mock
 
-from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
+from PySide6.QtWidgets import QApplication, QMessageBox
 
-from desktop.tag_creation import DeleteTagDialog, TagCreationMixin, tag_deletion_effects
+from desktop.tag_creation import TagCreationMixin, tag_deletion_effects
 from desktop.tag_creation_controller import QUEUE, TagDefinitionController
 from soundbox import rekordbox_tag_definitions as definitions
 from soundbox.library import Library, LibraryTag, Track
@@ -230,48 +230,50 @@ class DeleteController(unittest.TestCase):
         self.assertEqual(self.controller.pending[0]['request'], self.request)
         self.assertFalse(self.window.published)
 
-    def test_picker_pins_same_named_category_and_leaf_uuids(self):
-        second = replace(TAG, tag_id='42', source_uuid='second', category_id='2', category_uuid='category-two')
-        dialog = DeleteTagDialog([TAG, second])
-        self.addCleanup(dialog.deleteLater)
-        dialog.tag.setCurrentIndex(1)
-        self.assertEqual(dialog.value(), second)
-        self.assertEqual(dialog.value().category_uuid, 'category-two')
-        self.assertNotEqual(dialog.tag.itemText(0), dialog.tag.itemText(1))
+    def context(self):
+        lib = self.window.lib
+        return str(lib.source), lib.source_kind, lib.source_library_id
 
-    def test_handler_requires_choice_then_default_no_effects_confirmation(self):
+    def test_clicked_tag_pins_same_named_category_and_leaf_uuids(self):
+        second = replace(TAG, tag_id='42', source_uuid='second', category_id='2', category_uuid='category-two')
+        self.window.lib = replace(self.window.lib, source_tags=[TAG, second])
         self.window.tag_definition_controller = self.controller
-        dialog = mock.Mock()
-        dialog.exec.return_value = QDialog.Accepted
-        dialog.value.return_value = TAG
-        with mock.patch('desktop.tag_creation.DeleteTagDialog', return_value=dialog), mock.patch(
-                'desktop.tag_creation.QMessageBox.question', return_value=QMessageBox.No) as confirm:
-            self.assertFalse(TagCreationMixin._delete_tag(self.window))
+        with mock.patch('desktop.tag_creation.QMessageBox.question', return_value=QMessageBox.Yes):
+            self.assertTrue(TagCreationMixin._delete_tag(self.window, second, self.context()))
+        self.controller.timer.stop()
+        request = self.controller.pending[0]['request']
+        self.assertEqual((request['tag_id'], request['tag_uuid'], request['category_uuid']),
+                         ('42', 'second', 'category-two'))
+
+    def test_handler_asks_one_default_no_effects_confirmation_for_exact_clicked_tag(self):
+        self.window.tag_definition_controller = self.controller
+        with mock.patch('desktop.tag_creation.QMessageBox.question', return_value=QMessageBox.No) as confirm:
+            self.assertFalse(TagCreationMixin._delete_tag(self.window, TAG, self.context()))
             self.assertFalse(self.window.saved)
             self.assertEqual(confirm.call_args.args[-1], QMessageBox.No)
             self.assertIn('Songs and audio files are preserved', confirm.call_args.args[2])
-        with mock.patch('desktop.tag_creation.DeleteTagDialog', return_value=dialog), mock.patch(
-                'desktop.tag_creation.QMessageBox.question', return_value=QMessageBox.Yes):
-            self.assertTrue(TagCreationMixin._delete_tag(self.window))
+        with mock.patch('desktop.tag_creation.QMessageBox.question', return_value=QMessageBox.Yes):
+            self.assertTrue(TagCreationMixin._delete_tag(self.window, TAG, self.context()))
         self.controller.timer.stop()
         self.assertEqual(self.controller.pending[0]['request']['tag_id'], TAG.tag_id)
         self.assertEqual(self.controller.pending[0]['request']['action'], 'delete')
         self.assertFalse(self.window.tag_controller.admitted)
 
-    def test_handler_cancellation_or_source_change_during_confirmation_admits_nothing(self):
+    def test_context_source_change_or_target_change_during_confirmation_admits_nothing(self):
         self.window.tag_definition_controller = self.controller
-        dialog = mock.Mock()
-        dialog.exec.return_value = QDialog.Rejected
-        with mock.patch('desktop.tag_creation.DeleteTagDialog', return_value=dialog):
-            self.assertFalse(TagCreationMixin._delete_tag(self.window))
-        dialog.exec.return_value = QDialog.Accepted
-        dialog.value.return_value = TAG
-        def change_source(*_args):
-            self.window.lib = replace(self.window.lib, source='/different/master.db')
-            return QMessageBox.Yes
-        with mock.patch('desktop.tag_creation.DeleteTagDialog', return_value=dialog), mock.patch(
-                'desktop.tag_creation.QMessageBox.question', side_effect=change_source):
-            self.assertFalse(TagCreationMixin._delete_tag(self.window))
+        for change in ('source', 'tag'):
+            with self.subTest(change=change):
+                original = self.window.lib
+                def changed(*_args):
+                    self.window.lib = (replace(original, source='/different/master.db') if change == 'source'
+                        else replace(original, source_tags=[replace(TAG, source_uuid='replaced')]))
+                    return QMessageBox.Yes
+                with mock.patch('desktop.tag_creation.QMessageBox.question', side_effect=changed):
+                    self.assertFalse(TagCreationMixin._delete_tag(self.window, TAG, self.context()))
+                self.window.lib = original
+        with mock.patch('desktop.tag_creation.QMessageBox.question') as confirm:
+            self.assertFalse(TagCreationMixin._delete_tag(self.window, TAG, ('/old/source', 'rekordbox-db', 'old')))
+            confirm.assert_not_called()
         self.assertFalse(self.window.saved)
         self.assertFalse(self.window.tag_controller.admitted)
 

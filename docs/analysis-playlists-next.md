@@ -119,8 +119,8 @@ against original bytes before a SHA-pinned worker check renews identity; actual
 byte changes retain the intention and fail publication. Source/library/path checks
 also protect late callbacks and presentation. Analysis errors retain their own
 operation IDs while healthy imports continue. UI close/Cmd+Q stays open until
-captured imports/detection/source saves finish, with editing and source pumps
-active; ordinary read-only preparation does not block Quit. Full release and
+captured imports/detection/source saves finish, then completes that original close
+request automatically. Editing and source pumps remain active while draining; ordinary read-only preparation does not block Quit. Full release and
 actual installed evidence are recorded in [HANDOFF](HANDOFF.md).
 
 ## Shared-analysis acceptance boundaries
@@ -223,8 +223,9 @@ was provisioned afterward. The installed build/status remains in HANDOFF.
 row/counter planning, lexical XML and encrypted paired recovery. Only playlist/
 membership rows and localUpdateCount may change. Native and agent must be closed;
 unknown cloud/sync states, stale identities and foreign recovery fail closed.
-Tag/Cue/Grid/Playlist share one worker, lock and journal. Acceptance archives
-retain full pairs; normal editing retains the latest full encrypted pair plus
+Tag/Cue/Grid/Playlist share one worker, lock and journal. Current required native-reference and pending-acceptance archives
+retain full pairs; completed duplicate diagnostics follow current bounded
+retention. Normal editing retains the latest full encrypted pair plus
 permanent row/XML/operation receipts, retiring only verified older completed DB
 payloads with resumable progress.
 
@@ -396,7 +397,9 @@ int_1, and denies trigger/DDL/other-table mutations. Reads against the live writ
 are identity/target reads; complete inventories run on verified private snapshots.
 Both SoundBox and rekordbox/agent must be closed. All unrelated source state and
 full XML bytes remain bound; there is no source notification-timestamp exception.
-Before/after encrypted DB/XML backups remain archived after completion. Unknown
+Required before/after native references and unresolved DB/XML recovery remain
+protected; completed duplicate diagnostics follow the current bounded-retention
+contract rather than acquiring permanent retention from this dated pilot. Unknown
 state, changed approval/payloads, competing domains and redirects fail closed.
 
 The exact source pilot was explicitly approved, published and natively accepted

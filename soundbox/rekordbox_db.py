@@ -789,7 +789,14 @@ def _read_playlists(
                 visited.add(str(p.ID))
             elif p.Attribute == 4:  # SMART/dynamic playlist → contents are computed
                 try:                # from the tag/filter criteria, not a membership table
-                    keys = [str(s.ID) for s in _smart_playlist_contents(db, p)]
+                    contents = _smart_playlist_contents(db, p)
+                    if isinstance(contents, Query):
+                        # Membership needs only identity. Fetching complete
+                        # mapped content again for every smart list duplicates
+                        # the fresh track reader's scalar/relationship work.
+                        from pyrekordbox.db6.tables import DjmdContent
+                        contents = contents.with_entities(DjmdContent.ID).yield_per(500)
+                    keys = [str(s.ID) for s in contents]
                 except Exception as exc:  # noqa: BLE001 - add playlist identity
                     raise RuntimeError(
                         f"Could not evaluate rekordbox smart playlist "

@@ -29,7 +29,7 @@ class ExportPlaylistBaseline(unittest.TestCase):
         source = SourcePlaylist('dnb', 'native-dnb', 'uuid-dnb', 'DNB', members,
             label='GENRES / DNB', identities=tuple(map(identity, members)))
         links = {local: 1000 + i for i, local in enumerate(members[:included])}
-        device = DevicePlaylist(900, 'GENRES / DNB', tuple(links.values()))
+        device = DevicePlaylist(900, 'DNB', tuple(links.values()))
         binding = PlaylistBinding(source.key, source.native_id, source.uuid,
             device.playlist_id, device.name, tuple(links.items()), source.label, source.identities)
         return source, device, binding, links
@@ -49,7 +49,7 @@ class ExportPlaylistBaseline(unittest.TestCase):
                 self.assertEqual((row.added, row.removed, row.unmapped_source_ids), ((), (), ()))
                 self.assertEqual(len(row.retained), included)
                 self.assertEqual(len(row.source.members), total)
-                self.assertEqual(row.desired_name, 'GENRES / DNB')
+                self.assertEqual(row.desired_name, 'DNB')
 
     def test_new_rebound_native_and_actual_path_occurrences_are_not_hidden_as_old_omissions(self):
         source, device, binding, links = self.baseline()
@@ -85,16 +85,18 @@ class ExportPlaylistBaseline(unittest.TestCase):
         self.assertFalse(row.membership_safe)
         self.assertEqual(row.unexpected_device_ids, (777,))
 
-    def test_actual_label_stays_until_genuine_source_rename_or_folder_move(self):
+    def test_leaf_label_ignores_folder_moves_and_migrates_legacy_bound_prefix(self):
         source, device, binding, links = self.baseline()
-        for current in (source, replace(source, label='GENRES / DNB')):
-            row = self.compare(current, device, binding, links)
-            self.assertFalse(row.renamed); self.assertEqual(row.desired_name, device.name)
-        for name, label in (('DNB', 'SETS / DNB'), ('New DNB', 'GENRES / New DNB')):
-            row = self.compare(replace(source, name=name, label=label), device, binding, links)
-            self.assertTrue(row.renamed); self.assertEqual(row.desired_name, label)
+        for label in ('GENRES / DNB', 'SETS / DNB'):
+            row = self.compare(replace(source, label=label), device, binding, links)
+            self.assertFalse(row.renamed); self.assertEqual(row.desired_name, 'DNB')
+        row = self.compare(replace(source, name='New DNB'), device, binding, links)
+        self.assertTrue(row.renamed); self.assertEqual(row.desired_name, 'New DNB')
+        legacy_device = replace(device, name='GENRES / DNB')
+        row = self.compare(source, legacy_device, replace(binding, name=legacy_device.name), links)
+        self.assertTrue(row.renamed); self.assertEqual(row.desired_name, 'DNB')
         row = self.compare(source, replace(device, name='external rename'), binding, links)
-        self.assertTrue(row.renamed); self.assertEqual(row.desired_name, device.name)
+        self.assertTrue(row.renamed); self.assertEqual(row.desired_name, 'DNB')
 
     def test_legacy_decode_keeps_old_name_behavior_without_inventing_source_baseline(self):
         source, device, binding, links = self.baseline(2, 2)
@@ -102,7 +104,7 @@ class ExportPlaylistBaseline(unittest.TestCase):
         legacy = playlist_binding_from_dict(raw)
         self.assertEqual((legacy.source_label, legacy.source_members), ('', ()))
         row = self.compare(source, device, legacy, links)
-        self.assertTrue(row.renamed); self.assertEqual(row.desired_name, source.name)
+        self.assertFalse(row.renamed); self.assertEqual(row.desired_name, source.name)
         self.assertEqual(playlist_binding_from_dict(asdict(binding)), binding)
 
     def test_ambiguous_or_incomplete_occurrence_baselines_and_changed_playlist_uuid_refuse(self):
@@ -133,11 +135,11 @@ class ActualExportPlaylistBaseline(unittest.TestCase):
     def rows(self):
         return {local: dict(title=t.name, artist=t.artist) for local, t in self.f.library.tracks_by_id.items()}
 
-    def plan(self):
+    def plan(self, **options):
         f = self.f
         return stock_ipod.plan_stock_ipod_sync(f.library, [f.playlist], f.ipod,
             model_number='MA446', filesystem='msdos', usb_family='iPod Video',
-            identity_key=self.key, shadow_store=self.shadow, display_rows=self.rows())
+            identity_key=self.key, shadow_store=self.shadow, display_rows=self.rows(), **options)
 
     def compare(self, result):
         f = self.f; snapshot = read_stock_ipod_snapshot(f.ipod, volume_uuid='generated-volume')
@@ -148,14 +150,14 @@ class ActualExportPlaylistBaseline(unittest.TestCase):
         result = stock_ipod.commit_stock_ipod_sync(self.plan())
         self.assertIsNotNone(result.catalog_witness)
         binding, = result.catalog_witness.bindings
-        self.assertEqual((binding.name, binding.source_label), ('GENRES / DNB', 'GENRES / DNB'))
+        self.assertEqual((binding.name, binding.source_label), ('DNB', 'GENRES / DNB'))
         self.assertEqual(binding.uuid, self.f.library.source_playlist_catalog['nodes'][0]['UUID'])
         self.assertFalse(binding.has_omissions)
         self.assertFalse(self.compare(result).needs_sync)
         self.assertFalse(result.catalog_warning)
         self.assertFalse(result.catalog_notice)
 
-    def test_real_bound_folder_move_updates_only_label_without_audio_or_manual_playlist_drift(self):
+    def test_real_bound_folder_move_keeps_leaf_name_and_audio_without_manual_playlist_drift(self):
         f = self.f; first = stock_ipod.commit_stock_ipod_sync(self.plan())
         snapshot = read_stock_ipod_snapshot(f.ipod, volume_uuid='generated-volume')
         with mock.patch.object(stock_ipod, 'acquire_source', side_effect=AssertionError('Retained audio reacquired')):
@@ -164,19 +166,66 @@ class ActualExportPlaylistBaseline(unittest.TestCase):
                 display_rows=self.rows(), catalog_witness=first.catalog_witness, incremental=True)
         self.assertFalse(clean.requires_commit)
         manual = next(row for row in snapshot.playlists if row.title == 'Keep Me')
-        bound = next(row for row in snapshot.playlists if row.title == 'GENRES / DNB')
+        bound = next(row for row in snapshot.playlists if row.title == 'DNB')
         f.playlist.folder_path[:] = ['SETS']
         with mock.patch.object(stock_ipod, 'acquire_source', side_effect=AssertionError('Folder move reacquired audio')):
             changed = stock_ipod.plan_stock_ipod_catalog_update(f.library, [f.playlist], f.ipod,
                 snapshot=snapshot, model_number='MA446', filesystem='msdos', usb_family='iPod Video',
                 display_rows=self.rows(), catalog_witness=first.catalog_witness, incremental=True)
-        self.assertTrue(changed.requires_commit); self.assertEqual(changed.copies, ())
+        self.assertFalse(changed.requires_commit); self.assertEqual(changed.copies, ())
         second = stock_ipod.commit_stock_ipod_sync(changed)
         updated = read_stock_ipod_snapshot(f.ipod, volume_uuid='generated-volume')
         self.assertEqual(next(row for row in updated.playlists if row.playlist_id == bound.playlist_id).title,
-                         'SETS / DNB')
+                         'DNB')
         self.assertEqual(next(row for row in updated.playlists if row.playlist_id == manual.playlist_id), manual)
         self.assertFalse(self.compare(second).needs_sync)
+
+    def test_legacy_folder_name_migrates_exact_bound_id_without_audio_reads(self):
+        first = stock_ipod.commit_stock_ipod_sync(self.plan(playlist_names=('GENRES / DNB',)))
+        binding, = first.catalog_witness.bindings
+        status = stock_ipod.inspect_stock_ipod_sync_status(self.f.library, self.f.ipod,
+            identity_key=self.key, model_number='MA446', serial_number='', shadow_store=self.shadow,
+            catalog_witness=first.catalog_witness)
+        self.assertEqual((status.state, status.local_changes), ('local_changes', 1))
+        before = read_stock_ipod_snapshot(self.f.ipod, volume_uuid='generated-volume')
+        manual = next(row for row in before.playlists if row.title == 'Keep Me')
+        with mock.patch.object(stock_ipod, 'acquire_source', side_effect=AssertionError('Naming acquired audio')):
+            plan = self.plan(catalog_witness=first.catalog_witness)
+        self.assertTrue(plan.requires_commit); self.assertEqual(plan.copies, ())
+        stock_ipod.commit_stock_ipod_sync(plan)
+        after = read_stock_ipod_snapshot(self.f.ipod, volume_uuid='generated-volume')
+        renamed = next(row for row in after.playlists if row.playlist_id == binding.device_playlist_id)
+        self.assertEqual(renamed.title, 'DNB')
+        self.assertEqual(next(row for row in after.playlists if row.playlist_id == manual.playlist_id), manual)
+        self.assertEqual(sum(row.title == 'DNB' for row in after.playlists), 1)
+        self.assertNotIn('GENRES / DNB', {row.title for row in after.playlists})
+
+    def test_unrelated_leaf_collision_does_not_borrow_or_replace_a_foreign_playlist(self):
+        from clickwheel.ipod.itunesdb_writer import PlaylistInfo
+        from tests.support.ipod import rewrite_catalog
+        first = stock_ipod.commit_stock_ipod_sync(self.plan(playlist_names=('GENRES / DNB',)))
+        def add(_tracks, playlists):
+            identity = max(row.playlist_id or 0 for row in playlists) + 1
+            playlists.append(PlaylistInfo('DNB', [], playlist_id=identity))
+        rewrite_catalog(self.f.ipod, add)
+        database = self.f.ipod / 'iPod_Control/iTunes/iTunesDB'; before = database.read_bytes()
+        with mock.patch.object(stock_ipod, 'acquire_source', side_effect=AssertionError('Collision read audio')), \
+                self.assertRaisesRegex(stock_ipod.StockIpodError, 'already uses the name'):
+            self.plan(catalog_witness=first.catalog_witness)
+        self.assertEqual(database.read_bytes(), before)
+
+    def test_outer_whitespace_uses_same_leaf_rule_for_export_and_later_comparison(self):
+        self.f.playlist.name = ' DNB '
+        result = stock_ipod.commit_stock_ipod_sync(self.plan())
+        self.assertEqual(result.catalog_witness.bindings[0].name, 'DNB')
+        self.assertFalse(self.compare(result).needs_sync)
+
+    def test_duplicate_leaf_selection_across_folders_is_rejected_before_audio(self):
+        other = replace(self.f.playlist, name=' dnb ', folder_path=['OTHER'], pid='different')
+        with mock.patch.object(stock_ipod, 'acquire_source', side_effect=AssertionError('Duplicate selection read audio')), \
+                self.assertRaisesRegex(stock_ipod.StockIpodError, 'must be unique'):
+            stock_ipod.plan_stock_ipod_sync(self.f.library, [self.f.playlist, other], self.f.ipod,
+                model_number='MA446', filesystem='msdos', usb_family='iPod Video')
 
     def test_real_omission_then_same_path_supported_audio_is_reevaluated_by_explicit_full_plan(self):
         f = self.f; omitted = f.sources / 'omitted.wav'; fixture._wave24(omitted, 441)

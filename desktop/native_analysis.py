@@ -241,6 +241,7 @@ class NativeAnalysisController(QObject):
         self.schedule()
 
     def pump(self):
+        from .tag_controller import device_blocks_library_work
         w=self.window
         if self.closing or w._shutting_down or not self.pending:return
         try:validate(self.pending)
@@ -263,7 +264,7 @@ class NativeAnalysisController(QObject):
                 return
             self.status('Analysis needs attention — '+self.pending[0]['error']);return
         if (self.tags.source_job_owned or w._refresh_worker is not None or w._state_maintenance
-                or w._device_operation_owned()):
+                or device_blocks_library_work(w)):
             self.timer.start();return
         reconcile_only=selected in blocked
         if not reconcile_only and (getattr(w,'_analysis_worker',None) is not None or priority):

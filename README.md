@@ -14,5 +14,7 @@ Playback/export preserves source audio. Native edits, conversion and deletion re
 Curated AppData, recovery and private reference fixtures are protected; never clear them for cleanup.
 
 Use Python 3.14, Apple Silicon/macOS 14+, the pinned requirements and the local `.venv`.
-Run `./check.sh --render` directly for the complete release gate; build with `./build_app.sh`.
+Choose areas/depth with `./check.sh --list-suites` and `--suite AREA... --level LEVEL`.
+Exact small fixes: `./check.sh --focus tests/test_name.py` plus relevant static/integration checks.
+Before commit/push: `./check.sh --render`; build with `./build_app.sh`.
 Building does not authorize installation, real-app input or source/device writes.

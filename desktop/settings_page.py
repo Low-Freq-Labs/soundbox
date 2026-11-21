@@ -637,6 +637,10 @@ class SettingsPageMixin:
                 or getattr(getattr(self,'_state_committer',None),'pending',False)
                 or getattr(getattr(self,'prep_controller',None),'admission_pending',False)
                 or getattr(getattr(self,'prep_controller',None),'admission_error','')
+                or any(getattr(getattr(self,name,None),'admission_pending',False)
+                       for name in ('playlist_controller','tag_definition_controller'))
+                or getattr(getattr(getattr(self,'tag_controller',None),'tag_state_lane',None),'pending',False)
+                or getattr(getattr(getattr(self,'tag_controller',None),'tag_state_lane',None),'error','')
                 or self._device_coordinator.active is not None):
             self._flash_status("Wait for the current operation before backup/restore", 8)
             return False

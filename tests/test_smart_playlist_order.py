@@ -221,6 +221,8 @@ class SmartPlaylistTagHandoff(unittest.TestCase):
         w._browser_seat=lambda:MainWindow._browser_seat(w)
         w._restore_browser_seat=lambda seat:MainWindow._restore_browser_seat(w,seat)
         w._selected_ids=lambda:[w.model._rows[i.row()]['id'] for i in w.table.selectionModel().selectedRows()]
+        w._browser_selection_diagnostic=lambda:MainWindow._browser_selection_diagnostic(w)
+        w._log_browser_selection=lambda action,**kwargs:MainWindow._log_browser_selection(w,action,**kwargs)
         w.saves=[];w.save_ok=True
         def save():w.saves.append(deepcopy(w.settings));return w.save_ok
         w._save_state=save

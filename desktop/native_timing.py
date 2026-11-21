@@ -6,7 +6,8 @@ import logging
 import re
 import time
 
-log=logging.getLogger(__name__)
+# Production installs handlers on ``soundbox``; timings must inherit that route.
+log=logging.getLogger('soundbox.native_timing')
 _ACTIVE=ContextVar('soundbox_native_command_timing',default=None)
 _TOKENS=count(1)
 
@@ -78,5 +79,22 @@ class CommandTiming:
                 log.info('Native command acknowledgement: kind=%s token=%s gui_wait_seconds=%s '
                          'callback_seconds=%.3f admitted_seconds=%.3f outcome=%s',
                          self.kind,self.token,gui_wait,finished-started,finished-self.admitted_at,outcome)
+            finally:
+                _ACTIVE.reset(token)
+
+    def publication(self,callback):
+        """Time final durable GUI publication independently of dispatch ACK."""
+        started=now();token=_ACTIVE.set(self);outcome='returned'
+        try:
+            return callback()
+        except BaseException:
+            outcome='raised';raise
+        finally:
+            finished=now()
+            try:
+                wait=('unknown' if self.finished_at is None else f'{started-self.finished_at:.3f}')
+                log.info('Native command publication: kind=%s token=%s post_worker_seconds=%s '
+                         'publication_seconds=%.3f admitted_seconds=%.3f outcome=%s',
+                         self.kind,self.token,wait,finished-started,finished-self.admitted_at,outcome)
             finally:
                 _ACTIVE.reset(token)

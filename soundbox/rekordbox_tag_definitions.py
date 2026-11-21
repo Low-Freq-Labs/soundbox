@@ -17,15 +17,20 @@ import secrets
 import sqlite3
 import tempfile
 from uuid import UUID, uuid4
+from typing import TYPE_CHECKING
 from xml.etree import ElementTree as ET
 
 from .rekordbox_cue_store import CueWriteAuthority, PilotCueStore
 from .rekordbox_tags import NATIVE_VERSION, _file_sha, _installed_version, _schema
 from .rekordbox_write import (
     ConflictError, RecoveryRequired, WriteProofError, _connect as _connect_copy, _digest, _identity,
-    _inactive_journal_proof, _json, _quote, _regular, assert_rekordbox_closed,
+    _inactive_journal_proof, _json, _quote, _regular, _state, assert_rekordbox_closed, encrypted_backup,
 )
 from .state_io import atomic_bytes, copy_state, sync_dir
+
+if TYPE_CHECKING:
+    from .rekordbox_tag_order import TagOrderAuthority
+    from .rekordbox_tag_rename import TagRenameAuthority
 
 FORMAT = 'soundbox-native-tag-definitions-v1'
 AUTHORITY_FORMAT = 'soundbox-tag-definition-authority-v1'
@@ -550,11 +555,11 @@ class _Lease(PilotCueStore):
 
 
 class TagDefinitionStore:
-    authority_type: type[TagDefinitionAuthority] | type[TagDeletionAuthority] = TagDefinitionAuthority
+    authority_type: type[TagDefinitionAuthority] | type[TagDeletionAuthority] | type[TagOrderAuthority] | type[TagRenameAuthority] = TagDefinitionAuthority
     record_format = FORMAT
     receipt_directory = 'tag-definition-receipts'
 
-    def __init__(self, authority: TagDefinitionAuthority | TagDeletionAuthority, recovery_root: Path):
+    def __init__(self, authority: TagDefinitionAuthority | TagDeletionAuthority | TagOrderAuthority | TagRenameAuthority, recovery_root: Path):
         if type(authority) is not self.authority_type:
             raise WriteProofError('This tag-definition operation needs its own authority')
         self.authority = authority
@@ -766,10 +771,26 @@ class TagDefinitionStore:
             try:return self._recover(conn)
             finally:conn.close()
 
-    def apply(self, request):
+    def apply(self, request, *, expected_state=None):
         request = deepcopy(request);self._scope(request)
+        if expected_state is not None and not isinstance(expected_state,dict):
+            raise WriteProofError('A reviewed tag operation requires its complete logical baseline')
+        expected_state=deepcopy(expected_state)
         protocol = self._protocol()
         with self.lease._lock():
+            if expected_state is not None:
+                # A source pilot may not recover/replay a different operation
+                # before proving its complete approved BEFORE under this lease.
+                if self.journal.exists() or self.journal.is_symlink():
+                    raise RecoveryRequired('Reviewed tag operation requires inactive source recovery')
+                if self._receipt_path(request['operation_id']).exists():
+                    raise RecoveryRequired('Reviewed tag operation already has a receipt; inspect before replay')
+                with encrypted_backup(self.database) as before:
+                    captured=_connect_copy(before,readonly=True)
+                    try:
+                        if _state(captured)!=expected_state:
+                            raise ConflictError('The reviewed complete tag baseline changed before publication')
+                    finally:captured.close()
             conn = self.lease._connect()
             try:
                 self._recover(conn)

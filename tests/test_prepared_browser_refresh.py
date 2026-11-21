@@ -7,6 +7,8 @@ from unittest import mock
 from PySide6.QtCore import Qt
 
 from desktop import prepared_browser
+from desktop.model import COLUMNS, row_display_value
+from desktop.trees import ARTIST_ROLE
 from soundbox import metadata, metadata_provenance, shared_imports
 from soundbox.library import Library, LibraryTag, Track
 from tests import test_prepared_native_publication as fixtures
@@ -87,6 +89,78 @@ class PreparedBrowserRefresh(unittest.TestCase):
         self.assertTrue(any('Smart' in item.text(0) and '(3)' in item.text(0)
             for item in w.tree.findItems('',Qt.MatchContains|Qt.MatchRecursive)))
 
+    def assert_complete_artists(self):
+        w=self.window
+        complete=w._artist_rows(w._visible_collection_tracks())
+        expected={row['id']:prepared_browser.clean_row(row) for row in complete}
+        self.assertEqual({identity:prepared_browser.clean_row(row)
+                          for identity,row in w._artists_rows.items()},expected)
+        self.assertEqual({row['id'] for rows in w._artist_children.values() for row in rows},set(expected))
+        actual_order=[]
+        for at in range(w.artists_view.topLevelItemCount()):
+            item=w.artists_view.topLevelItem(at);name=item.data(0,ARTIST_ROLE)
+            rows=w._artist_children[name]
+            self.assertEqual(item.text(0),f'{name}  ({len(rows)})')
+            actual_order.extend(row['id'] for row in rows)
+        self.assertEqual(actual_order,[row['id'] for row in complete])
+        for identity,row in expected.items():
+            item=w._artists_browser._tracks[identity]
+            self.assertEqual([item.text(at) for at in range(len(COLUMNS))],
+                             [str(row_display_value(row,key) or '') for key,_label,_hidden in COLUMNS])
+
+    def test_tag_membership_patches_only_changed_artist_row_while_smart_tree_updates(self):
+        w=self.window
+        owners=dict(w._artists_browser._tracks)
+        fresh=replace(w.lib,tracks_by_id={**w.lib.tracks_by_id,
+            '2':replace(w.lib.tracks_by_id['2'],source_tag_ids=['42'])},
+            source_tags=[LibraryTag('42','Fresh tag')],
+            playlists=[replace(w.lib.playlists[0],keys=['1','2'])])
+        with (mock.patch.object(w,'_artist_rows',wraps=w._artist_rows) as rows,
+              mock.patch.object(w._artists_browser,'replace',side_effect=AssertionError('Full Artists rebuild'))):
+            self.publish(fresh,())
+        self.assertEqual([track.track_id for call in rows.call_args_list for track in call.args[0]],['2'])
+        self.assertEqual(w._artists_rows['2']['myTags'],'Fresh tag')
+        self.assertEqual(w._artists_browser._tracks,owners)
+        self.assertEqual(w.lib.playlists[0].keys,['1','2'])
+        self.assertTrue(any('Smart' in item.text(0) and '(2)' in item.text(0)
+            for item in w.tree.findItems('',Qt.MatchContains|Qt.MatchRecursive)))
+        self.assert_complete_artists()
+
+    def test_tag_label_order_and_removal_keep_every_rendered_artist_cell_fresh(self):
+        w=self.window
+        w.lib.source_tags=[LibraryTag('a','Alpha'),LibraryTag('b','Beta')]
+        w.lib.tracks_by_id['1'].source_tag_ids=['a','b']
+        w.lib.tracks_by_id['2'].source_tag_ids=['a']
+        w._apply_loaded_library();w._show_collection()
+        for tags,expected in (([LibraryTag('b','Beta2'),LibraryTag('a','Alpha2')],
+                               {'1':'Beta2, Alpha2','2':'Alpha2'}),([],{'1':'','2':''})):
+            with self.subTest(tags=tags):
+                fresh=replace(w.lib,source_tags=tags)
+                with (mock.patch.object(w,'_artist_rows',wraps=w._artist_rows) as rows,
+                      mock.patch.object(w._artists_browser,'replace',side_effect=AssertionError('Full Artists rebuild'))):
+                    self.publish(fresh,())
+                self.assertEqual({track.track_id for call in rows.call_args_list for track in call.args[0]}, {'1','2'})
+                self.assertEqual({key:w._artists_rows[key]['myTags'] for key in expected},expected)
+                self.assert_complete_artists()
+
+    def test_detached_artist_tag_baseline_catches_in_place_assignment_and_empty_label_override(self):
+        w=self.window
+        w.settings['track_info']={'3':{'myTags':'Saved info'}}
+        w.lib.source_tags=[LibraryTag('42','Fresh tag')]
+        w._invalidate_rows();w._apply_loaded_library();w._show_collection()
+        self.assertEqual(w._artists_rows['3']['myTags'],'Saved info')
+        # Already-mutated current Tracks cannot substitute for the painted baseline.
+        w.lib.tracks_by_id['2'].source_tag_ids.append('42')
+        fresh=replace(w.lib,tracks_by_id={**w.lib.tracks_by_id,
+            '3':replace(w.lib.tracks_by_id['3'],source_tag_ids=['unknown'])})
+        with (mock.patch.object(w,'_artist_rows',wraps=w._artist_rows) as rows,
+              mock.patch.object(w._artists_browser,'replace',side_effect=AssertionError('Full Artists rebuild'))):
+            self.publish(fresh,())
+        self.assertEqual({track.track_id for call in rows.call_args_list for track in call.args[0]},{'2','3'})
+        self.assertEqual(w._artists_rows['2']['myTags'],'Fresh tag')
+        self.assertEqual(w._artists_rows['3']['myTags'],'')
+        self.assert_complete_artists()
+
     def test_sparse_collection_preserves_unicode_raw_sort_ties(self):
         w=self.window
         w.lib.tracks_by_id['1']=replace(w.lib.tracks_by_id['1'],name='ß')
@@ -140,6 +214,8 @@ class PreparedBrowserRefresh(unittest.TestCase):
         self.assertEqual({row['id'] for row in w.model._rows},{'2','3'})
         self.assertEqual({call.args[0].track_id for call in rows.call_args_list},{'2','3'})
         self.assertEqual(next(row for row in w.model._rows if row['id']=='2')['myTags'],'Fresh tag')
+        self.assertEqual(set(w._artists_rows),{'2','3'})
+        self.assert_complete_artists()
 
     def test_other_domain_scalar_invalidation_refreshes_input_inventory(self):
         w=self.window

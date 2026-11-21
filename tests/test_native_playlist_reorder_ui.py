@@ -8,7 +8,7 @@ from PySide6.QtCore import QPoint,QPointF,Qt
 from PySide6.QtWidgets import QApplication,QTreeWidgetItem
 
 from desktop.trees import (UnifiedPlaylistTree,COLLECTION_ROLE,PATH_ROLE,RB_NODE_ROLE,
-    RB_NODE_KIND_ROLE,NATIVE_TREE_ROLE,PINNED_TREE_ROLE)
+    RB_NODE_KIND_ROLE,NATIVE_TREE_ROLE,PINNED_TREE_ROLE,NATIVE_BINDING_ROLE)
 
 
 class NativeReorderGestures(unittest.TestCase):
@@ -77,6 +77,64 @@ class NativeReorderGestures(unittest.TestCase):
         self.assertEqual(self.tree._native_drop_destination(point,'12')[:2],('11',False))
         outside=self.tree.visualItemRect(self.playlist).center()
         self.assertIsNone(self.tree._native_drop_destination(outside,'12'))
+
+    def smart_drag(self):
+        self.playlist.setData(0,RB_NODE_KIND_ROLE,4)
+        self.playlist.setData(0,NATIVE_BINDING_ROLE,dict(source='/synthetic/master.db',
+            library_id='synthetic',id='30',uuid='00000000-0000-4000-8000-000000000030',alias=None))
+        return self.tree.mimeData([self.playlist])
+
+    def center_event(self,item,mime):
+        event=self.event(item,mime)
+        point=self.tree.visualItemRect(item).center()
+        event.position=lambda:QPointF(point)
+        return event
+
+    def test_smart_folder_center_drop_appends_to_empty_and_nonempty_folders_without_qt_move(self):
+        moved=[];ordered=[]
+        self.tree.native_moved.connect(lambda *args:moved.append(args))
+        self.tree.native_reordered.connect(lambda *args:ordered.append(args))
+        for occupied in (False,True):
+            with self.subTest(occupied=occupied):
+                if occupied:
+                    child=QTreeWidgetItem(['Existing']);child.setData(0,NATIVE_TREE_ROLE,True)
+                    child.setData(0,RB_NODE_ROLE,'21');child.setData(0,RB_NODE_KIND_ROLE,0)
+                    self.folder.addChild(child)
+                event=self.center_event(self.folder,self.smart_drag())
+                self.tree.dragMoveEvent(event)
+                self.assertEqual(self.tree._hover.data(RB_NODE_ROLE),'20')
+                self.assertIsNone(self.tree._insert_y)
+                self.tree.dropEvent(event)
+                self.assertIsNone(self.playlist.parent())
+                event.acceptProposedAction.assert_called()
+        self.assertEqual(moved,[('30','20'),('30','20')]);self.assertEqual(ordered,[])
+
+    def test_nested_smart_drop_in_root_whitespace_appends_without_retargeting_folder(self):
+        self.tree.takeTopLevelItem(self.tree.indexOfTopLevelItem(self.playlist))
+        self.folder.addChild(self.playlist);self.folder.setExpanded(True);self.app.processEvents()
+        mime=self.smart_drag();event=self.center_event(self.playlist,mime)
+        event.position=lambda:QPointF(50,self.tree.viewport().height()-2)
+        moved=[];self.tree.native_moved.connect(lambda *args:moved.append(args))
+        self.tree.dragMoveEvent(event);self.assertIsNotNone(self.tree._insert_y)
+        self.tree.dropEvent(event)
+        self.assertEqual(moved,[('30','root')])
+        self.assertIs(self.playlist.parent(),self.folder)
+
+    def test_smart_move_stale_typed_source_and_ordinary_reparent_are_not_admitted(self):
+        mime=self.smart_drag()
+        binding=dict(self.playlist.data(0,NATIVE_BINDING_ROLE))
+        binding['uuid']='00000000-0000-4000-8000-000000000099'
+        self.playlist.setData(0,NATIVE_BINDING_ROLE,binding)
+        moved=[];self.tree.native_moved.connect(lambda *args:moved.append(args))
+        event=self.center_event(self.folder,mime);self.tree.dropEvent(event)
+        self.assertEqual(moved,[]);event.ignore.assert_called_once()
+        self.playlist.setData(0,RB_NODE_KIND_ROLE,0)
+        self.tree.takeTopLevelItem(self.tree.indexOfTopLevelItem(self.playlist))
+        self.folder.addChild(self.playlist);self.folder.setExpanded(True);self.app.processEvents()
+        outside=self.center_event(self.first,self.tree.mimeData([self.playlist]))
+        self.tree.dropEvent(outside)
+        self.assertEqual(moved,[]);self.assertIs(self.playlist.parent(),self.folder)
+        outside.ignore.assert_called_once()
 
 
 class PlaylistBatchFIFO(unittest.TestCase):

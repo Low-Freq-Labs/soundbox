@@ -35,7 +35,7 @@ def playlist_tree(lib: Library) -> dict:
             for row in sorted(children.get(parent,[]),key=lambda r:r['Seq']):
                 if row['ID'] in seen:raise ValueError('Native playlist folder cycle')
                 if row['Attribute']==1:
-                    out.append(dict(name=row['Name'],type='folder',pid=row['ID'],
+                    out.append(dict(name=row['Name'],type='folder',pid=row['ID'],attribute=row['Attribute'],
                                     children=walk_native(row['ID'],path+[row['Name']],seen|{row['ID']})))
                 elif row['ID'] in visible:
                     pl=visible[row['ID']]
@@ -293,7 +293,15 @@ def device_drift(
     m = captured_manifest[0] if captured_manifest is not None else manifest_mod.load(target_path)
     if not m.get("playlists"):
         return None
-    return manifest_mod.diff(m, lib, extra)
+    drift = manifest_mod.diff(m, lib, extra)
+    from .playlist_retirement import legacy_flat_playlists
+    wanted = manifest_mod.managed_current_playlists(m, lib, extra)
+    affected = {key for key, *_ in drift.renamed + drift.moved + drift.changed + drift.removed}
+    for playlist in wanted:
+        key = manifest_mod.playlist_key(playlist)
+        if key not in affected and key in legacy_flat_playlists(m, [playlist]):
+            drift.changed.append((key, playlist.name))
+    return drift
 
 
 def resync_device(

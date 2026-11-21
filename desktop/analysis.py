@@ -262,12 +262,13 @@ class AnalysisMixin:
         self._start_next_analysis()
 
     def _start_next_analysis(self):
+        from .tag_controller import device_blocks_library_work
         if (self._shutting_down or self._analysis_owner.stopping
                 or self._analysis_worker is not None or not self._analysis_queue):
             return
         source_busy=getattr(self,'_analysis_source_busy',lambda:self.tag_controller.owned)
         if (source_busy() or self._refresh_worker is not None
-                or self._device_operation_owned()):
+                or device_blocks_library_work(self)):
             self._schedule_next_analysis(500)
             return
         while self._analysis_queue:

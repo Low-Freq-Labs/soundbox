@@ -87,7 +87,7 @@ class SharedImportController(QObject):
         Explicitly injected/replaced loaders retain their source-path API.
         """
         if self._default_loader and self.loader is self._initial_loader:
-            return rekordbox_db.load_metadata_readback(previous)
+            return self.tags.readback_library(previous)
         return self.loader(previous.source)
 
     def _registration(self, lib):

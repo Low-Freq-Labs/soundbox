@@ -77,7 +77,8 @@ QPushButton#AutoplayDown[active="true"] {{
 }}
 #Subtitle, #Hint {{ color: {TEXT_DIM}; }}
 #Sidebar {{ background: {PANEL}; }}
-#VDivider {{ background: {BORDER}; }}
+QSplitter#BrowserSplit::handle:horizontal {{ background: {BORDER}; width: 1px;
+    border: none; image: none; }}
 #SectionHeader {{ background: {PANEL2}; border-bottom: 1px solid {BORDER}; }}
 #SectionHeaderTop {{ background: {PANEL2}; border-top: 1px solid {BORDER};
                      border-bottom: 1px solid {BORDER}; }}
@@ -340,8 +341,6 @@ QToolButton#MyTagsButton::menu-indicator {{ image: none; width: 0; height: 0; }}
 QToolButton#MyTagsButton:hover {{ border-color: {PURPLE_LIGHT}; color: {TEXT_HI}; }}
 QToolButton#MyTagsButton:disabled {{ color: {TEXT_DIM}; }}
 #MyTagsContent {{ background: {PANEL}; }}
-QPushButton#MyTagsDelete {{ background: transparent; border: none; color: {TEXT_DIM}; padding: 0; }}
-QPushButton#MyTagsDelete:hover {{ color: {TEXT_HI}; }}
 QCheckBox#MyTagCheck {{ background: transparent; }}
 #MyTagsSummary {{ color: {TEXT_DIM}; font-size: 11px; }}
 QPushButton#MyTagsCreate {{ background: {BG}; border: 1px solid {BORDER};

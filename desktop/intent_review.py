@@ -24,8 +24,13 @@ def _epoch(window):
 
 def _idle(controller):
     window=controller.window
+    owned=controller.tags.owned
+    ack=getattr(controller,'ack',None)
+    if ack is not None and ack.error:
+        only=getattr(controller.tags,'source_ack_only',None)
+        if callable(only) and only(ack.token):owned=False
     return (not controller.closing and not window._shutting_down
-            and not window._state_maintenance and not controller.tags.owned
+            and not window._state_maintenance and not owned
             and not getattr(window,'_state_publication',False)
             and getattr(window,'_refresh_worker',None) is None
             and bool(controller.pending) and not controller.queue_error())

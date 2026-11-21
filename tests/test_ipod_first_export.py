@@ -51,7 +51,7 @@ class IpodFirstExport(unittest.TestCase):
             self.assertFalse(w._stock_has_sync_source(self.case.device))
         self.assertEqual(w.device_sync_btn.text(), 'Export')
         self.assertTrue(w.device_sync_btn.isEnabled())
-        self.assertEqual(w.stock_ipod_pages.sync_playlist_button.text(), 'Export playlists…')
+        self.assertEqual(w.stock_ipod_pages.sync_playlist_button.text(), 'Export')
         w.device_sync_btn.click()
         w.stock_ipod_pages.sync_playlist_button.click()
         self.assertEqual(self.chooser.call_args_list, [mock.call(self.case.device)] * 2)
@@ -86,12 +86,14 @@ class IpodFirstExport(unittest.TestCase):
         with mock.patch('desktop.stock_catalog_sync.request_device_sync') as sync:
             w._update_device_action_state()
             self.assertEqual(w.device_sync_btn.text(), 'Sync')
+            self.assertEqual(w.stock_ipod_pages.sync_playlist_button.text(), 'Sync')
             self.assertTrue(w.device_sync_btn.isEnabled())
             w.device_sync_btn.click()
-        sync.assert_called_once_with(w, self.case.device)
+            w.stock_ipod_pages.sync_playlist_button.click()
+        self.assertEqual(sync.call_args_list, [mock.call(w, self.case.device)] * 2)
         self.chooser.assert_not_called()
 
-    def test_clean_bound_playlist_offers_export_and_keeps_explicit_playlist_sync(self):
+    def test_clean_bound_playlist_offers_same_export_in_both_positions(self):
         w = self.w
         witness = self.witness()
         w._stock_catalog_witness_cache[self.case.device] = witness
@@ -103,11 +105,12 @@ class IpodFirstExport(unittest.TestCase):
             w._update_device_action_state()
             self.assertEqual(w.device_sync_btn.text(), 'Export')
             self.assertTrue(w.device_sync_btn.isEnabled())
-            self.assertEqual(w.stock_ipod_pages.sync_playlist_button.text(), 'Sync playlist…')
+            self.assertEqual(w.stock_ipod_pages.sync_playlist_button.text(), 'Export')
             self.assertTrue(w.stock_ipod_pages.sync_playlist_button.isEnabled())
             w.device_sync_btn.click()
+            w.stock_ipod_pages.sync_playlist_button.click()
         sync.assert_not_called()
-        self.chooser.assert_called_once_with(self.case.device)
+        self.assertEqual(self.chooser.call_args_list, [mock.call(self.case.device)] * 2)
         self.case.plan_stock.assert_not_called()
         self.case.commit_stock.assert_not_called()
         self.assertIs(w._stock_catalog_witness_cache[self.case.device], witness)

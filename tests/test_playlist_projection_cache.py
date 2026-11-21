@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import unittest
 from unittest import mock
 
-from desktop.rekordbox_playlists import NativePlaylistsMixin
+from desktop.rekordbox_playlists import NativePlaylistsMixin,PlaylistEditController
 from soundbox import playlist_presentation,rekordbox_playlist_plan as planner
 from soundbox.library import Library,Playlist,Track
 from soundbox.rekordbox_playlist_store import request_for,validate_request
@@ -26,7 +26,9 @@ class ProjectionCache(unittest.TestCase):
             '/synthetic/master.db',source_kind='rekordbox-db',source_library_id='fixture',source_playlist_catalog=catalog)
         request=request_for(catalog,'rename',identity='1000',name='Pending')
         jobs=[dict(source=str(self.host.lib.source),library_id='fixture',request=request,error='',retry=False)]
-        self.host.playlist_controller=SimpleNamespace(pending=jobs,queue_error=lambda:'')
+        controller=SimpleNamespace(window=self.host,pending=jobs,queue_error=lambda:'')
+        controller.presentation_tag_inputs=PlaylistEditController.presentation_tag_inputs.__get__(controller)
+        self.host.playlist_controller=controller
         self.host.shared_import_controller=SimpleNamespace(pending=[],queue_error=lambda:'')
 
     def test_repeated_pending_reads_project_once_without_touching_source_rows(self):

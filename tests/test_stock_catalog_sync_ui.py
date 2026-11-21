@@ -2,6 +2,7 @@
 from dataclasses import replace
 from io import BytesIO
 import threading
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -244,23 +245,62 @@ class StockCatalogSyncUi(unittest.TestCase):
         self.assertIsNone(w._device_coordinator.active)
         self.assertEqual(self.case.seat(),before)
 
-    def test_source_membership_metadata_mount_and_format_changes_after_plan_refuse_commit(self):
+    def test_source_physical_identity_restore_mount_and_format_changes_after_plan_refuse_commit(self):
         w=self.window
-        for change in ('membership','metadata','source','mount','format'):
+        for change in ('source','mount','format','playlist UUID','track UUID','native ID',
+                       'path','native path','size','duration','source inventory','repository'):
             with self.subTest(change=change):
                 old_library=w.lib;old_snapshot=self.case.snapshot
+                old_repository=w._state_repository
                 old_keys=list(w.lib.playlists[0].keys);old_token=w._device_mount_tokens[self.case.device]
                 self.case.request();worker=w._stock_plan_worker;self.assertTrue(worker.wait(5000))
-                if change=='membership':w.lib.playlists[0].keys.reverse()
-                elif change=='metadata':w.settings['track_info']={'1':{'album':'Newer visible album'}}
-                elif change=='source':w.lib=replace(w.lib,source='/synthetic/replacement.db')
+                if change=='source':w.lib=replace(w.lib,source='/synthetic/replacement.db')
                 elif change=='mount':w._device_mount_tokens[self.case.device]+=1
-                else:w._stock_view_cache[self.case.device]=(replace(old_snapshot,stock_format=None),None)
+                elif change=='format':w._stock_view_cache[self.case.device]=(replace(old_snapshot,stock_format=None),None)
+                elif change=='playlist UUID':
+                    w.lib=replace(w.lib,source_playlist_catalog={**w.lib.source_playlist_catalog,
+                        'nodes':[{**node,'UUID':'replaced-playlist'} for node in w.lib.source_playlist_catalog['nodes']]})
+                elif change=='repository':
+                    w._state_repository=SimpleNamespace(generation=0,area=SimpleNamespace(generation=0))
+                elif change=='source inventory':
+                    w.lib=replace(w.lib,tracks_by_id={**w.lib.tracks_by_id,
+                        'third':replace(w.lib.tracks_by_id['1'],track_id='third',location_uri='file:///synthetic/third.wav')})
+                else:
+                    fields={'track UUID':{'source_uuid':'replaced-track'},'native ID':{'source_native_id':'replaced-native'},
+                        'path':{'location_uri':'file:///synthetic/moved.wav'},'native path':{'source_native_path':'/synthetic/native.wav'},
+                        'size':{'size':w.lib.tracks_by_id['1'].size+1},
+                        'duration':{'total_time':w.lib.tracks_by_id['1'].total_time+1}}[change]
+                    w.lib=replace(w.lib,tracks_by_id={**w.lib.tracks_by_id,'1':replace(w.lib.tracks_by_id['1'],**fields)})
                 self.case.drain();self.case.commit_stock.assert_not_called()
                 w.lib=old_library;w.lib.playlists[0].keys=old_keys
-                w.settings.pop('track_info',None);w._device_mount_tokens[self.case.device]=old_token
+                w._state_repository=old_repository;w._device_mount_tokens[self.case.device]=old_token
                 w._stock_view_cache[self.case.device]=(old_snapshot,None)
                 self.case.plan_stock.reset_mock();self.case.commit_stock.reset_mock()
+
+    def test_later_metadata_rename_and_membership_keep_captured_catalog_inputs(self):
+        w = self.window
+        original = list(w.lib.playlists[0].keys)
+        previous_name = w.lib.playlists[0].name
+        previous_display = dict(w._row_for(w.lib.tracks_by_id['1']))
+        self.case.request()
+        worker = w._stock_plan_worker; self.assertTrue(worker.wait(5000))
+        captured = self.case.plan_stock.call_args.args[1][0]
+        captured_rows = self.case.plan_stock.call_args.kwargs['display_rows']
+        w.lib.playlists[0].keys.reverse()
+        w.lib.playlists[0].name = 'Renamed during Sync'
+        w.lib.playlists[0].folder_path = ['New parent']
+        w.settings['track_info'] = {'1':{'album':'Newer visible album','genre':'Later genre'}}
+        w.titles['1'] = 'Later title'; w.overrides['1'] = 'Later artist'
+        w._invalidate_rows(['1'])
+        self.case.drain()
+        self.case.commit_stock.assert_called_once_with(self.case.stock_plan)
+        self.assertEqual(captured.keys, original)
+        self.assertEqual(captured.name, previous_name)
+        for field in CATALOG_METADATA_FIELDS:
+            self.assertEqual(captured_rows['1'][field], previous_display.get(field, ''))
+        self.assertEqual(w.lib.playlists[0].keys, list(reversed(original)))
+        self.assertEqual(w.lib.playlists[0].name, 'Renamed during Sync')
+        self.assertEqual(w._row_for(w.lib.tracks_by_id['1'])['title'], 'Later title')
 
     def test_failed_fresh_noop_verification_never_saves_comparison_cache(self):
         w=self.window
@@ -385,17 +425,20 @@ class StockCatalogSyncUi(unittest.TestCase):
                 self.assertIn(phase+' fixture failure',self.case.warning.call_args.args[2])
 
     def test_export_batch_rejected_current_view_and_late_cancel_keep_their_failures(self):
-        for reason in ('metadata','cancel'):
+        for reason in ('physical identity','cancel'):
             with self.subTest(reason=reason):
+                previous=self.window.lib
                 batch=self.export_batch()
                 self.case.request();worker=self.window._stock_plan_worker;self.assertTrue(worker.wait(5000))
-                if reason=='metadata':self.window.settings['track_info']={'1':{'album':'New visible album'}}
+                if reason=='physical identity':
+                    self.window.lib=replace(previous,tracks_by_id={**previous.tracks_by_id,
+                        '1':replace(previous.tracks_by_id['1'],location_uri='file:///synthetic/replaced.wav')})
                 else:self.window._cancel_export()
                 self.case.drain()
                 self.assertNotIn('Export complete',batch['results'][0][1])
-                self.assertIn('changed' if reason=='metadata' else 'cancelled',batch['results'][0][1])
+                self.assertIn('changed' if reason=='physical identity' else 'cancelled',batch['results'][0][1])
                 self.case.commit_stock.assert_not_called()
-                self.window.settings.pop('track_info',None)
+                self.window.lib=previous
 
     def test_export_batch_retains_committed_failure_and_partial_success_details(self):
         batch=self.export_batch()

@@ -1,5 +1,6 @@
 """Worker-side stock status compares frozen musical values, never audio."""
 from dataclasses import replace
+import io
 import os
 from pathlib import Path
 import shutil
@@ -10,6 +11,7 @@ from unittest import mock
 from soundbox import stock_ipod
 from soundbox.operation_control import OperationCancelled, operation_scope
 from tests import test_export_playlist_baseline as fixture
+from tests.support.ipod import play_counts, rewrite_catalog
 
 
 class StockMetadataStatus(unittest.TestCase):
@@ -48,6 +50,124 @@ class StockMetadataStatus(unittest.TestCase):
         self.assertEqual(status.database_sha256, self.capture.database_sha256)
         self.assertEqual(status.artwork_database_sha256, '')
         self.assertEqual(status.local_changes, 0)
+
+    def test_zero_one_and_all_playback_records_are_clean_and_preserved(self):
+        from clickwheel.ipod import get_ipod_tracks, parse_itunesdb
+        count = len(get_ipod_tracks(parse_itunesdb(io.BytesIO(self.capture.database))))
+        database = self.capture.database
+        path = self.f.ipod / 'iPod_Control/iTunes/Play Counts'
+        for activity in ('zero', 'one', 'all', 'skips'):
+            with self.subTest(activity=activity):
+                rows = [(0, 0, 0, 0)] * count
+                if activity == 'one':rows[0] = (2, 0, 80, 12000)
+                if activity == 'all':rows = [(1, 0, 0, 500)] * count
+                if activity == 'skips':rows = [(0, 3, 0, 0)] * count
+                payload = play_counts(rows); path.write_bytes(payload)
+                self.capture = stock_ipod.capture_stock_ipod_native(self.f.ipod, include_artwork=True)
+                entries = self.capture.playback_entries(expected_tracks=count)
+                self.assertIsNotNone(entries)
+                self.assertEqual([(entry.play_count, entry.skip_count) for entry in entries],
+                                 [(plays, skips) for plays, skips, _rating, _resume in rows])
+                status = self.status()
+                self.assertEqual((status.state, status.local_changes), ('up_to_date', 0))
+                self.assertEqual(status.play_counts_sha256, self.capture.play_counts_sha256)
+                self.assertEqual(path.read_bytes(), payload)
+                self.assertEqual(self.capture.database, database)
+
+    def test_playback_does_not_mask_real_metadata_or_membership_edits(self):
+        path = self.f.ipod / 'iPod_Control/iTunes/Play Counts'
+        path.write_bytes(play_counts([(2, 0, 0, 0), (0, 1, 0, 0)]))
+        self.capture = stock_ipod.capture_stock_ipod_native(self.f.ipod, include_artwork=True)
+        changed = {'new': {**self.rows['new'], 'title': 'A real edit'}}
+        status = self.status(rows=changed)
+        self.assertEqual((status.state, status.local_changes), ('local_changes', 1))
+        self.f.playlist.keys.append('old')
+        status = self.status()
+        self.assertEqual((status.state, status.local_changes), ('local_changes', 1))
+
+    def test_external_playlist_song_and_cover_are_observed_without_sync_or_cache_rebase(self):
+        from soundbox.ipod_export_witness import verify_export_witness
+        witness_before = self.witness.encode()
+        shadow_before = {p: p.read_bytes() for p in self.case.shadow.root.rglob('*.json')}
+        rewrite_catalog(self.f.ipod, external=True, artwork=True)
+        self.capture = stock_ipod.capture_stock_ipod_native(self.f.ipod, include_artwork=True)
+        self.assertNotEqual(self.capture.database_sha256, self.witness.database_sha256)
+        self.assertTrue(self.capture.artwork_database)
+        status = self.status()
+        self.assertEqual((status.state, status.local_changes), ('up_to_date', 0))
+        self.assertIn('linked playlists', status.detail)
+        self.assertEqual(self.witness.encode(), witness_before)
+        self.assertEqual({p: p.read_bytes() for p in shadow_before}, shadow_before)
+        with self.assertRaisesRegex(ValueError, 'catalog changed'):
+            verify_export_witness(self.witness, self.capture.database, self.capture.artwork_database_sha256)
+
+    def test_known_device_playlist_name_order_membership_and_metadata_still_request_sync(self):
+        self.f.playlist.keys[:] = ['old', 'new']
+        self.rows['old'] = dict(id='old', title='Existing', artist='Fixture Artist',
+            album='', genre='', comments='', year=0, bpm=0, bpm_estimated=False)
+        plan = stock_ipod.plan_stock_ipod_sync(self.f.library, [self.f.playlist], self.f.ipod,
+            model_number='MA446', filesystem='msdos', usb_family='iPod Video',
+            identity_key=self.case.key, shadow_store=self.case.shadow, display_rows=self.rows)
+        self.witness = stock_ipod.commit_stock_ipod_sync(plan).catalog_witness
+        database = self.f.ipod / 'iPod_Control/iTunes/iTunesDB'; before = database.read_bytes()
+        binding, = self.witness.bindings
+        for change in ('name', 'order', 'membership', 'metadata'):
+            with self.subTest(change=change):
+                database.write_bytes(before)
+                def edit(tracks, playlists):
+                    linked = next(row for row in playlists if row.playlist_id == binding.device_playlist_id)
+                    if change == 'name':linked.name = 'Changed on the device'
+                    if change == 'order':linked.track_ids.reverse()
+                    if change == 'membership':linked.track_ids.pop()
+                    if change == 'metadata':
+                        next(row for row in tracks if row.dbid == binding.members[0][1]).title = 'Device edit'
+                rewrite_catalog(self.f.ipod, edit, external=True)
+                self.capture = stock_ipod.capture_stock_ipod_native(self.f.ipod, include_artwork=True)
+                status = self.status()
+                self.assertEqual((status.state, status.local_changes), ('local_changes', 1))
+
+    def test_external_growth_preserves_known_artwork_but_missing_or_changed_records_are_unresolved(self):
+        plan = stock_ipod.plan_stock_ipod_sync(self.f.library, [self.f.playlist], self.f.ipod,
+            model_number='MA446', filesystem='msdos', usb_family='iPod Video',
+            identity_key=self.case.key, shadow_store=self.case.shadow, display_rows=self.rows,
+            art_cache=self.f.art_cache, stock_art_cache=self.f.stock_art_cache)
+        self.witness = stock_ipod.commit_stock_ipod_sync(plan).catalog_witness
+        shadow = self.case.shadow.load(self.case.key)
+        self.assertTrue(shadow.artwork)
+        rewrite_catalog(self.f.ipod, external=True, artwork=True)
+        self.capture = stock_ipod.capture_stock_ipod_native(self.f.ipod, include_artwork=True)
+        self.assertEqual(self.status().state, 'up_to_date')
+        folder = self.f.ipod / 'iPod_Control/Artwork'
+        original = {path: path.read_bytes() for path in folder.iterdir() if path.is_file()}
+        database = folder / 'ArtworkDB'
+        thumbnail = next(folder.glob('*.ithmb'))
+        for damage in ('missing database', 'changed record', 'missing thumbnails', 'truncated thumbnails'):
+            with self.subTest(damage=damage):
+                for path, payload in original.items():path.write_bytes(payload)
+                if damage == 'missing database':database.unlink()
+                if damage == 'changed record':
+                    from soundbox.stock_artwork import parse_stock_artwork_slots
+                    image_id = int(next(iter(shadow.artwork.values()))['image_id'])
+                    raw = parse_stock_artwork_slots(original[database])[image_id].raw
+                    payload = bytearray(original[database]); offset = payload.index(raw) + 48
+                    payload[offset:offset + 4] = (int.from_bytes(raw[48:52], 'little') + 1).to_bytes(4, 'little')
+                    database.write_bytes(payload)
+                if damage == 'missing thumbnails':thumbnail.unlink()
+                if damage == 'truncated thumbnails':thumbnail.write_bytes(b'')
+                self.capture = stock_ipod.capture_stock_ipod_native(self.f.ipod, include_artwork=True)
+                self.assertEqual((self.status().state, self.status().local_changes), ('comparison_pending', 0))
+
+    def test_external_deletion_is_not_a_request_to_recreate_and_replaced_identity_is_unknown(self):
+        binding, = self.witness.bindings
+        rewrite_catalog(self.f.ipod,
+            lambda _tracks, lists: lists.__setitem__(slice(None),
+                [row for row in lists if row.playlist_id != binding.device_playlist_id]), external=True)
+        self.capture = stock_ipod.capture_stock_ipod_native(self.f.ipod, include_artwork=True)
+        self.assertEqual(self.status().state, 'up_to_date')
+        changed = bytearray(self.capture.database); changed[0x48] ^= 1
+        database = self.f.ipod / 'iPod_Control/iTunes/iTunesDB'; database.write_bytes(changed)
+        self.capture = stock_ipod.capture_stock_ipod_native(self.f.ipod, include_artwork=True)
+        self.assertEqual(self.status().state, 'comparison_pending')
 
     def test_each_saved_musical_field_marks_real_metadata_drift_without_audio_reads(self):
         for field, value in dict(title='Later title', artist='Later artist', album='Later album', genre='Later genre',
@@ -130,7 +250,8 @@ class StockMetadataStatus(unittest.TestCase):
         self.capture = stock_ipod.capture_stock_ipod_native(self.f.ipod, include_artwork=True)
         self.assertNotEqual(previous_sha, self.capture.database_sha256)
         status = self.status()
-        self.assertEqual(status.state, 'reconcile_required')
+        self.assertEqual(status.state, 'local_changes')
+        self.assertEqual(status.local_changes, 1)
         self.assertEqual(status.database_sha256, self.capture.database_sha256)
 
     def test_cancelled_observation_never_reports_success_or_mutates_the_captured_catalog(self):

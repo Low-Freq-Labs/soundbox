@@ -113,7 +113,8 @@ class PrepStateLane(QObject):
             # A detector/identity proof may bind this same job while a newer
             # gesture waits for admission. That proof owns the audio metadata;
             # the queued gesture owns only its component and operation suffix.
-            merged.update(sha256=current['sha256'],epoch=current['epoch'])
+            merged.update(sha256=current['sha256'],epoch=current['epoch'],
+                          version=current['version'],native_ready=current['native_ready'])
             if 'identity_pending' in current:merged['identity_pending']=current['identity_pending']
             else:merged.pop('identity_pending',None)
         edits.validate([{**merged,'grid':[]}]) if row['cue_only'] else edits.validate([merged])
@@ -173,7 +174,8 @@ class PrepStateLane(QObject):
             queue=self._compose(row) if row['kind']=='admit' else row['value']
             replacements={('settings',edits.KEY):queue}
             record=None
-            if row['kind']=='admit' and row['cue_only'] and not row['job']['native_ready']:
+            selected=next((job for job in queue if job['track_id']==row['tid']),None)
+            if row['kind']=='admit' and row['cue_only'] and not selected['native_ready']:
                 track=w.lib.tracks_by_id[row['tid']]
                 record=w._analysis_result(track)
                 if record:

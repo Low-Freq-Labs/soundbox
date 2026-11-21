@@ -4,7 +4,10 @@ Historical audit and dated implementation checkpoints. The original findings,
 test counts and proposed sequence below describe their stated baselines, not
 current unresolved work. Public/personal composition, owned worker retirement,
 recoverable state publication and the strict zero-skip gate subsequently shipped.
-Current behavior/release evidence is in [HANDOFF](HANDOFF.md), current measured
+Local validation now follows the named-area/depth [test workflow](test-release-gate.md);
+historical per-slice full-gate instructions below are dated strategy, not a mandate
+to rerun everything after each small fix. Current behavior/release evidence is in
+[HANDOFF](HANDOFF.md), current measured
 costs in [performance-audit](performance-audit.md), and remaining work in
 [ROADMAP](ROADMAP.md).
 

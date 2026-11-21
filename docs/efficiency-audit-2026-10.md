@@ -5,7 +5,9 @@ The build131/133 installation statements, per-zoom color policies and original
 proposed changes below belong to those checkpoints. Current installed/source
 provenance is in [HANDOFF](HANDOFF.md), player policy in [PLAYER](PLAYER.md),
 measured follow-up costs in [performance-audit](performance-audit.md), and active
-work in [ROADMAP](ROADMAP.md). These older candidates are not a current backlog.
+work in [ROADMAP](ROADMAP.md). These older candidates are not a current backlog. Local fixes follow the current
+named-area/depth [test workflow](test-release-gate.md); the historical every-slice
+full-gate advice below does not override the current pre-publication gate.
 
 Rechecked November5 against responsiveness build167/runtime `3fb0ff60…`;
 whole-app build165/runtime `7ffde716…` and build163/source `cf2ef5b` are earlier

@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+import json
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, QTimer, Signal
+from PySide6.QtCore import QAbstractTableModel, QItemSelectionModel, QMimeData, QModelIndex, QPersistentModelIndex, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QGridLayout,
     QHeaderView,
     QHBoxLayout,
@@ -27,7 +30,149 @@ if TYPE_CHECKING:
 from soundbox.manifest import composite_library_counts
 
 from .devices import human
-from .trees import BrowserDetailTree, TrackBrowserTree
+from .trees import BrowserDetailTree, TrackBrowserTree, _start_chip_drag
+from . import theme
+
+
+_ORDER_KEY = Qt.UserRole + 3
+
+
+class DevicePlaylistTree(TrackBrowserTree):
+    """Only same-view, freshly captured parent drags can request an order save."""
+    MIME = 'application/x-soundbox-device-playlist-order-v1'
+
+    def __init__(self, pages):
+        super().__init__(pages)
+        self.pages = pages
+        self._drag_origin = None
+        self._drag_seat = None
+        self._drag_active = False
+        self._insert_y = None
+        self.setDragEnabled(True)
+        self.setAcceptDrops(True)
+        self.setDragDropMode(QAbstractItemView.DragDrop)
+        self.setDefaultDropAction(Qt.MoveAction)
+        self.setDropIndicatorShown(False)
+
+    def _seat(self):
+        return (self.currentItem(), self.currentColumn(), self.selectedItems(),
+                [(self.topLevelItem(i), self.topLevelItem(i).isExpanded())
+                 for i in range(self.topLevelItemCount())], self.verticalScrollBar().value())
+
+    def _restore_seat(self, seat):
+        current, column, selected, expanded, scroll = seat
+        for item, value in expanded:
+            if item.treeWidget() is self:item.setExpanded(value)
+        if current is not None and current.treeWidget() is self:
+            self.setCurrentItem(current, column, QItemSelectionModel.NoUpdate)
+        self.clearSelection()
+        for item in selected:
+            if item.treeWidget() is self:item.setSelected(True)
+        self.verticalScrollBar().setValue(scroll)
+
+    def mousePressEvent(self, event):
+        self._drag_seat = self._seat()
+        item = self.itemAt(event.position().toPoint())
+        self._drag_origin = (QPersistentModelIndex(self.indexFromItem(item))
+            if event.button() == Qt.LeftButton and item is not None and item.parent() is None
+            and item.data(0, _ORDER_KEY) else None)
+        self._drag_position = event.position().toPoint()
+        super().mousePressEvent(event)
+        if self._container_press is None:self._drag_origin = None
+
+    def mouseMoveEvent(self, event):
+        if (self._drag_origin is not None and self._drag_origin.isValid()
+                and event.buttons() & Qt.LeftButton
+                and (event.position().toPoint() - self._drag_position).manhattanLength()
+                    >= QApplication.startDragDistance()):
+            self.startDrag(Qt.MoveAction)
+            return
+        super().mouseMoveEvent(event)
+
+    def _order_mime(self, item):
+        mime = QMimeData()
+        mime.setData(self.MIME, json.dumps(dict(revision=self.pages._sync_revision,
+            order=self.pages._managed_playlist_order(), identity=item.data(0, _ORDER_KEY))).encode())
+        return mime
+
+    def startDrag(self, _actions):
+        origin = self._drag_origin
+        self._drag_origin = None
+        self._container_press = None
+        if origin is None or not origin.isValid() or not self.pages._playlist_order_ready():return
+        item = self.itemFromIndex(QModelIndex(origin))
+        seat = self._drag_seat
+        revision = self.pages._sync_revision
+        try:
+            self._drag_active = True
+            _start_chip_drag(self, self._order_mime(item), item.text(0), Qt.MoveAction)
+        finally:
+            self._drag_active = False
+            self._insert_y = None
+            self.viewport().update()
+            if seat is not None and revision == self.pages._sync_revision:self._restore_seat(seat)
+
+    def _drag_request(self, event):
+        if (event.source() is not self or not self.pages._playlist_order_ready()
+                or not event.mimeData().hasFormat(self.MIME)):return None
+        try:
+            raw = bytes(event.mimeData().data(self.MIME))
+            if len(raw) > 64 * 1024:return None
+            captured = json.loads(raw)
+            order = self.pages._managed_playlist_order()
+            if (captured['revision'] != self.pages._sync_revision or captured['order'] != list(order)
+                    or captured['identity'] not in order):return None
+            return captured['identity'], order
+        except (ValueError, TypeError, KeyError):return None
+
+    def _destination(self, position, identity):
+        item = self.itemAt(position)
+        while item is not None and item.parent() is not None:item = item.parent()
+        if item is None:
+            items = [self.topLevelItem(i) for i in range(self.topLevelItemCount())
+                     if self.topLevelItem(i).data(0, _ORDER_KEY)]
+            if not items:return None
+            item = items[-1];after = True
+        else:
+            after = position.y() > self.visualItemRect(item).center().y()
+        anchor = item.data(0, _ORDER_KEY)
+        if not anchor or anchor == identity:return None
+        last = item
+        if after:
+            while last.isExpanded() and last.childCount():last = last.child(last.childCount() - 1)
+        return anchor, after, self.visualItemRect(last).bottom() if after else self.visualItemRect(item).top()
+
+    def dragEnterEvent(self, event):
+        event.acceptProposedAction() if self._drag_request(event) is not None else event.ignore()
+
+    def dragMoveEvent(self, event):
+        request = self._drag_request(event)
+        destination = self._destination(event.position().toPoint(), request[0]) if request else None
+        self._insert_y = destination[2] if destination else None
+        self.viewport().update()
+        event.acceptProposedAction() if destination else event.ignore()
+
+    def dragLeaveEvent(self, event):
+        self._insert_y = None;self.viewport().update();event.accept()
+
+    def dropEvent(self, event):
+        request = self._drag_request(event)
+        destination = self._destination(event.position().toPoint(), request[0]) if request else None
+        self._insert_y = None;self.viewport().update()
+        if destination is None:event.ignore();return
+        identity, previous = request;anchor, after, _y = destination
+        order = [key for key in previous if key != identity]
+        order.insert(order.index(anchor) + int(after), identity)
+        if tuple(order) == previous:event.ignore();return
+        self.pages._drop_playlist_order(tuple(order))
+        event.acceptProposedAction()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self._insert_y is not None:
+            painter = QPainter(self.viewport());painter.setPen(QColor(theme.PURPLE))
+            painter.drawLine(0, self._insert_y, self.viewport().width(), self._insert_y)
+            painter.end()
 
 
 def _duration(milliseconds: int) -> str:
@@ -36,6 +181,19 @@ def _duration(milliseconds: int) -> str:
     minutes, seconds = divmod(remainder, 60)
     return (f"{hours}:{minutes:02d}:{seconds:02d}"
             if hours else f"{minutes}:{seconds:02d}")
+
+
+def _storage_sizes(capacity: int, free: int) -> dict[str, str]:
+    """Use one decimal unit so terabyte rounding cannot hide used space."""
+    divisor, unit = 1, 'B'
+    for candidate, label in ((1_000, 'KB'), (1_000_000, 'MB'), (1_000_000_000, 'GB')):
+        if capacity >= candidate:
+            divisor, unit = candidate, label
+    total = (max(0, capacity) * 10 + divisor // 2) // divisor
+    available = (max(0, free) * 10 + divisor // 2) // divisor
+    # Balance the displayed rounded totals; the underlying byte facts stay exact.
+    values = {'Capacity': total, 'Used': max(0, total - available), 'Free': available}
+    return {key: f'{value / 10:,.1f} {unit}' for key, value in values.items()}
 
 
 def _regular_user_playlists(snapshot: StockIpodSnapshot):
@@ -266,6 +424,19 @@ class StockMusicModel(QAbstractTableModel):
     def rowCount(self, _parent=QModelIndex()):
         return len(self.tracks)
 
+    def set_playback(self, snapshot: StockIpodSnapshot) -> bool:
+        """Patch observed play/skip totals without resetting selection or scroll."""
+        rows = _composite_song_rows(snapshot, None)
+        if len(rows) != len(self.tracks) or any(
+                replace(new, play_count=old.play_count, skip_count=old.skip_count) != old
+                for old, new in zip(self.tracks, rows)):
+            return False
+        changed = [index for index, (old, new) in enumerate(zip(self.tracks, rows)) if old != new]
+        self.tracks = rows
+        if changed:
+            self.dataChanged.emit(self.index(changed[0], 5), self.index(changed[-1], 6), [Qt.DisplayRole])
+        return True
+
     def columnCount(self, _parent=QModelIndex()):
         return len(self.COLUMNS)
 
@@ -301,8 +472,7 @@ class StockIpodPages(QWidget):
     # convert it back to a Python int only in the stock-iPod engine call.
     delete_playlists_requested = Signal(object)
     playlist_order_requested = Signal(object)
-    sync_requested = Signal(object)
-    export_requested = Signal()
+    primary_action_requested = Signal()
     # Title stretches with the window; the remaining operational columns keep
     # predictable widths. Album and the internal device path intentionally stay
     # out of this view—the tooltip still exposes the path for diagnostics.
@@ -370,7 +540,7 @@ class StockIpodPages(QWidget):
         playlist_layout = QVBoxLayout(playlist_page)
         playlist_layout.setContentsMargins(0, 0, 0, 0)
         playlist_layout.setSpacing(8)
-        self.playlist_tree = TrackBrowserTree()
+        self.playlist_tree = DevicePlaylistTree(self)
         self.playlist_tree.setObjectName("StockDevicePlaylists")
         self.playlist_tree.setHeaderLabels(["Playlist / Track", "Tracks", "Type"])
         self.playlist_tree.setAlternatingRowColors(True)
@@ -388,47 +558,34 @@ class StockIpodPages(QWidget):
         self.playlist_tree.itemChanged.connect(
             self._update_delete_playlist_button)
         self.playlist_tree.currentItemChanged.connect(
-            self._update_playlist_order_buttons)
-        self.playlist_tree.currentItemChanged.connect(
             self._sync_playlist_button)
         playlist_layout.addWidget(self.playlist_tree)
         playlist_actions = QHBoxLayout()
         playlist_actions.setContentsMargins(12, 0, 12, 10)
-        self.sync_playlist_button = QPushButton("Export playlists…")
+        self.sync_playlist_button = QPushButton("Export")
         self.sync_playlist_button.setObjectName("Ghost")
         self.sync_playlist_button.setEnabled(False)
-        self.sync_playlist_button.clicked.connect(self._request_sync)
+        self.sync_playlist_button.clicked.connect(self._request_primary_action)
         playlist_actions.addWidget(self.sync_playlist_button)
         self.delete_playlist_button = QPushButton("Delete checked playlists…")
         self.delete_playlist_button.setObjectName("Ghost")
         self.delete_playlist_button.setEnabled(False)
         self.delete_playlist_button.clicked.connect(self._request_playlist_delete)
         playlist_actions.addWidget(self.delete_playlist_button)
-        self.move_playlist_up_button = QPushButton("Move up")
-        self.move_playlist_up_button.setObjectName("Ghost")
-        self.move_playlist_up_button.clicked.connect(
-            lambda: self._move_selected_playlist(-1))
-        playlist_actions.addWidget(self.move_playlist_up_button)
-        self.move_playlist_down_button = QPushButton("Move down")
-        self.move_playlist_down_button.setObjectName("Ghost")
-        self.move_playlist_down_button.clicked.connect(
-            lambda: self._move_selected_playlist(1))
-        playlist_actions.addWidget(self.move_playlist_down_button)
-        self.apply_playlist_order_button = QPushButton("Apply order…")
-        self.apply_playlist_order_button.setObjectName("Ghost")
-        self.apply_playlist_order_button.clicked.connect(
-            self._request_playlist_order)
-        playlist_actions.addWidget(self.apply_playlist_order_button)
         playlist_actions.addStretch(1)
         playlist_layout.addLayout(playlist_actions)
         self.stack.addWidget(playlist_page)
         self._playlist_delete_available = False
         self._playlist_order_available = False
+        self._pending_playlist_order = None
+        self._pending_playlist_order_token = None
+        self._order_refresh_seat = None
+        self._snapshot_scope = None
         self._committed_playlist_order: tuple[str, ...] = ()
         self._has_snapshot = False
         self._playlist_sync_available = False
-        self._playlist_sync_ids: frozenset[str] = frozenset()
         self._playlist_actions_available = True
+        self._primary_action = 'Export'
         self._playlist_actions_reason = ""
         self._playlist_write_reason = ""
         self._sync_revision = 0
@@ -486,12 +643,35 @@ class StockIpodPages(QWidget):
             "Pending local changes":str(changes),
             "Last Sync":committed_at or "Never",
         }
-        tree=self.detail_trees["SoundBox"]
+        self._update_detail_values('SoundBox', values)
+
+    def _update_detail_values(self, title, values):
+        tree=self.detail_trees[title]
         for index in range(tree.topLevelItemCount()):
             item=tree.topLevelItem(index)
             if item.text(0) in values:
                 shown=values[item.text(0)] or "Not reported"
                 if item.text(1)!=shown:item.setText(1,shown)
+
+    def set_playback_snapshot(self, snapshot: StockIpodSnapshot) -> bool:
+        """Learn device history while preserving all current interaction state."""
+        if not self._has_snapshot or not self.music_model.set_playback(snapshot):
+            return False
+        self._update_detail_values('Database', {'Playback state': snapshot.playback_status})
+        self._update_detail_values('Storage', _storage_sizes(snapshot.capacity_bytes, snapshot.free_bytes))
+        self._set_storage_tooltips(snapshot)
+        self.set_sync_status(snapshot.sync_state, snapshot.sync_detail,
+                             snapshot.sync_local_changes, snapshot.sync_committed_at)
+        return True
+
+    def _set_storage_tooltips(self, snapshot: StockIpodSnapshot):
+        exact = {'Capacity': snapshot.capacity_bytes, 'Free': snapshot.free_bytes,
+                 'Used': max(0, snapshot.capacity_bytes - snapshot.free_bytes)}
+        tree = self.detail_trees['Storage']
+        for index in range(tree.topLevelItemCount()):
+            item = tree.topLevelItem(index)
+            if item.text(0) in exact:
+                item.setToolTip(1, f'{exact[item.text(0)]:,} bytes')
 
     def set_loading(self, *, preserve_page: bool = False):
         current_page = self.stack.currentIndex()
@@ -504,7 +684,6 @@ class StockIpodPages(QWidget):
         self._music_widths_applied = False
         self._has_snapshot = False
         self._playlist_sync_available = False
-        self._playlist_sync_ids = frozenset()
         self._sync_revision += 1
         self._sync_playlist_button()
         self.music_model.set_snapshot(None)
@@ -513,7 +692,9 @@ class StockIpodPages(QWidget):
         self.delete_playlist_button.setEnabled(False)
         self._playlist_order_available = False
         self._committed_playlist_order = ()
-        self._update_playlist_order_buttons()
+        self._pending_playlist_order = None
+        self._pending_playlist_order_token = None
+        self._update_playlist_drag_state()
         self._clear_details()
         QTreeWidgetItem(self.general_tree, ["Reading iPod…", "Read-only database scan"])
         self.confirm_model_button.setVisible(False)
@@ -521,10 +702,10 @@ class StockIpodPages(QWidget):
 
     def set_error(self, message: str, *, preserve_snapshot: bool = False):
         if preserve_snapshot and self._has_snapshot:
+            self.restore_playlist_order()
             return
         self._has_snapshot = False
         self._playlist_sync_available = False
-        self._playlist_sync_ids = frozenset()
         self._sync_revision += 1
         self._sync_playlist_button()
         self.music_model.set_snapshot(None)
@@ -533,7 +714,9 @@ class StockIpodPages(QWidget):
         self.delete_playlist_button.setEnabled(False)
         self._playlist_order_available = False
         self._committed_playlist_order = ()
-        self._update_playlist_order_buttons()
+        self._pending_playlist_order = None
+        self._pending_playlist_order_token = None
+        self._update_playlist_drag_state()
         self._clear_details()
         QTreeWidgetItem(self.general_tree, ["Device details unavailable", str(message)])
         self.confirm_model_button.setVisible(False)
@@ -544,6 +727,10 @@ class StockIpodPages(QWidget):
             snapshot: StockIpodSnapshot,
             composite: CompositeDeviceData | None = None,
     ):
+        scope = str(snapshot.target), snapshot.identity_key
+        self._order_refresh_seat = (self._capture_playlist_order_seat()
+            if self._pending_playlist_order is not None and self._snapshot_scope == scope else None)
+        self._snapshot_scope = scope
         self._has_snapshot = True
         self._sync_revision += 1
         from soundbox.device_readiness import stock_write_readiness
@@ -565,7 +752,7 @@ class StockIpodPages(QWidget):
         connection_label = snapshot.protocol or "Not reported"
         if snapshot.transport_revision:
             connection_label += f" · SCSI transport {snapshot.transport_revision}"
-        used = max(0, snapshot.capacity_bytes - snapshot.free_bytes)
+        storage = _storage_sizes(snapshot.capacity_bytes, snapshot.free_bytes)
         user_playlists = _regular_user_playlists(snapshot)
         regular_count = len(user_playlists)
         smart_count = sum(1 for item in snapshot.playlists if item.kind == "Smart playlist")
@@ -592,15 +779,16 @@ class StockIpodPages(QWidget):
             ("Volume UUID", snapshot.volume_uuid),
         ))
         self._set_detail_rows("Storage", (
-            ("Capacity", human(snapshot.capacity_bytes)),
-            ("Used", human(used)),
-            ("Free", human(snapshot.free_bytes)),
+            ("Capacity", storage['Capacity']),
+            ("Used", storage['Used']),
+            ("Free", storage['Free']),
             ("Indexed media", human(snapshot.media_bytes)),
             ("Filesystem", snapshot.filesystem or "Unknown"),
             ("Volume access", "Writable" if snapshot.writable else "Read-only"),
             ("Device", snapshot.device_identifier),
             ("Mount", str(snapshot.target)),
         ))
+        self._set_storage_tooltips(snapshot)
         database_header = self.detail_trees["Database"].headerItem()
         database_header.setText(
             0, "ITUNES/ROCKBOX" if composite_counts else "ITUNES")
@@ -651,10 +839,10 @@ class StockIpodPages(QWidget):
         self._playlist_delete_available = readiness.ready
         self._playlist_sync_available = readiness.ready
         self._playlist_write_reason = readiness.reason
-        self._playlist_sync_ids = frozenset(str(row.playlist_id) for row in user_playlists)
         self.delete_playlist_button.setToolTip(readiness.reason)
         stock_counts = {str(row.playlist_id): len(row.entries)
                         for row in snapshot.playlists}
+        regular_ids = {str(row.playlist_id) for row in _regular_user_playlists(snapshot)}
         self.playlist_tree.clear()
         for playlist in playlist_rows:
             parent = QTreeWidgetItem(
@@ -667,6 +855,12 @@ class StockIpodPages(QWidget):
             parent.setData(0, Qt.UserRole, playlist.identity)
             parent.setData(0, Qt.UserRole + 1, playlist.stock_playlist_id)
             parent.setData(0, Qt.UserRole + 2, stock_counts.get(playlist.stock_playlist_id, 0))
+            order_key = (playlist.identity.removeprefix('managed:')
+                         if composite is not None and playlist.identity.startswith('managed:') else
+                         playlist.stock_playlist_id if composite is None
+                         and playlist.stock_playlist_id in regular_ids
+                         and playlist.stock_playlist_id.isdecimal() and int(playlist.stock_playlist_id) > 0 else '')
+            parent.setData(0, _ORDER_KEY, order_key)
             parent.setFlags(parent.flags() & ~Qt.ItemIsSelectable)
             if playlist.managed:
                 # Keep deletion choice independent from row focus/expansion so
@@ -676,28 +870,20 @@ class StockIpodPages(QWidget):
             else:
                 parent.setFlags(parent.flags() & ~Qt.ItemIsUserCheckable)
             for index, entry in enumerate(playlist.entries, 1):
-                QTreeWidgetItem(
+                child = QTreeWidgetItem(
                     parent,
                     [f"{index}. {entry.title}", "", entry.availability],
                 )
-        self._playlist_order_available = bool(
-            composite is not None
-            and readiness.ready
-        )
+                child.setFlags(child.flags() & ~Qt.ItemIsDragEnabled & ~Qt.ItemIsDropEnabled)
+                child.setData(0, Qt.UserRole + 4, (entry.dbid, entry.location))
+        self._playlist_order_available = readiness.ready
+        self._pending_playlist_order = None
+        self._pending_playlist_order_token = None
         self._committed_playlist_order = self._managed_playlist_order()
         self._update_delete_playlist_button()
-        self._update_playlist_order_buttons()
+        self._update_playlist_drag_state()
         self._sync_playlist_button()
-
-    def _sync_selection(self):
-        item = self._selected_playlist_item()
-        if item is None:
-            return None
-        identity = str(item.data(0, Qt.UserRole + 1) or "")
-        if (identity not in self._playlist_sync_ids
-                or not identity.isdecimal() or int(identity) <= 0):
-            return None
-        return identity, item.text(0), int(item.data(0, Qt.UserRole + 2) or 0)
+        self._apply_playlist_order_seat()
 
     def _playlist_action_ready(self):
         return bool(self._has_snapshot and self._playlist_sync_available
@@ -705,25 +891,30 @@ class StockIpodPages(QWidget):
 
     def set_playlist_actions_available(self, enabled: bool, reason: str = ""):
         """The controller gates writes without changing the verified snapshot."""
+        if self._playlist_actions_available != bool(enabled):self._sync_revision += 1
         self._playlist_actions_available = bool(enabled)
         self._playlist_actions_reason = str(reason)
         self._sync_playlist_button()
+        self._update_playlist_drag_state()
+
+    def set_primary_action(self, caption: str, enabled: bool, reason: str = ''):
+        """Mirror the controller's exact header action without a row target."""
+        if caption != self._primary_action:
+            self._primary_action = caption
+            self._sync_revision += 1
+        self.set_playlist_actions_available(enabled, reason)
 
     def _sync_playlist_button(self, *_args):
-        selected = self._sync_selection()
-        self.sync_playlist_button.setText("Sync playlist…" if selected is not None else "Export playlists…")
+        self.sync_playlist_button.setText(self._primary_action)
         self.sync_playlist_button.setEnabled(self._playlist_action_ready())
         self.sync_playlist_button.setToolTip(
-            self._playlist_actions_reason if not self._playlist_actions_available else self._playlist_write_reason)
+            self._playlist_actions_reason if not self._playlist_actions_available else
+            self._playlist_write_reason)
 
-    def _request_sync(self):
+    def _request_primary_action(self):
         if not self._playlist_action_ready():
             return
-        selected = self._sync_selection()
-        if selected is not None:
-            self.sync_requested.emit(selected)
-        else:
-            self.export_requested.emit()
+        self.primary_action_requested.emit()
 
     def _selected_playlist_item(self) -> QTreeWidgetItem | None:
         item = self.playlist_tree.currentItem()
@@ -772,69 +963,115 @@ class StockIpodPages(QWidget):
         self._emit_playlist_delete(self._checked_playlist_items())
 
     def _managed_playlist_order(self) -> tuple[str, ...]:
-        output: list[str] = []
-        for index in range(self.playlist_tree.topLevelItemCount()):
-            identity = str(
-                self.playlist_tree.topLevelItem(index).data(0, Qt.UserRole) or "")
-            if identity.startswith("managed:"):
-                output.append(identity.removeprefix("managed:"))
-        return tuple(output)
-
-    def _update_playlist_order_buttons(self, *_args):
-        item = self._selected_playlist_item()
-        identity = (
-            str(item.data(0, Qt.UserRole) or "") if item is not None else "")
-        managed = self._playlist_order_available and identity.startswith("managed:")
-        managed_items = [
-            self.playlist_tree.topLevelItem(index)
+        return tuple(str(self.playlist_tree.topLevelItem(index).data(0, _ORDER_KEY))
             for index in range(self.playlist_tree.topLevelItemCount())
-            if str(self.playlist_tree.topLevelItem(index).data(
-                0, Qt.UserRole) or "").startswith("managed:")
-        ]
-        position = managed_items.index(item) if managed and item in managed_items else -1
-        self.move_playlist_up_button.setEnabled(managed and position > 0)
-        self.move_playlist_down_button.setEnabled(
-            managed and 0 <= position < len(managed_items) - 1)
-        self.apply_playlist_order_button.setEnabled(
-            self._playlist_order_available
-            and self._managed_playlist_order() != self._committed_playlist_order)
+            if self.playlist_tree.topLevelItem(index).data(0, _ORDER_KEY))
 
-    def _move_selected_playlist(self, direction: int):
-        item = self._selected_playlist_item()
-        if item is None or not self._playlist_order_available:
-            return
-        managed_items = [
-            self.playlist_tree.topLevelItem(index)
-            for index in range(self.playlist_tree.topLevelItemCount())
-            if str(self.playlist_tree.topLevelItem(index).data(
-                0, Qt.UserRole) or "").startswith("managed:")
-        ]
-        if item not in managed_items:
-            return
-        position = managed_items.index(item)
-        destination = position + (-1 if direction < 0 else 1)
-        if not 0 <= destination < len(managed_items):
-            return
-        absolute = self.playlist_tree.indexOfTopLevelItem(item)
-        target_absolute = self.playlist_tree.indexOfTopLevelItem(
-            managed_items[destination])
-        moved = self.playlist_tree.takeTopLevelItem(absolute)
-        if absolute < target_absolute:
-            target_absolute -= 1
-        insert_at = target_absolute if direction < 0 else target_absolute + 1
-        self.playlist_tree.insertTopLevelItem(insert_at, moved)
-        self.playlist_tree.setCurrentItem(moved)
-        self._update_playlist_order_buttons()
-
-    def _request_playlist_order(self):
+    def _playlist_order_ready(self):
         order = self._managed_playlist_order()
-        if (
-            not self._playlist_order_available
-            or not order
-            or order == self._committed_playlist_order
-        ):
-            return
+        return bool(self._playlist_order_available and self._playlist_action_ready()
+                    and self._pending_playlist_order is None and len(order) > 1
+                    and len(set(order)) == len(order))
+
+    def _update_playlist_drag_state(self):
+        ready = self._playlist_order_ready()
+        for index in range(self.playlist_tree.topLevelItemCount()):
+            item = self.playlist_tree.topLevelItem(index)
+            flags = item.flags() & ~Qt.ItemIsDragEnabled & ~Qt.ItemIsDropEnabled
+            if ready and item.data(0, _ORDER_KEY):flags |= Qt.ItemIsDragEnabled | Qt.ItemIsDropEnabled
+            item.setFlags(flags)
+
+    def _set_playlist_order(self, order):
+        tree = self.playlist_tree
+        items = [tree.topLevelItem(index) for index in range(tree.topLevelItemCount())]
+        rows = {item.data(0, _ORDER_KEY): item for item in items if item.data(0, _ORDER_KEY)}
+        if len(order) != len(rows) or set(order) != set(rows):return False
+        seat = tree._seat()
+        ordered = iter(rows[key] for key in order)
+        updated = [next(ordered) if item.data(0, _ORDER_KEY) else item for item in items]
+        blocked = tree.blockSignals(True)
+        try:
+            for _item in items:tree.takeTopLevelItem(0)
+            tree.addTopLevelItems(updated)
+            tree._restore_seat(seat)
+        finally:
+            tree.blockSignals(blocked)
+        return True
+
+    def _drop_playlist_order(self, order):
+        if not self._playlist_order_ready() or order == self._committed_playlist_order:return
+        if not self._set_playlist_order(order):return
+        if self.playlist_tree._drag_active and self.playlist_tree._drag_seat is not None:
+            self.playlist_tree._restore_seat(self.playlist_tree._drag_seat)
+        self._sync_revision += 1
+        self._pending_playlist_order = order
+        self._pending_playlist_order_token = object()
+        self._update_playlist_drag_state()
         self.playlist_order_requested.emit(order)
+
+    @property
+    def playlist_order_token(self):
+        return self._pending_playlist_order_token
+
+    def restore_playlist_order(self, token=None):
+        """Reject an uncommitted gesture; a fresh snapshot settles successful writes."""
+        if token is not None and token is not self._pending_playlist_order_token:return
+        if self._pending_playlist_order is None:return
+        self._set_playlist_order(self._committed_playlist_order)
+        self._sync_revision += 1
+        self._pending_playlist_order = None
+        self._pending_playlist_order_token = None
+        self._update_playlist_drag_state()
+
+    @staticmethod
+    def _playlist_seat_key(item):
+        parent = item.parent() if item.parent() is not None else item
+        identity = (str(parent.data(0, Qt.UserRole) or ''), str(parent.data(0, Qt.UserRole + 1) or ''))
+        return identity, (parent.indexOfChild(item), item.data(0, Qt.UserRole + 4)) if item is not parent else None
+
+    def _capture_playlist_order_seat(self):
+        tree = self.playlist_tree
+        return dict(rows={self._playlist_seat_key(tree.topLevelItem(i))[0]:
+                          (tree.topLevelItem(i).isExpanded(), tree.topLevelItem(i).checkState(0))
+                          for i in range(tree.topLevelItemCount())},
+                    current=self._playlist_seat_key(tree.currentItem()) if tree.currentItem() is not None else None,
+                    column=tree.currentColumn(), selected=[self._playlist_seat_key(item) for item in tree.selectedItems()],
+                    scroll=tree.verticalScrollBar().value())
+
+    def _apply_playlist_order_seat(self):
+        seat = self._order_refresh_seat
+        if seat is None:return
+        tree = self.playlist_tree
+        rows = {}
+        for index in range(tree.topLevelItemCount()):
+            item = tree.topLevelItem(index)
+            rows.setdefault(self._playlist_seat_key(item)[0], []).append(item)
+        def find(key):
+            if key is None:return None
+            identity, child = key
+            matches = rows.get(identity, ())
+            if len(matches) != 1:return None
+            parent = matches[0]
+            if child is None:return parent
+            index, reference = child
+            candidate = parent.child(index)
+            return candidate if candidate is not None and candidate.data(0, Qt.UserRole + 4) == reference else None
+        for identity, (expanded, checked) in seat['rows'].items():
+            if len(rows.get(identity, ())) != 1:continue
+            parent = rows[identity][0];parent.setExpanded(expanded)
+            if parent.flags() & Qt.ItemIsUserCheckable:parent.setCheckState(0, checked)
+        current = find(seat['current'])
+        if current is not None:tree.setCurrentItem(current, seat['column'], QItemSelectionModel.NoUpdate)
+        tree.clearSelection()
+        for reference in seat['selected']:
+            item = find(reference)
+            if item is not None:item.setSelected(True)
+        tree.verticalScrollBar().setValue(seat['scroll'])
+
+    def restore_playlist_order_seat(self):
+        """Reapply exact identities after the controller restores older positional preferences."""
+        self._apply_playlist_order_seat()
+        self._order_refresh_seat = None
 
     def _emit_playlist_delete(self, items: list[QTreeWidgetItem]):
         identities = tuple(
@@ -853,15 +1090,13 @@ class StockIpodPages(QWidget):
             item = item.parent()
         self.playlist_tree.setCurrentItem(item)
         menu = QMenu(self.playlist_tree)
-        selected = self._sync_selection()
-        action = menu.addAction("Sync playlist…" if selected is not None else "Export playlists…")
+        action = menu.addAction(self._primary_action)
         revision = self._sync_revision
         action.setEnabled(self._playlist_action_ready())
         def requested(_checked=False):
             if revision != self._sync_revision or not self._playlist_action_ready():
                 return
-            if selected is not None:self.sync_requested.emit(selected)
-            else:self.export_requested.emit()
+            self._request_primary_action()
         action.triggered.connect(requested)
         action = menu.addAction("Delete this playlist from iPod…")
         action.setEnabled(

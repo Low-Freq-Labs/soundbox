@@ -8,17 +8,12 @@ from __future__ import annotations
 from collections import Counter, defaultdict, deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-import unicodedata
 
 from . import manifest
 from .library import Library, Playlist
+from .playlist_names import normalize_playlist_name
 
 MAX_MEMBERS = 16_384
-
-
-def normalize_playlist_name(value: str) -> str:
-    """Match ordinary label variations; normalized collisions stay ambiguous."""
-    return unicodedata.normalize('NFC', str(value).strip()).casefold()
 
 
 @dataclass(frozen=True)
@@ -84,12 +79,7 @@ class PlaylistBindingComparison:
 
     @property
     def desired_name(self) -> str:
-        if self.binding is not None and self.binding.source_label and self.source.label:
-            # A rendered folder label is intentional. Preserve it until the
-            # actual source label changes, rather than comparing it to a leaf.
-            return (self.binding.name if self.source.label == self.binding.source_label
-                    else self.source.label)
-        return self.source.name
+        return self.source.name.strip()
 
     @property
     def recognized(self) -> bool:
@@ -258,8 +248,7 @@ def _delta(source: SourcePlaylist, device: DevicePlaylist, links: Mapping[str, i
         binding = PlaylistBinding(source.key, source.native_id, source.uuid, device.playlist_id,
                                   device.name, tuple((inverse[dbid], dbid)
                                       for index, dbid in enumerate(device.members) if index in used))
-    desired_name = (binding.name if binding.source_label and source.label == binding.source_label
-                    else source.label if binding.source_label and source.label else source.name)
+    desired_name = source.name.strip()
     return PlaylistBindingComparison(source, device.playlist_id, binding, basis, tuple(retained),
         tuple(added), removed, order != sorted(order), device.name != desired_name, tuple(unknown),
         tuple(dict.fromkeys(local for local in desired_members if local not in links)),

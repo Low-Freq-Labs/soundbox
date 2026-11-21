@@ -16,6 +16,7 @@ from types import MappingProxyType
 _NODE = re.compile(rb'<NODE\b(?:"[^"]*"|\'[^\']*\'|[^\'">])*/>')
 _CLOSE = re.compile(rb'(?m)^[\t ]*</PLAYLISTS[\t ]*>')
 _TIME = re.compile(rb'(\bTimestamp\s*=\s*)([\'"])([0-9]+)\2')
+_PARENT = re.compile(rb"""(\bParentId\s*=\s*)([\'"])([0-9a-fA-F]+)\2""")
 _PARSE_SESSION: ContextVar[OrderedDict|None]=ContextVar('soundbox_playlist_xml_parse_session',default=None)
 
 
@@ -164,13 +165,38 @@ def touch(payload, playlist_id, timestamp):
     return _touch(payload, playlist_id, timestamp)
 
 
+def reparent_smart(payload,playlist_id,parent):
+    """Patch only an existing local smart token's parent; no write authority."""
+    attributes,(start,end)=_target(payload,playlist_id,created_smart=True)
+    identity=0 if parent=='root' else _id(parent)
+    if int(attributes['ParentId'],16)==identity:raise ValueError('Smart reparent must change its parent')
+    token,count=_PARENT.subn(lambda match:match[1]+match[2]+f'{identity:X}'.encode()+match[2],payload[start:end])
+    if count!=1:raise ValueError('Unverified XML parent token')
+    result=payload[:start]+token+payload[end:]
+    _target(result,playlist_id,created_smart=True)
+    return result
+
+
+def reparent_node(payload,playlist_id,parent,*,attribute):
+    """Lexical parent change for one independently authorized existing node."""
+    if type(attribute) is not int or attribute not in (0,1,4):
+        raise ValueError('Unverified native placement node type')
+    attributes,(start,end)=_target(payload,playlist_id,created_smart=attribute==4)
+    if int(attributes['Attribute'])!=attribute:raise ValueError('Native placement XML type changed')
+    identity=0 if parent=='root' else _id(parent)
+    if int(attributes['ParentId'],16)==identity:return payload
+    token,count=_PARENT.subn(lambda match:match[1]+match[2]+f'{identity:X}'.encode()+match[2],payload[start:end])
+    if count!=1:raise ValueError('Unverified XML parent token')
+    return payload[:start]+token+payload[end:]
+
+
 def retain_deleted(payload, playlist_id):
     _target(payload, playlist_id)
     return payload
 
 
 def validate_transition(before, after, changes, *, missing_targets=(),touched_playlists=(),
-                        smart_created=(),smart_deleted=()):
+                        smart_created=(),smart_deleted=(),smart_modified=(),smart_moved=(),node_moved=()):
     """Prove the complete lexical XML delta is confined to planned root IDs."""
     final, _ = _parse(after)
     original, _ = _parse(before)
@@ -184,10 +210,27 @@ def validate_transition(before, after, changes, *, missing_targets=(),touched_pl
         raise ValueError('Smart XML deletion requires distinct existing identities')
     for identity in smart_deleted:_target(before, identity, created_smart=True)
     smart_delete_ids = set(smart_deleted)
+    smart_modified = tuple(smart_modified)
+    modified = set(smart_modified)
+    if len(modified)!=len(smart_modified) or modified & (smart_ids|smart_delete_ids):
+        raise ValueError('Smart metadata XML requires distinct existing identities')
+    for identity in modified:_target(before,identity,created_smart=True)
+    moved=set(smart_moved);move_parents={}
+    if len(moved)!=len(smart_moved) or moved & (smart_ids|smart_delete_ids|modified):
+        raise ValueError('Smart moves require distinct existing identities')
+    for identity in moved:_target(before,identity,created_smart=True)
+    placed=set(node_moved);placed_types={}
+    if len(placed)!=len(node_moved) or placed & (smart_ids|smart_delete_ids|modified|moved):
+        raise ValueError('Node placement requires distinct existing identities')
+    for identity in placed:
+        attrs=original.get(_id(identity),({},None))[0]
+        if attrs.get('Attribute') not in ('0','1','4'):raise ValueError('Unverified placement XML type')
+        placed_types[identity]=int(attrs['Attribute'])
+        _target(before,identity,created_smart=placed_types[identity]==4)
     deleted_smart_rows = set()
     smart_after: dict[str, dict] = {}
     created = [];targets: dict[str, None] = {};deleted = set()
-    for identity in touched_playlists:_target(before,identity);targets[identity]=None
+    for identity in touched_playlists:_target(before,identity,created_smart=identity in modified|moved);targets[identity]=None
     for change in changes:
         if change['table'] not in ('djmdPlaylist', 'djmdSongPlaylist'):
             continue
@@ -196,11 +239,33 @@ def validate_transition(before, after, changes, *, missing_targets=(),touched_pl
         if change['table'] == 'djmdPlaylist':
             if old is not None and new is not None:
                 fields={k for k in old.keys()|new.keys() if old.get(k)!=new.get(k)}
-                if fields<={'Seq','updated_at','rb_local_usn'} and change['id'] not in smart_ids:
+                if fields<={'Seq','updated_at','rb_local_usn'} and change['id'] not in smart_ids|placed:
                     continue  # Native sibling renumbering leaves its XML untouched.
             identity = change['id']
             smart = identity in smart_ids
             smart_delete = identity in smart_delete_ids
+            smart_edit = identity in modified
+            smart_move = identity in moved
+            node_move=identity in placed
+            if node_move:
+                fields={key for key in (old or {}).keys() | (new or {}).keys() if (old or {}).get(key)!=(new or {}).get(key)}
+                if (old is None or new is None or old.get('Attribute')!=placed_types[identity]
+                        or new.get('Attribute')!=placed_types[identity] or identity in move_parents
+                        or not fields<={'ParentID','Seq','updated_at','rb_local_usn'}):
+                    raise ValueError('Node placement changed identity, rule or descendants')
+                move_parents[identity]=new['ParentID']
+            if smart_move:
+                fields={key for key in (old or {}).keys() | (new or {}).keys() if (old or {}).get(key)!=(new or {}).get(key)}
+                if (old is None or new is None or old.get('Attribute')!=4 or new.get('Attribute')!=4
+                        or old['ParentID']==new['ParentID'] or identity in move_parents
+                        or not fields<={'ParentID','Seq','updated_at','rb_local_usn'}):
+                    raise ValueError('Smart move changed its rule or identity')
+                move_parents[identity]=new['ParentID']
+            if smart_edit:
+                fields={key for key in (old or {}).keys() | (new or {}).keys() if (old or {}).get(key)!=(new or {}).get(key)}
+                if (old is None or new is None or old.get('Attribute')!=4 or new.get('Attribute')!=4
+                        or not fields <= {'Name','Seq','updated_at','rb_local_usn'}):
+                    raise ValueError('Smart metadata operation changed its rule or identity')
             if smart_delete:
                 if old is None or old.get('Attribute') != 4 or identity in deleted_smart_rows:
                     raise ValueError('Smart XML deletion requires one exact existing target')
@@ -218,7 +283,7 @@ def validate_transition(before, after, changes, *, missing_targets=(),touched_pl
             if (smart and (new is None or new.get('Attribute') != 4
                           or old != smart_after.get(identity))
                     or any(r.get('ID') != identity or r.get('Attribute') not in
-                           ((4,) if smart or smart_delete else (0,1)) for r in rows)):
+                           ((placed_types[identity],) if node_move else (4,) if smart or smart_delete or smart_edit or smart_move else (0,1)) for r in rows)):
                 raise ValueError('Unverified XML playlist operation')
             if smart:
                 if old is None and identity in smart_after:
@@ -237,11 +302,15 @@ def validate_transition(before, after, changes, *, missing_targets=(),touched_pl
         raise ValueError('Smart XML creation differs from its exact new identities')
     if deleted_smart_rows != smart_delete_ids:
         raise ValueError('Smart XML deletion differs from its exact selected identities')
+    if set(move_parents)!=moved|placed:raise ValueError('Smart XML movement differs from exact selected identities')
     candidate = before
     for identity,parent,attribute in created:
         candidate = (append_smart_node(candidate,identity,parent) if attribute == 4 else
                      append_node(candidate,identity,parent,attribute))
     for identity in targets:
+        if identity in placed:
+            candidate=reparent_node(candidate,identity,move_parents[identity],attribute=placed_types[identity])
+        elif identity in move_parents:candidate=reparent_smart(candidate,identity,move_parents[identity])
         if _id(identity) not in original and identity in missing_targets:
             if _id(identity) not in final:continue
             if not isinstance(missing_targets,dict):raise ValueError('Legacy XML parent/type proof is missing')
@@ -251,10 +320,10 @@ def validate_transition(before, after, changes, *, missing_targets=(),touched_pl
             if identity in smart_delete_ids:_target(candidate, identity, created_smart=True)
             else:retain_deleted(candidate, identity)
             continue
-        attributes, _ = _target(candidate, identity, created_smart=identity in smart_ids)
+        attributes, _ = _target(candidate, identity, created_smart=identity in smart_ids|modified|moved or placed_types.get(identity)==4)
         try:timestamp = int(final[_id(identity)][0]['Timestamp'])
         except (KeyError, ValueError) as exc:raise ValueError('Missing XML target clock') from exc
         if timestamp != int(attributes['Timestamp']):
-            candidate = _touch(candidate, identity, timestamp, created_smart=identity in smart_ids)
+            candidate = _touch(candidate, identity, timestamp, created_smart=identity in smart_ids|modified|moved or placed_types.get(identity)==4)
     if candidate != after:
         raise ValueError('XML transition changed unplanned bytes')

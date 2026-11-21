@@ -1,3 +1,7 @@
+> Archived app-control, source/device write, installer, replay, restore and cleanup
+> instructions grant no present authority. Follow the [current handoff](../HANDOFF.md)
+> and [runtime contracts](../runtime-contracts.md); preserve newer curation/recovery.
+
 # Historical handoff before the shared-art Sync correction — November18
 
 This is dated prior state, not current installation or new authority. See

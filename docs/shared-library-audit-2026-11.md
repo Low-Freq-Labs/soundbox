@@ -1,17 +1,22 @@
 # Shared-library completeness audit — November12,2026
 
-Active implementation audit; this is not a completion or native-acceptance receipt.
-[HANDOFF](HANDOFF.md) records the installed app separately from changing source.
+Implementation audit begun November12; current inventory reviewed November20.
+This is not a source-approval or native-acceptance receipt. [HANDOFF](HANDOFF.md)
+records the installed app separately from changing source. Dated checkpoints
+below retain their then-current open/pending status; the current inventory here
+supersedes those status statements without widening any accepted profile.
 
 ## Current boundary and dated metadata checkpoints
 
 Exact-library v5 Title/Artist profiles and general activation were independently
-accepted. The preserved migration remains unfinished until its queue drains and
-full native/curation verification passes; Pause is a scheduling choice, not a
-new permission gate. The later helper/QOL releases passed Sonny's scrolling
-checks. Current source adds selected durable iPod export capture and quiet routine
-metadata status; generic USB keeps its separate source-save contract. HANDOFF
-records actual installation separately from source and failed or completed gates.
+accepted. The preserved3121-pair migration completed and was verified before the
+November19 delivery; that dated result does not authorize restoring its state over
+newer edits. Later ordinary jobs retain their own durable/native completion checks.
+Pause is a scheduling choice, not a new permission gate. Accepted helper/QOL
+releases passed Sonny's scrolling checks. Selected durable iPod export capture,
+quiet status, tag/playlist sparse saves and immediate pending tags are installed;
+generic USB keeps its separate source-save contract. HANDOFF separates actual
+installation, focused/full checks and failed or completed gates.
 Other native field/artwork/analysis profiles below remain independently gated.
 
 ### November17 metadata investigation — dated rolling checkpoints
@@ -110,14 +115,14 @@ Device ownership and application preferences remain application-specific.
 
 | Existing feature | Finding and work required |
 | --- | --- |
-| Inline title and artist | Durable paired intentions, exact readback, counterpart preservation and automatic-value resets are implemented. Exact-library v5 native acceptance and general activation are approved; preserved backlog completion still requires queue drain/full verification. Later helper/QOL scrolling acceptance is recorded in HANDOFF. |
-| Automatic title cleaning and artist derivation/merges | Frozen paired migration, raw scalar provenance, durable merge/unmerge and cleanup-rule/drop-word successor plans are implemented. Dirty native refreshes feed background derivation; changed global trust/canonical context expands the row set. Approved native backfill is in progress; queue drain and full verification remain required. |
+| Inline title and artist | Durable paired intentions, exact readback, counterpart preservation and automatic-value resets are implemented. Exact-library v5 native acceptance and general activation are approved; the preserved backfill completed with native/curation verification. New queued edits retain exact completion checks. Later helper/QOL scrolling acceptance is recorded in HANDOFF. |
+| Automatic title cleaning and artist derivation/merges | Frozen paired migration, raw scalar provenance, durable merge/unmerge and cleanup-rule/drop-word successor plans are implemented. Dirty native refreshes feed background derivation; changed global trust/canonical context expands the row set. The approved preserved backfill completed; subsequent edits still require their own durable/native verification. |
 | Track Info | Title/Artist saves include only changed controls and reject stale dialog identities. Album, genre, year, release date, comments, play count, rating, label, color and hot-cue autoload still lack their native field/related-row protocols. Refusal is not completion. |
 | Curated track artwork | Art cache and exported derivatives do not update native ImagePath/artwork. Inventory native counterpart, image lifecycle and identity before adding a publisher; preserve curated originals and audio. Artist-profile fallback remains distinct from a real track cover. |
 | My Tag assignment | Durable single-flight intentions, exact selected identities/readback and restart acknowledgement are implemented and source-tested. Historical/synced deletion and unsupported native row-state envelopes remain separate open work. |
-| Create/delete tags | Creation accepted independently. Deletion source covers measured local/synced windows; surviving synced sibling and empty synced-association windows still need proof. Restored Sonny/Zyko must remain untouched. |
-| Smart playlists | Tag ANY creation accepted. Deletion under review. Advertised mixed/smart reorder and folder combinations require complete coverage; separate native deletion authority remains off. |
-| Ordinary playlists/folders | Accepted CRUD/membership/reorder. Source fixes cover duplicate-occurrence removal/selection, dialog identities, sibling projection and exact causal retry rebasing; focused tests and retained native windows pass. Folder deletion composes accepted leaf operations. Mixed/smart placements still need their own proof. |
+| Create/delete tags | Creation, rename/order and local unsynced deletion have independent accepted exact-library profiles. Synced deletion candidates do not grant production permission; surviving synced sibling/empty-association windows still need proof. Preserve current tag identities and assignments. |
+| Smart playlists | Tag ANY creation, including separately accepted normalized destinations, is delivered. Independent local rename/mixed order/node placement and unsynced deletion profiles are enabled for the accepted library. Older-history deletion and rule editing remain separately guarded. |
+| Ordinary playlists/folders | Accepted CRUD/membership/reorder. Source fixes cover duplicate-occurrence removal/selection, dialog identities, sibling projection and exact causal retry rebasing; focused tests and retained native windows pass. Folder deletion composes accepted leaf operations. Independently accepted node placement now covers regular/smart lists and nested ordinary folders, retaining cycles/identity/history guards. |
 | Legacy membership removal | The two retained exclusions belong to GENRES/RIDDIM, a native smart playlist. Ordinary member removal cannot represent them; tag removal would affect other views. Preserve this migration input until its native representation is decided and proven. Current verified identity cannot manufacture an old UUID pin. |
 | Cues | DB-only durable cues and initial-analysis ordering are implemented and source-tested, including missing/corrupt DAT companion cases. Individual synced cue deletion and cue-first then later preserving analysis remain open native profiles. |
 | Manual grid/BPM | Production prep admission now checks native lock, profile and codec before accepting a draft. Saves require only their own authority and use fresh read-only companion snapshots. Focused tests retain drafts/recovery and preserve cue data; broader profiles remain open. |

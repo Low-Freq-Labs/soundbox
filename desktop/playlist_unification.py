@@ -134,8 +134,7 @@ class PlaylistUnificationController(QObject):
         if commands:
             merge.validate(proposed)
             request=batch_for(w.lib.source_playlist_catalog,commands)
-            before=w.settings.get(merge.KEY);w.settings[merge.KEY]=proposed
-            if not w.playlist_controller.enqueue(request):w.settings[merge.KEY]=before
+            w.playlist_controller.enqueue(request,paired_settings={merge.KEY:proposed})
             self.schedule();return
         # Every legacy custom node/membership is now verified. This one-time
         # operation ends permanently; Artists never needs a native playlist.

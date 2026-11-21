@@ -54,7 +54,7 @@ class PlaylistControllerRebase(unittest.TestCase):
     def native_name(self):
         return next(row['Name'] for row in self.writer.snapshot()['nodes'] if row['ID']=='1000')
 
-    def test_failed_ack_then_external_native_edit_preserves_tail_until_its_own_explicit_retry(self):
+    def test_failed_ack_retries_only_local_commit_then_external_native_edit_blocks_the_tail(self):
         first=self.rename('First');second=self.rename('Queued Second')
         # A durable XML clock can lead wall time after queued clock chaining.
         # That timestamp must never substitute for a proven catalog transition.
@@ -62,21 +62,26 @@ class PlaylistControllerRebase(unittest.TestCase):
         self.assertTrue(self.controller.enqueue(first));self.assertTrue(self.controller.enqueue(second))
         captured_tail=deepcopy(self.controller.pending[1]['request'])
         self.window.save_ok=False;self.turn()
-        self.assertTrue(self.controller.pending[0]['error']);self.assertEqual(self.native_name(),'First')
+        self.assertTrue(self.controller.ack.error);self.assertEqual(self.native_name(),'First')
         self.window.save_ok=True
         external=store.request_for(self.writer.snapshot(),'rename',identity='1000',name='Independent Native Rename')
         self.writer.apply(external)
         self.assertIsNone(self.writer.committed_transition(first))
         source_bytes=self.writer.database.read_bytes(),self.writer.xml.read_bytes()
-        self.controller.retry();self.turn();self.turn()
+        self.controller.retry();self.controller.ack.pump()
+        self.assertEqual(self.native_name(),'Independent Native Rename')
+        self.turn()
         self.assertEqual(len(self.controller.pending),1)
-        self.assertEqual(self.controller.pending[0]['request'],captured_tail)
-        self.assertIn('outside this saved operation',self.controller.pending[0]['error'])
+        retained=self.controller.pending[0]['request']
+        self.assertEqual(retained['operation_id'],captured_tail['operation_id'])
+        self.assertEqual(retained['playlist_id'],captured_tail['playlist_id'])
+        self.assertEqual(retained['name'],captured_tail['name'])
+        self.assertTrue(self.controller.pending[0]['error'])
         self.assertEqual(self.window.saved[-1][QUEUE],self.controller.pending)
         self.controller.pump();self.assertEqual(self.native_name(),'Independent Native Rename')
         self.assertEqual((self.writer.database.read_bytes(),self.writer.xml.read_bytes()),source_bytes)
         # Explicitly retrying THIS preserved tail renews its CAS before SQL.
-        self.controller.retry();self.turn()
+        self.controller.retry();self.controller.ack.pump();self.turn()
         renewed=deepcopy(self.controller.pending[0]['request'])
         self.assertNotEqual(renewed['operation_id'],captured_tail['operation_id'])
         self.assertEqual(self.window.saved[-1][QUEUE][0]['request'],renewed)
@@ -86,7 +91,7 @@ class PlaylistControllerRebase(unittest.TestCase):
     def test_real_committed_edge_advances_happy_fifo_tail_and_persists_it_before_admission(self):
         first=self.rename('First');second=self.rename('Second')
         self.assertTrue(self.controller.enqueue(first));self.assertTrue(self.controller.enqueue(second))
-        with mock.patch.object(self.writer,'committed_transition',wraps=self.writer.committed_transition) as prove:
+        with mock.patch.object(self.writer,'apply_with_transition',wraps=self.writer.apply_with_transition) as prove:
             self.turn();self.assertEqual(self.native_name(),'First')
             tail=self.controller.pending[0]
             self.assertEqual(tail['request']['revision'],self.writer.snapshot()['revision'])
@@ -98,12 +103,13 @@ class PlaylistControllerRebase(unittest.TestCase):
         first=self.rename('Existing');second=self.rename('Second')
         self.assertTrue(self.controller.enqueue(first));self.assertTrue(self.controller.enqueue(second))
         before=self.writer.database.read_bytes(),self.writer.xml.read_bytes()
-        with mock.patch.object(self.writer,'committed_transition',wraps=self.writer.committed_transition) as prove:
-            self.turn();prove.assert_not_called()
+        with mock.patch.object(self.writer,'apply_with_transition',wraps=self.writer.apply_with_transition) as prove, \
+                mock.patch.object(self.writer,'committed_transition',wraps=self.writer.committed_transition) as replay:
+            self.turn();self.assertEqual(prove.call_count,1);replay.assert_not_called()
             self.assertEqual((self.writer.database.read_bytes(),self.writer.xml.read_bytes()),before)
             self.assertFalse((self.writer.root/('playlist-'+first['operation_id'])).exists())
             self.assertEqual(self.controller.pending[0]['error'],'')
-            self.turn();self.assertEqual(prove.call_count,1)
+            self.turn();self.assertEqual(prove.call_count,2);replay.assert_not_called()
         self.assertFalse(self.controller.pending);self.assertEqual(self.native_name(),'Second')
 
 

@@ -103,10 +103,12 @@ class TrackBrowserGestures(unittest.TestCase):
         for key in ('one', 'two'):
             item = QTreeWidgetItem(tree, [key])
             item.setData(0, Qt.UserRole, 'managed:' + key)
+            item.setData(0, Qt.UserRole + 3, key)
             item.setFlags((item.flags() & ~Qt.ItemIsSelectable) | Qt.ItemIsUserCheckable)
             item.setCheckState(0, Qt.Unchecked)
             QTreeWidgetItem(item, ['Song'])
         pages._playlist_order_available = True
+        pages._has_snapshot = pages._playlist_sync_available = True
         pages._playlist_delete_available = True
         pages._committed_playlist_order = ('one', 'two')
         self.app.processEvents()
@@ -116,15 +118,18 @@ class TrackBrowserGestures(unittest.TestCase):
         self.assertIs(tree.currentItem(), first)
         self.assertEqual(tree.selectedItems(), [])
         self.assertTrue(first.isExpanded())
-        self.assertTrue(pages.move_playlist_down_button.isEnabled())
+        self.assertTrue(pages._playlist_order_ready())
         QTest.keyClick(tree, Qt.Key_Space)
         self.assertEqual(first.checkState(0), Qt.Checked)
         self.assertTrue(pages.delete_playlist_button.isEnabled())
-        pages.move_playlist_down_button.click()
+        orders = []
+        pages.playlist_order_requested.connect(orders.append)
+        pages._drop_playlist_order(('two', 'one'))
         self.assertEqual(pages._managed_playlist_order(), ('two', 'one'))
         self.assertIs(tree.currentItem(), first)
         self.assertFalse(first.isSelected())
-        self.assertTrue(pages.apply_playlist_order_button.isEnabled())
+        self.assertEqual(orders, [('two', 'one')])
+        self.assertFalse(pages._playlist_order_ready())
         deleted = []
         pages.delete_playlists_requested.connect(deleted.append)
         pages.delete_playlist_button.click()

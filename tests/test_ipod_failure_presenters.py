@@ -84,6 +84,8 @@ class IpodFailurePresenters(unittest.TestCase):
                 owner,target=self.owner();error=self.large_error()
                 owner._current_device_path=str(target)
                 owner._device_profiles={str(target):SimpleNamespace(kind='dual_boot')}
+                token=object()
+                owner.stock_ipod_pages=SimpleNamespace(playlist_order_token=token,restore_playlist_order=mock.Mock())
                 owner._cached_composite_manifest=mock.Mock(side_effect=error)
                 owner._refresh_device_surfaces=mock.Mock();owner._begin_dual_ipod_sync=mock.Mock()
                 with mock.patch.object(QMessageBox,'warning') as warning, \
@@ -93,6 +95,8 @@ class IpodFailurePresenters(unittest.TestCase):
                 self.check(warning.call_args.args[2],logged)
                 self.assertIn('No device files were changed',warning.call_args.args[2])
                 owner._begin_dual_ipod_sync.assert_not_called()
+                if deleting:owner.stock_ipod_pages.restore_playlist_order.assert_not_called()
+                else:owner.stock_ipod_pages.restore_playlist_order.assert_called_once_with(token)
 
     def test_delete_cancellation_is_quiet_only_when_commit_and_recovery_are_safe(self):
         for outcome in ('rolled back','recovery required','committed'):

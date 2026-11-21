@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QApplication
 
 from desktop.app import MainWindow
 from desktop.metadata_controller import MetadataController
+from desktop.shared_imports import SharedImportController
 from desktop.tag_controller import TagEditController
 from soundbox import rekordbox_db
 from soundbox.worker_protocol import ProtocolError
@@ -51,6 +52,23 @@ class NativeReadRouting(unittest.TestCase):
             self.assertIs(tags.readback_library(self.w.lib), self.w.lib)
             self.service.read_metadata.side_effect = ProtocolError('Synthetic broken read pipe')
             with self.assertRaisesRegex(ProtocolError, 'broken read pipe'):tags.readback_library(self.w.lib)
+
+    def test_import_membership_uses_same_complete_reader_and_preserves_failure_and_loader_contract(self):
+        tags = TagEditController(Path(self.phases.area), self.w)
+        self.addCleanup(tags.shutdown)
+        self.w.tag_controller = tags
+        controller = SharedImportController(self.w)
+        self.addCleanup(controller.stop)
+        with mock.patch.object(rekordbox_db, 'load_metadata_readback',
+                               side_effect=AssertionError('No GIL-heavy membership fallback')):
+            self.assertIs(controller._membership_readback(self.w.lib), self.w.lib)
+            self.service.read_metadata.side_effect = ProtocolError('Synthetic import read failure')
+            with self.assertRaisesRegex(ProtocolError, 'import read failure'):
+                controller._membership_readback(self.w.lib)
+        self.service.read_metadata.assert_called_with(self.w.lib)
+        loader = controller.loader = mock.Mock(return_value=self.w.lib)
+        self.assertIs(controller._membership_readback(self.w.lib), self.w.lib)
+        loader.assert_called_once_with(self.w.lib.source)
 
     def test_committed_write_then_reader_failure_retains_exact_request_and_retry_acknowledges_once_unblocking_quit(self):
         p = self.phases

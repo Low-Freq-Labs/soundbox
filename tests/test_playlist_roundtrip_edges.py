@@ -7,7 +7,7 @@ import unittest
 from unittest import mock
 
 from test_playlist_transaction import fixture
-from desktop.rekordbox_playlists import NativePlaylistsMixin
+from desktop.rekordbox_playlists import NativePlaylistsMixin,PlaylistEditController
 from soundbox import playlist_presentation, rekordbox_cue_store as cues
 from soundbox import rekordbox_playlist_store as store, rekordbox_playlist_plan as planner
 from soundbox.library import Library, LibraryTag, Playlist, Track
@@ -69,8 +69,10 @@ class NativeOccurrenceRemoval(unittest.TestCase):
         host.lib = Library(tracks, [Playlist('Existing', [], ['alias-a', 'alias-b', 'alias-a'], '1000')],
             self.database, source_kind='rekordbox-db', source_library_id='synthetic-playlists',
             source_playlist_catalog=self.writer.snapshot())
-        host.playlist_controller = SimpleNamespace(pending=[], queue_error=lambda: '', reason=lambda: '',
-                                                   enqueue=mock.Mock(return_value=True))
+        controller = SimpleNamespace(window=host,pending=[], queue_error=lambda: '', reason=lambda: '',
+                                     enqueue=mock.Mock(return_value=True))
+        controller.presentation_tag_inputs=PlaylistEditController.presentation_tag_inputs.__get__(controller)
+        host.playlist_controller = controller
         return host
 
     def test_display_duplicates_get_independent_pins_and_stale_menu_rejects_before_queue(self):
@@ -156,8 +158,9 @@ class NativeOccurrenceContextMenu(unittest.TestCase):
                   for key, native in (('a','42'),('b','43'),('c','44'))}
         win.lib = Library(tracks, [Playlist('List', [], ['a', 'b', 'a', 'c'], '1000')], '/synthetic/master.db',
             source_kind='rekordbox-db', source_library_id='library', source_playlist_catalog=catalog)
-        controller = SimpleNamespace(pending=[], queue_error=lambda: '', reason=lambda: '',
+        controller = SimpleNamespace(window=win,pending=[], queue_error=lambda: '', reason=lambda: '',
                                      enqueue=mock.Mock(return_value=True), stop=mock.Mock())
+        controller.presentation_tag_inputs=PlaylistEditController.presentation_tag_inputs.__get__(controller)
         win.playlist_controller = controller; win._active_native_playlist_id = '1000'; win._view_key = 'rb:List'
         rows = win._native_membership_rows(win.lib.playlists[0],
             [dict(id=key, title=key.upper(), artist='Artist', bpm=bpm) for key,bpm in

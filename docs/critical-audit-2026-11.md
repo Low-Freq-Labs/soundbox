@@ -7,14 +7,26 @@ Record the trigger, code location, consequence, evidence, fix scope and status.
 Keep uncertain leads distinct from confirmed findings. Focused releases need not
 wait for unrelated audits to finish; only validated changes join an update.
 
+## Current delivery boundary — reviewed November20
+
+The installed88b6 runtime includes the later selected iPod capture/quiet actions,
+source-edit coexistence, immediate tag intentions, normalized creation and generic
+node/folder placement documented in [HANDOFF](HANDOFF.md). Dated source/frozen/
+pending-install statements below retain their checkpoint meaning; they are not
+current permission or a claim that those delivered fixes remain uninstalled.
+The confirmed queued findings remain separate future work unless explicitly
+marked implemented. This wrap reviews documentation/code and validates the final
+tree; it does not claim all listed P1/P2s fixed, perform live reproductions or
+broaden source/device authority.
+
 ## Active tracks
 
 | Track | Scope | Current status |
 | --- | --- | --- |
-| Writes/persistence | All native completion saves, curation pins, exact preference leaves, failure/retry and source ownership | Metadata helpers/preferences and My Tags ordered ACK work are implemented; current delivery and remaining per-path work are separate in HANDOFF |
+| Writes/persistence | All native completion saves, curation pins, exact preference leaves, failure/retry and source ownership | Metadata/preferences, tag and playlist sparse admission/ACK work is implemented; remaining per-path costs and protocol limits stay explicit |
 | Playback/artwork | Transport/load/gesture lifetimes, duplicate occurrences, image choices, modal dialogs and GUI I/O | Waveform gesture/EOF correction passes90focused cases; broader load/navigation findings queued |
 | Devices/export/recovery | CDJ/stock/Rockbox admission, cancellation/eject, stale results and file/recovery ownership | Indexed Delete/cancellation passed de410 delivery; later identity/sidebar and selected export capture have separate HANDOFF status. Physical acceptance stays separate; copied-media rollback ownership remains queued |
-| Browsing/editing | Selection/filter/sort, model resets, inline edits, menus and hidden preparation | Inline-draft/tree-lifetime update installed and accepted; stable context targets and folder modal/view fixes in progress |
+| Browsing/editing | Selection/filter/sort, model resets, inline edits, menus and hidden preparation | Inline drafts/context targets, bulk tag selection and accepted nested folder placement are delivered; separate relink/adoption/artwork findings below remain queued |
 
 ## Connected workflow follow-up — November18
 
@@ -683,11 +695,13 @@ defensive fix. Private script/receipt/proposal are under
 - Native analysis completion reconfigures unrelated selected-grid preparation.
 - Pending playlist projection compares the complete scalar identity inventory
   even on cache hits. In-place mutation detection must survive any optimization.
-- Metadata's ordered background canonical commit is installed. Source-only
-  corrections now include exact UI preferences and source-curation pin changes
-  in the same durable metadata ACK. Other native completion/ordinary gesture
-  saves remain synchronous; measure them independently while preserving durable
-  acknowledgement and explicit ownership/failure handling.
+- Metadata's ordered background canonical commit and exact UI preference/source-
+  curation ACK corrections are installed. The November19 follow-up also gives tag
+  and playlist intentions/ACKs sparse background routing; it does not make every
+  other save equally fast. Full-state checkpoints remain in parts of metadata
+  admission, import, conversion, analysis and removal. The per-writer audit and
+  current performance record separate measured paths from remaining costs while
+  retaining durable acknowledgement, fresh recovery and exact owner fencing.
 - Consistent current-checkpoint continuous-scrollbar proof advances176→179:
   zero GUI saves, all native compatibility checks pass, registry semantics stay
   unchanged, Artists preparation1.18–2.23ms and no Qt groups constructed. Maximum

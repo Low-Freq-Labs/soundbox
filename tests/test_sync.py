@@ -175,7 +175,7 @@ class TestSyncEndToEnd(unittest.TestCase):
         self.assertEqual(final_media, media)
 
     def test_unchanged_resync_performs_no_payload_reads_or_device_writes(self):
-        sync_mod.run(self.lib, self.lib.playlists, self.target, dry_run=False)
+        sync_mod.run(self.lib, self.lib.playlists, self.target, dry_run=False, concise_playlists=True)
         before = {path.relative_to(self.target): path.read_bytes()
                   for path in self.target.rglob("*") if path.is_file()}
         with mock.patch.object(sync_mod, "run", side_effect=AssertionError("no export")), \

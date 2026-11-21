@@ -124,6 +124,10 @@ def catalog_metadata(track: Track, library: Library, *, derive_artists: bool = T
         else:
             if type(value) is not str or "\0" in value or len(value) > 4096:
                 raise ValueError("Invalid displayed catalog metadata")
+            # iPod presentation only: missing/sentinel albums are not names.
+            # Preserve legitimate album spelling and all source/captured data.
+            if field == 'album' and value.strip().casefold() in {'', 'unknown artist', 'unknown album'}:
+                value = 'SoundBox'
             if field == "title" and not value:
                 value = track.path.stem
         values.append((field, value))

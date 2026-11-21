@@ -11,7 +11,8 @@ from sqlalchemy import String, create_engine, event
 from sqlalchemy.orm import Session
 from sqlalchemy.schema import CreateTable
 from pyrekordbox.db6.tables import (
-    ContentCue, DjmdAlbum, DjmdArtist, DjmdContent, DjmdCue, DjmdGenre, DjmdKey, DjmdLabel,DjmdSongPlaylist,
+    ContentCue, DjmdAlbum, DjmdArtist, DjmdContent, DjmdCue, DjmdGenre, DjmdKey, DjmdLabel,
+    DjmdMyTag, DjmdSongMyTag, DjmdSongPlaylist,
 )
 
 from soundbox import rekordbox_db as reader
@@ -109,6 +110,36 @@ class NativeReaderEfficiency(unittest.TestCase):
         content = [parameters for statement, parameters in self.sql if 'LEFT OUTER JOIN' in statement]
         self.assertEqual(len(content), 1)
         self.assertEqual(set(content[0]), selected)
+
+    def test_smart_membership_fetches_only_ids_with_exact_fresh_predicates_and_order(self):
+        from soundbox.rekordbox_playlist_plan import smart_tag_rule
+        for table in (DjmdMyTag, DjmdSongMyTag):
+            table.__table__.create(self.engine)
+        self.session.add(row(DjmdMyTag, ID='201', Name='Genre tag', rb_local_deleted=0))
+        self.session.add(row(DjmdMyTag, ID='202', Name='Deleted tag', rb_local_deleted=1))
+        for index, (content, tag, deleted) in enumerate((
+                ('1', '201', 0), ('0001', '201', 0), ('3', '201', 1),
+                ('4', '202', 0), ('0', '201', 0))):
+            self.session.add(row(DjmdSongMyTag, ID=str(index), ContentID=content,
+                                 MyTagID=tag, rb_local_deleted=deleted))
+        self.session.commit()
+        node = SimpleNamespace(ID='301', Name='Fresh smart', Attribute=4,
+            ParentID='root', Seq=1, rb_local_deleted=0,
+            SmartList=smart_tag_rule('301', ['201', '202']))
+        self.db.get_playlist = lambda: [node]
+        self.db.query = self.session.query
+        active = reader._active_track_ids(self.db)
+        expected = [str(content.ID) for content in reader._smart_playlist_contents(self.db, node)
+                    if str(content.ID) in active]
+        self.assertEqual(set(expected), {'1', '0001'})
+        self.session.expunge_all()
+        self.sql.clear()
+        result = reader._read_playlists(self.db, active, selected_ids={'301'})
+        self.assertEqual(result[0].keys, expected)
+        self.assertEqual(len(self.sql), 1)
+        self.assertEqual(self.sql[0][0].split('\nFROM ', 1)[0],
+                         'SELECT "djmdContent"."ID" AS "djmdContent_ID" ')
+        self.assertFalse(self.session.identity_map)
 
 
 class NativeMembershipEfficiency(unittest.TestCase):

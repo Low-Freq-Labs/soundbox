@@ -1396,11 +1396,42 @@ class StockIpodUI(unittest.TestCase):
             self.assertFalse(_win._pulse_timer.isActive())
             _win._preparing_library = False
             _win._set_status_text("Ready")
+
             self.assertNotIn("25 GiB", _win.status_label.toolTip())
             self.assertLess(_win.status_label.width(), 100)
         finally:
             _win._preparing_library = False
             _win._prep_storage_pause = None
+            _win._stop_pulse()
+            _win._set_status_text("Ready")
+
+    def test_footer_controls_stay_anchored_across_device_phases_and_counts(self):
+        bar = _win.progress.parentWidget()
+        previous = (bar.minimumWidth(), bar.maximumWidth(), bar.size())
+        try:
+            _win.progress.show()
+            _win.cancel_btn.show()
+            for width in (1240, 540):
+                bar.setFixedWidth(width)
+                anchor = None
+                for phase, total in (("Planning iPod", None), ("Copying", 37),
+                        ("Verifying", 123456), ("Finalizing iPod", None),
+                        ("Finishing a very long device operation safely", 37)):
+                    _win._start_pulse(phase)
+                    if total is not None:_win._set_status_count(1, total)
+                    _app.processEvents()
+                    positions = (_win.progress.geometry(), _win.cancel_btn.geometry())
+                    if anchor is None:anchor = positions
+                    self.assertEqual(positions, anchor)
+                    self.assertEqual(_win.progress.width(), 208)
+                    self.assertTrue(bar.rect().contains(_win.cancel_btn.geometry()))
+        finally:
+            minimum, maximum, size = previous
+            bar.setMinimumWidth(minimum)
+            bar.setMaximumWidth(maximum)
+            bar.resize(size)
+            _win.progress.hide()
+            _win.cancel_btn.hide()
             _win._stop_pulse()
             _win._set_status_text("Ready")
 
@@ -2700,9 +2731,13 @@ class StockIpodUI(unittest.TestCase):
             pages.detail_trees["Identity"].topLevelItem(0).text(0), "Name")
         self.assertEqual(
             pages.detail_trees["Storage"].topLevelItem(0).text(0), "Capacity")
-        for tree in pages.detail_trees.values():
+        exact_storage = {'Capacity': '256,000,000,000 bytes', 'Used': '1,000,000,000 bytes',
+                         'Free': '255,000,000,000 bytes'}
+        for title, tree in pages.detail_trees.items():
             for index in range(tree.topLevelItemCount()):
-                self.assertEqual(tree.topLevelItem(index).toolTip(1), "")
+                item = tree.topLevelItem(index)
+                self.assertEqual(item.toolTip(1), exact_storage.get(item.text(0), '')
+                                 if title == 'Storage' else '')
         identity = {
             pages.detail_trees["Identity"].topLevelItem(index).text(0):
             pages.detail_trees["Identity"].topLevelItem(index).text(1)
@@ -2889,15 +2924,14 @@ class StockIpodUI(unittest.TestCase):
         dual.playlist_order_requested.connect(order_calls.append)
         dual.playlist_tree.setCurrentItem(
             dual.playlist_tree.topLevelItem(1))
-        self.assertTrue(dual.move_playlist_up_button.isEnabled())
-        dual.move_playlist_up_button.click()
+        self.assertTrue(dual._playlist_order_ready())
+        dual._drop_playlist_order(("rockbox", "managed"))
         self.assertEqual(
             [dual.playlist_tree.topLevelItem(index).data(0, Qt.UserRole)
              for index in range(2)],
             ["managed:rockbox", "managed:managed"],
         )
-        self.assertTrue(dual.apply_playlist_order_button.isEnabled())
-        dual.apply_playlist_order_button.click()
+        self.assertFalse(dual._playlist_order_ready())
         self.assertEqual(order_calls, [("rockbox", "managed")])
         dual.close()
         self.assertEqual(pages.playlist_tree.columnCount(), 3)
@@ -4054,6 +4088,59 @@ class BackupWorker(unittest.TestCase):
             res = self._run(lambda: backup.restore_backup(data_dir, z))
             self.assertNotIsInstance(res, Exception)
             self.assertIn("overrides", res)
+
+
+class SelectAllShortcut(unittest.TestCase):
+    def test_command_a_selects_current_songs_from_sidebar_without_grid_edit(self):
+        from desktop.keyboard import Keymap
+        router = _win._keyboard_router
+        previous = router.keymap
+        router.keymap = Keymap({'bindings': {'grid.downbeat': ['A']}})
+        _win.search.setText(''); _win._show_collection()
+        _win.table.clearSelection()
+        try:
+            with mock.patch('desktop.app.QApplication.focusWidget', return_value=_win.tree), \
+                    mock.patch.object(_win, '_edit_grid') as edit:
+                self.assertTrue(_win.eventFilter(_win.tree,
+                    QKeyEvent(QEvent.KeyPress, Qt.Key_A, Qt.ControlModifier)))
+                self.assertEqual(len(_win.table.selectionModel().selectedRows()), _win.model.rowCount())
+                edit.assert_not_called()
+                self.assertTrue(_win.eventFilter(_win.tree,
+                    QKeyEvent(QEvent.KeyPress, Qt.Key_A, Qt.NoModifier)))
+                edit.assert_called_once_with('downbeat')
+        finally:
+            router.release_all(); router.keymap = previous
+
+    def test_select_all_targets_artists_and_rebound_graveyard_and_leaves_text_native(self):
+        from desktop.keyboard import Keymap
+        from PySide6.QtWidgets import QLineEdit
+        router = _win._keyboard_router; previous = router.keymap
+        router.keymap = Keymap({'bindings': {'browser.select_all': ['Ctrl+L']}})
+        try:
+            _win._show_artists()
+            with mock.patch('desktop.app.QApplication.focusWidget', return_value=_win.artists_view), \
+                    mock.patch.object(_win.table, 'selectAll') as background:
+                self.assertTrue(_win.eventFilter(_win.artists_view,
+                    QKeyEvent(QEvent.KeyPress, Qt.Key_L, Qt.ControlModifier)))
+                # Collapsed artist headers represent all songs in their groups.
+                from desktop.trees import ArtistsTree
+                self.assertEqual(set(ArtistsTree._ids(_win.artists_view.selectedItems())),
+                    {row['id'] for rows in _win._artists_browser.children.values() for row in rows})
+                background.assert_not_called()
+            with mock.patch('desktop.app.QApplication.focusWidget', return_value=_win._grave), \
+                    mock.patch.object(_win._grave, 'selectAll') as select:
+                self.assertTrue(_win.eventFilter(_win._grave,
+                    QKeyEvent(QEvent.KeyPress, Qt.Key_L, Qt.ControlModifier)))
+                select.assert_called_once()
+            editor = QLineEdit('keep native editing')
+            with mock.patch('desktop.app.QApplication.focusWidget', return_value=editor), \
+                    mock.patch.object(_win, '_select_all_browser_tracks') as select:
+                _win.eventFilter(editor, QKeyEvent(QEvent.ShortcutOverride, Qt.Key_A, Qt.ControlModifier))
+                _win.eventFilter(editor, QKeyEvent(QEvent.KeyPress, Qt.Key_A, Qt.ControlModifier))
+                select.assert_not_called()
+            editor.deleteLater()
+        finally:
+            router.release_all(); router.keymap = previous; _win._show_collection()
 
 
 class Graveyard(unittest.TestCase):

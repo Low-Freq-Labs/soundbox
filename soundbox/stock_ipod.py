@@ -81,6 +81,7 @@ from .stock_ipod_shadow import (
     StockIpodShadowStore,
     StockIpodSyncStatus,
     rebase_deleted_shadow,
+    retained_source_rows,
 )
 from .stock_ipod_capture import (
     StockIpodCaptureError, StockIpodNativeCapture, capture_stock_ipod_native,
@@ -94,7 +95,9 @@ from .stock_ipod_catalog_state import CatalogWitnessRow, StockCatalogWitness
 from .ipod_export_metadata import freeze_display_rows, frozen_pair
 from .ipod_export_witness import (build_export_witness, rebase_export_witness,
                                   stored_metadata, verify_export_witness)
-from .stock_ipod_playlist_binding import PlaylistBinding
+from .stock_ipod_playlist_binding import PlaylistBinding, source_playlist_identity
+from .playlist_names import normalize_playlist_name, unique_playlist_names
+from .stock_plan_observations import NegativeSourceOmissions, PlanTimings
 from .stock_ipod_format import StockWriteFormat, inspect_stock_write_format, stock_renderer_capabilities, _artwork_formats
 from .stock_ipod_signing import verified_stock_signing_context, sign_stock_database
 from .stock_ipod_native_preserve import preserve_native_catalog
@@ -107,6 +110,7 @@ SUPPORTED_MODELS = {
     "MA446": ("iPod Video", "5.5th Gen"),
 }
 _STOCK_SOURCE_PROFILE = "ma446-mp3-pcm16-stereo-44100-v1"
+_WAV_OMISSIONS = NegativeSourceOmissions()
 
 
 class _StockProgress:
@@ -282,6 +286,7 @@ class StockIpodSyncPlan:
     catalog_artwork_track_count: int = 0
     captured_export: bool = False
     catalog_notice: str = ""
+    preserve_play_counts: bool = False
 
     @property
     def bytes_to_copy(self) -> int:
@@ -308,7 +313,7 @@ class StockIpodSyncPlan:
             or self.rewrites
             or self.media_deletes
             or self.artwork_delete_paths
-            or self.play_counts_sha256_before is not None
+            or self.play_counts_sha256_before is not None and not self.preserve_play_counts
             or self.artwork_bytes_to_copy
             or self.database_changed
         )
@@ -354,6 +359,7 @@ class StockIpodSyncPlan:
             "database_sha256_after": hashlib.sha256(
                 self.rendered_database).hexdigest(),
             "catalog_only": self.catalog_only,
+            **({"preserve_play_counts": True} if self.preserve_play_counts else {}),
             "catalog_matched_tracks": len({match.local_id for row in self.catalog_recognition
                                            for match in row.tracks}),
             "catalog_unmatched_tracks": len({local for row in self.catalog_recognition
@@ -624,11 +630,22 @@ def _stock_wav_header_omission(path: Path) -> str | None:
     try:
         checkpoint()
         if path.resolve(strict=True) != path:
+            _WAV_OMISSIONS.discard(path)
             return None
         before = path.lstat()
         if not stat_mod.S_ISREG(before.st_mode):
+            _WAV_OMISSIONS.discard(path)
             return None
+        previous = _WAV_OMISSIONS.get(path, epoch(before))
+        if previous:
+            if epoch(path.lstat()) != epoch(before) or path.resolve(strict=True) != path:
+                _WAV_OMISSIONS.discard(path)
+                return None
+            checkpoint()
+            record_metric('stock_wav_omission_memo_hits')
+            return previous
         flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+        record_metric('stock_wav_header_probes')
         with os.fdopen(os.open(path, flags), "rb", buffering=0) as source:
             if epoch(os.fstat(source.fileno())) != epoch(before):
                 return None
@@ -672,8 +689,10 @@ def _stock_wav_header_omission(path: Path) -> str | None:
                     or path.resolve(strict=True) != path):
                 return None
             checkpoint()
+            if reason:_WAV_OMISSIONS.remember(path, epoch(before), reason)
             return reason
     except (OSError, ValueError, struct.error):
+        _WAV_OMISSIONS.discard(path)
         return None
 
 
@@ -796,9 +815,14 @@ def _new_track_info(
         last_modified=int(stat.st_mtime),
         dbid=dbid,
     )
+    # The same album projection also covers engine callers without GUI rows.
+    # Reuse the pair above instead of deriving title/artist a second time.
+    projection = (display_rows if display_rows is not None and track.track_id in display_rows else
+                  {track.track_id: {'title': title, 'artist': artist, 'year': info.year, 'bpm': info.bpm}})
+    row = dict(catalog_metadata(track, library, display_rows=projection))
+    info.album = str(row['album']) or None
     if display_rows is not None and track.track_id in display_rows:
-        row = display_rows[track.track_id]
-        info.album, info.genre, info.comment = (str(row[field]) or None for field in ('album', 'genre', 'comments'))
+        info.genre, info.comment = (str(row[field]) or None for field in ('genre', 'comments'))
         info.year, info.bpm = int(row['year']), int(row.get('bpm', 0))
     return info
 
@@ -1328,25 +1352,19 @@ def inspect_stock_ipod_sync_status(
     """Compare one mounted iPod with its Mac shadow without writing either."""
     from collections import Counter
     root = Path(target).expanduser().resolve(strict=True)
-    if native_capture is not None:
-        native_capture.require_target(root)
-    observed_sha = native_capture.database_sha256 if native_capture is not None else ''
-    observed_art = (native_capture.artwork_database_sha256
-                    if native_capture is not None and native_capture.includes_artwork else None)
+    native_capture = native_capture or capture_stock_ipod_native(root, include_artwork=True)
+    native_capture.require_target(root)
+    observed_sha = native_capture.database_sha256
+    observed_art = native_capture.artwork_database_sha256 if native_capture.includes_artwork else None
 
     def result(state, detail, local_changes=0, committed_at='') -> StockIpodSyncStatus:
-        return StockIpodSyncStatus(state, detail, local_changes, committed_at, observed_sha, observed_art)
+        return StockIpodSyncStatus(state, detail, local_changes, committed_at, observed_sha, observed_art,
+                                   native_capture.play_counts_sha256)
 
     shadow = shadow_store.load(identity_key)
     if shadow is None:
         return result(
             "untracked", "No committed Mac-side fast-sync baseline")
-    if catalog_witness is not None and native_capture is None:
-        native_capture = capture_stock_ipod_native(root, include_artwork=True)
-        observed_sha = native_capture.database_sha256
-        observed_art = native_capture.artwork_database_sha256
-    database = root / "iPod_Control/iTunes/iTunesDB" if native_capture is not None else _db_path(root)
-    observed_sha = native_capture.database_sha256 if native_capture is not None else _sha256(database)
     matches, reason = _shadow_matches_live(
         shadow,
         root=root,
@@ -1356,20 +1374,47 @@ def inspect_stock_ipod_sync_status(
         database_sha256=observed_sha,
         native_capture=native_capture,
     )
+    observed = None
     if not matches:
-        return result(
-            "reconcile_required", reason, committed_at=shadow.committed_at)
+        # Exact hashes still guard every writer. Advisory status instead asks
+        # whether an already linked playlist changed, not whether another
+        # exporter added unrelated songs, playlists or artwork.
+        if (shadow.identity_key != identity_key
+                or shadow.model and model_number and shadow.model != normalize_model_number(model_number)
+                or shadow.serial_number and serial_number and shadow.serial_number != serial_number
+                or catalog_witness is None
+                or shadow.database_sha256 == observed_sha and shadow.artwork_database_sha256 == observed_art):
+            return result('comparison_pending', reason, committed_at=shadow.committed_at)
+        try:
+            for name, previous in shadow.ithmb.items():
+                info = (root / 'iPod_Control/Artwork' / name).stat()
+                if info.st_size < int(previous.get('size') or 0):
+                    raise ValueError('Previously observed artwork storage is incomplete')
+            from .stock_ipod_observation import observe_linked_catalog
+            observed = observe_linked_catalog(catalog_witness, native_capture,
+                (str(library.source), library.source_kind, library.source_library_id), identity_key)
+        except (OSError, ValueError, TypeError, KeyError, OverflowError):
+            return result('comparison_pending', 'Current linked playlist comparison is unavailable',
+                          committed_at=shadow.committed_at)
 
-    changed: set[str] = set()
+    changed: set[str] = set(observed.changes) if observed is not None else set()
+    linked_ids = {str(tid) for row in shadow.playlists.values() for tid in row.get('tracks', ())}
+    if catalog_witness is not None:
+        linked_ids.update(local for binding in catalog_witness.bindings for local, _dbid in binding.members)
     current_source_paths: dict[str, str] = {}
     expected_source_paths: dict[tuple[str, int], set[str]] = {}
     drift = device_manifest.diff(
         {"playlists": shadow.playlists}, library, extra=extra_playlists,
         expected_profile=None)
-    for rows in (drift.renamed, drift.moved, drift.changed, drift.removed):
-        changed.update(str(row[0]) for row in rows)
+    for rows in (drift.renamed, drift.changed, drift.removed):
+        changed.update(str(row[0]) for row in rows
+                       if observed is None or str(row[0]) in observed.live_keys)
     for source_text, row in shadow.sources.items():
         track_id = str(row.get("track_id") or "")
+        if track_id and track_id not in linked_ids:
+            continue  # Retained audio contracts do not create a linked-playlist drift obligation.
+        if observed is not None and track_id not in observed.local_ids:
+            continue
         track = library.tracks_by_id.get(track_id)
         source = track.path if track is not None else Path(source_text)
         expected_source_paths.setdefault((track_id, int(row.get('dbid') or 0)), set()).add(source_text)
@@ -1397,7 +1442,16 @@ def inspect_stock_ipod_sync_status(
             or stat.st_mtime_ns != int(row.get("mtime_ns") or -1)
         ):
             changed.add(f"source:{track_id or source_text}")
-    for row in shadow.artwork.values():
+    from .stock_ipod_observation import linked_artwork_matches
+    artwork_pending = observed is not None and not linked_artwork_matches(observed, shadow, native_capture)
+    for dbid, row in shadow.artwork.items():
+        if row.get('track_id') and str(row['track_id']) not in linked_ids:
+            continue
+        if observed is not None:
+            if int(dbid) not in observed.dbids:
+                continue
+            if observed.artwork_links.get(int(dbid)) != int(row.get('image_id') or 0):
+                artwork_pending = True
         art_path = str(row.get("art_path") or "")
         if not art_path:
             continue
@@ -1411,11 +1465,9 @@ def inspect_stock_ipod_sync_status(
             or stat.st_mtime_ns != int(row.get("art_mtime_ns") or -1)
         ):
             changed.add(f"art:{row.get('track_id') or art_path}")
-    pending = (native_capture.play_counts is not None if native_capture is not None
-               else database.with_name("Play Counts").is_file())
-    if pending:
-        changed.add("play-counts")
-    metadata_pending = False
+    # Playback belongs to the iPod. Its captured digest refreshes SoundBox's
+    # read-only view; history is merged only by an explicit guarded write.
+    metadata_pending = artwork_pending
     if catalog_witness is not None:
         try:
             checkpoint()
@@ -1423,7 +1475,8 @@ def inspect_stock_ipod_sync_status(
                     or catalog_witness.device_key != identity_key or native_capture is None):
                 raise ValueError('Song comparison belongs to another source or device')
             catalog_witness.encode()
-            verify_export_witness(catalog_witness, native_capture.database, native_capture.artwork_database_sha256)
+            if observed is None:
+                verify_export_witness(catalog_witness, native_capture.database, native_capture.artwork_database_sha256)
             local_counts = Counter(row.local_id for row in catalog_witness.rows)
             dbid_counts = Counter(row.dbid for row in catalog_witness.rows)
             actual_paths: dict[str, set[str]] = {}
@@ -1435,12 +1488,16 @@ def inspect_stock_ipod_sync_status(
                         and node.get('rb_local_deleted', 0) == 0):
                     current_uuids.setdefault(str(node['ID']), []).append(node.get('UUID'))
             for binding in catalog_witness.bindings:
+                if observed is not None and binding.key not in observed.live_keys:
+                    continue
                 current_playlist = current_playlists.get(binding.key)
                 if (current_playlist is None or str(current_playlist.pid or '') != binding.native_id
                         or library.source_kind == 'rekordbox-db' and binding.native_id
                         and (not binding.uuid or current_uuids.get(binding.native_id) != [binding.uuid])
                         or (not binding.native_id or library.source_kind != 'rekordbox-db') and binding.uuid):
                     raise ValueError('Playlist comparison identity is unavailable or changed')
+                if binding.name != current_playlist.name.strip():
+                    changed.add(binding.key)
                 members = {local for local, _dbid in binding.members}
                 for identity in binding.source_members:
                     if identity[0] in members:
@@ -1448,6 +1505,10 @@ def inspect_stock_ipod_sync_status(
             required = {'title', 'artist', 'album', 'genre', 'comments', 'year'}
             for witness_row in catalog_witness.rows:
                 checkpoint()
+                if witness_row.local_id not in linked_ids:
+                    continue
+                if observed is not None and witness_row.local_id not in observed.local_ids:
+                    continue
                 track = library.tracks_by_id.get(witness_row.local_id)
                 projected = display_rows.get(witness_row.local_id) if display_rows is not None else None
                 paths = actual_paths.get(witness_row.local_id)
@@ -1462,7 +1523,8 @@ def inspect_stock_ipod_sync_status(
                     metadata_pending = True
                     continue
                 desired = catalog_metadata(track, library, display_rows={witness_row.local_id: projected})
-                stored = dict(witness_row.metadata)
+                stored = dict(observed.metadata.get((witness_row.local_id, witness_row.dbid), witness_row.metadata)
+                              if observed is not None else witness_row.metadata)
                 if any(stored[field] != value for field, value in desired):
                     changed.add(f'metadata:{witness_row.local_id}')
         except (ValueError, TypeError, KeyError, OverflowError):
@@ -1470,7 +1532,7 @@ def inspect_stock_ipod_sync_status(
     if changed:
         return result(
             "local_changes",
-            f"{len(changed)} local or playback change(s) ready to plan",
+            f"{len(changed)} library change(s) ready to plan",
             len(changed),
             shadow.committed_at,
         )
@@ -1478,7 +1540,7 @@ def inspect_stock_ipod_sync_status(
         return result('comparison_pending', 'Song details are not ready for comparison',
                       committed_at=shadow.committed_at)
     return result(
-        "up_to_date", "Matches the last committed Mac-side baseline",
+        "up_to_date", "No pending changes to linked playlists",
         0, shadow.committed_at)
 
 
@@ -1618,6 +1680,17 @@ def plan_stock_ipod_catalog_update(
     links = {local: dbid for local, dbid in matched}
     if incremental and comparison is not None:
         safe_changes = [row for row in comparison.playlist_changes if row.recognized and row.membership_safe]
+        desired_names: dict[str, int | None] = {}
+        for playlist_change in safe_changes:
+            name = normalize_playlist_name(playlist_change.desired_name)
+            if name in desired_names and desired_names[name] != playlist_change.device_playlist_id:
+                raise StockIpodError('Selected iPod playlist names must be unique')
+            desired_names[name] = playlist_change.device_playlist_id
+            if playlist_change.renamed and any(not row.get('isMaster')
+                    and row.get('playlistID') != playlist_change.device_playlist_id
+                    and normalize_playlist_name(row.get('Title') or '') == name
+                    for row in parsed.get('mhlp', ())):
+                raise StockIpodError(f'Another iPod playlist already uses the name “{playlist_change.desired_name}”')
         unsafe = [row for row in comparison.playlist_changes if row.recognized and not row.membership_safe]
         if unsafe:
             catalog_warning = ('Playlist membership left unchanged where cached song identities are ambiguous; '
@@ -1939,6 +2012,7 @@ def plan_stock_ipod_sync(
     extra_playlists: tuple[Playlist, ...] = (),
 ) -> StockIpodSyncPlan:
     """Render and validate a complete stock-iPod sync without target writes."""
+    timings = PlanTimings('stock')
     display_rows = freeze_display_rows(library, display_rows, titles=title_overrides, artists=artist_overrides)
     planning = _StockProgress('iTunes planning',
         sum(len(library.resolve(playlist)) for playlist in selected) + 4,
@@ -1974,13 +2048,15 @@ def plan_stock_ipod_sync(
     names = (
         list(playlist_names)
         if playlist_names is not None
-        else [playlist.display_path for playlist in selected]
+        else [playlist.name for playlist in selected]
     )
     if len(names) != len(selected):
         raise StockIpodError(
             "Stock-iPod playlist title count does not match the selection")
-    if len({name.casefold() for name in names}) != len(names):
-        raise StockIpodError("Selected stock-iPod playlist names must be unique")
+    try:
+        names = unique_playlist_names(names)
+    except ValueError as exc:
+        raise StockIpodError(str(exc)) from exc
 
     # Resolve the small native baseline before opening any selected audio. A
     # matching shadow can retain an already accepted, unchanged Mac source
@@ -2013,6 +2089,53 @@ def plan_stock_ipod_sync(
     if not shadow_fast_path:
         shadow = None
 
+    parsed = parse_itunesdb(io.BytesIO(original))
+    raw_regular = [row for row in parsed.get('mhlp', ()) if not row.get('isMaster')]
+    normalized_regular: dict[str, list] = {}
+    for row in raw_regular:
+        normalized_regular.setdefault(normalize_playlist_name(row.get('Title') or ''), []).append(row)
+    renamed_prior: dict[str, dict] = {}
+    if catalog_witness is not None and not allow_dual_boot and playlist_names is None:
+        from collections import Counter
+        try:
+            if (catalog_witness.source != (str(library.source), library.source_kind, library.source_library_id)
+                    or catalog_witness.device_key != identity_key):
+                raise ValueError('Playlist rename correspondence belongs to another library or device')
+            catalog_witness.encode()
+            owners = Counter(row.device_playlist_id for row in catalog_witness.bindings)
+            candidates_by_name = {}
+            for playlist, name in zip(selected, names, strict=True):
+                source_identity = source_playlist_identity(library, playlist)
+                matches = [row for row in catalog_witness.bindings
+                    if (row.key, row.native_id, row.uuid) ==
+                       (source_identity.key, source_identity.native_id, source_identity.uuid)
+                    and not source_identity.identity_error and owners[row.device_playlist_id] == 1]
+                if len(matches) != 1:
+                    continue
+                binding = matches[0]
+                if binding.name != name and any(row.get('playlistID') != binding.device_playlist_id
+                        for row in normalized_regular.get(normalize_playlist_name(name), ())):
+                    # Even stale correspondence cannot justify borrowing an
+                    # unrelated row occupying the requested new leaf name.
+                    raise StockIpodError(f'Another iPod playlist already uses the name “{name}”')
+                candidates_by_name[name] = binding.device_playlist_id
+            verify_export_witness(catalog_witness, original, captured.artwork_database_sha256)
+            for name, identity in candidates_by_name.items():
+                candidates = [row for row in raw_regular if row.get('playlistID') == identity]
+                if len(candidates) == 1 and candidates[0].get('Title') != name:
+                    renamed_prior[name] = candidates[0]
+        except (ValueError, TypeError, KeyError, OverflowError):
+            renamed_prior = {}
+    for name in names:
+        collisions = normalized_regular.get(normalize_playlist_name(name), [])
+        prior = renamed_prior.get(name)
+        if (prior is not None and any(row.get('playlistID') != prior.get('playlistID') for row in collisions)
+                or len(collisions) > 1
+                or prior is None and collisions and collisions[0].get('Title') != name
+                and not (allow_dual_boot and collisions[0].get('Title') in managed_playlist_names_before)):
+            raise StockIpodError(f'Another iPod playlist already uses the name “{name}”')
+
+    timings.mark('capture')
     payload_overrides: dict[Path, Path | PlannedRockboxMedia] = {}
     for raw_source, raw_payload in (media_payloads or {}).items():
         source = Path(raw_source).expanduser().resolve(strict=True)
@@ -2180,8 +2303,8 @@ def plan_stock_ipod_sync(
     payload_by_source = {
         source: payload for _track, source, payload in resolved}
     assert_target_safe(root, [*sources, *payload_by_source.values()])
+    timings.mark('sources')
 
-    parsed = parse_itunesdb(io.BytesIO(original))
     parsed_tracks = get_ipod_tracks(parsed)
     play_counts_hash: str | None = None
     merged_entries = 0
@@ -2510,6 +2633,7 @@ def plan_stock_ipod_sync(
         # still share this one record through ``source_to_dbid``.
         claimed_dbids.add(planned_dbid)
 
+    timings.mark('inventory')
     playlist_sequences: dict[str, list[int]] = {name: [] for name in names}
     playlist_source_observations: dict[Path, Path | None] = {}
     for playlist, name in zip(selected, names, strict=True):
@@ -2547,9 +2671,10 @@ def plan_stock_ipod_sync(
         raise StockIpodError(
             "Managed stock track identity no longer exists in iTunesDB "
             f"(DBID {min(unknown_managed_dbids)})")
+    renamed_ids = {row.get('playlistID') for row in renamed_prior.values()}
     for raw in raw_regular:
         name = str(raw.get("Title") or "")
-        if name in playlist_sequences:
+        if name in playlist_sequences or raw.get('playlistID') in renamed_ids:
             # Managed playlists are appended below in the exact selected
             # sequence. Retaining them in their historical iTunesDB positions
             # made the stock order diverge from the shared manifest order.
@@ -2561,7 +2686,7 @@ def plan_stock_ipod_sync(
         else:
             regular.append(_playlist_info(raw, track_id_to_dbid))
     for name in names:
-        prior = regular_by_name.get(name)
+        prior = renamed_prior.get(name) or regular_by_name.get(name)
         regular.append(PlaylistInfo(
             name=name,
             track_ids=playlist_sequences[name],
@@ -2571,6 +2696,8 @@ def plan_stock_ipod_sync(
             raw_mhod102=_raw_blob(prior, "rawMhod102") if prior else None,
         ))
 
+    timings.mark('playlists')
+    planning.report('Checking owned media cleanup', force=True)
     retained_playlist_dbids = {
         int(dbid)
         for playlist_info in regular
@@ -2612,10 +2739,13 @@ def plan_stock_ipod_sync(
             if len(expected_hash) != 64:
                 raise StockIpodError(
                     f"Managed track {dbid} has an invalid SoundBox baseline")
-            if not dual_boot and _sha256(delete_candidate) != expected_hash:
-                raise StockIpodError(
-                    f"Managed track {dbid} bytes changed since the last "
-                    "SoundBox commit")
+            if not dual_boot:
+                record_metric('stock_prune_hashes')
+                record_metric('stock_prune_hash_bytes', delete_candidate.stat().st_size)
+                if _sha256(delete_candidate) != expected_hash:
+                    raise StockIpodError(
+                        f"Managed track {dbid} bytes changed since the last "
+                        "SoundBox commit")
             key = str(delete_candidate.relative_to(root)).replace(
                 os.sep, "/").casefold()
             if key not in delete_paths:
@@ -2631,6 +2761,7 @@ def plan_stock_ipod_sync(
         for _key, (path, dbids) in sorted(delete_paths.items())
     )
 
+    timings.mark('prune')
     smart_raw = list(parsed.get("mhlp_smart") or [])
     smart = [_playlist_info(raw, track_id_to_dbid) for raw in smart_raw]
     master_raw = next(
@@ -2689,6 +2820,7 @@ def plan_stock_ipod_sync(
             metadata_updates.append(update)
     track_infos = existing_infos + new_infos
     planning.advance(label='Prepared song and playlist records')
+    timings.mark('metadata')
     planning.report('Preparing cover art', force=True)
     pruned_had_art = any(
         int(raw.get("mhiiLink") or 0)
@@ -2739,6 +2871,7 @@ def plan_stock_ipod_sync(
         )
     )
     planning.advance(label='Prepared cover art')
+    timings.mark('artwork')
     planning.report('Preparing iPod library', force=True)
     rendered, check = _render_database(
         original, track_infos, regular, smart, smart_raw,
@@ -2871,6 +3004,7 @@ def plan_stock_ipod_sync(
     new_dbids = copied_dbids | {item.dbid for item in adoptions}
     reused = sum(
         1 for source in sources if source_to_dbid[source] not in new_dbids)
+    timings.mark('render')
     artwork_before: list[StockArtworkBefore] = []
     if rendered_artwork is not None and (
             rendered_artwork.publish_artwork_db or rendered_artwork.range_writes):
@@ -2891,10 +3025,15 @@ def plan_stock_ipod_sync(
                 relative, live.stat().st_size, _sha256(live)))
 
     final_dbids = {int(info.dbid) for info in track_infos}
-    shadow_sources = {
-        key: dict(value) for key, value in (shadow.sources if shadow else {}).items()
-        if int(value.get("dbid") or 0) in final_dbids
-    } if not managed_playlist_keys_before else {}
+    shadow_sources = (retained_source_rows(shadow,
+        [(int(row.get('dbid') or 0), str(row.get('location') or '').lstrip(':').replace(':', '/'),
+          int(row.get('size') or 0)) for row in parsed_tracks],
+        [(int(info.dbid), str(info.location or '').lstrip(':').replace(':', '/'), int(info.size or 0))
+         for info in track_infos],
+        [str(row.relative_path) for row in rewrites]) if shadow is not None and not allow_dual_boot else {
+            key: dict(value) for key, value in (shadow.sources if shadow else {}).items()
+            if int(value.get('dbid') or 0) in final_dbids
+        } if not managed_playlist_keys_before else {})
     info_by_dbid = {int(info.dbid): info for info in track_infos}
     for source in sources:
         checkpoint()
@@ -2925,7 +3064,7 @@ def plan_stock_ipod_sync(
         key: dict(value) for key, value in (shadow.playlists if shadow else {}).items()
         if key not in previous_managed_keys
     }
-    for playlist in selected:
+    for playlist, device_name in zip(selected, names, strict=True):
         checkpoint()
         key = device_manifest.playlist_key(playlist)
         shadow_playlists[key] = device_manifest.entry_for(
@@ -2933,6 +3072,7 @@ def plan_stock_ipod_sync(
             getattr(library, "hidden_ids", frozenset()),
             getattr(library, "removed_by_playlist", None),
         )
+        shadow_playlists[key]['device_name'] = device_name
     track_id_by_dbid = {
         source_to_dbid[source]: first_track_for_source[source].track_id
         for source in sources
@@ -3062,6 +3202,7 @@ def plan_stock_ipod_sync(
             logging.getLogger("soundbox").warning(
                 "Could not enrich disposable stock source proofs", exc_info=True)
     planning.advance(label='Validated iPod export plan')
+    timings.mark('finalize')
     return plan
 
 
@@ -3119,6 +3260,12 @@ def commit_stock_ipod_sync(
     elif original_play_counts is None or hashlib.sha256(
             original_play_counts).hexdigest() != plan.play_counts_sha256_before:
         raise StockIpodError("Play Counts changed after dry-run; make a fresh plan")
+    if plan.preserve_play_counts:
+        from .stock_playlist_order import validate_order_only_payload
+        if not plan.catalog_only or plan.rendered_artwork is not None:
+            raise StockIpodError('Preserved playback sidecars require a pure playlist-order plan')
+        validate_order_only_payload(original_database, plan.rendered_database,
+                                    firewire_guid=plan.stock_format.firewire_guid if plan.stock_format else '')
     for adoption in plan.adoptions:
         destination = session.guard(adoption.relative_path)
         if (
@@ -3428,6 +3575,10 @@ def commit_stock_ipod_sync(
         session.revalidate()
         if _sha256(database) != plan.database_sha256_before:
             raise StockIpodError("iTunesDB changed during media copy; aborting")
+        if plan.preserve_play_counts:
+            current_play_counts = play_counts.read_bytes() if play_counts.is_file() else None
+            if current_play_counts != original_play_counts:
+                raise StockIpodError('Play Counts changed before playlist ordering; make a fresh plan')
         if plan.rendered_artwork is not None and (
                 plan.rendered_artwork.publish_artwork_db
                 or plan.rendered_artwork.range_writes):
@@ -3473,7 +3624,7 @@ def commit_stock_ipod_sync(
         with cancellation_disabled():
             session.atomic_write(database, plan.rendered_database)
             committed = True
-            if original_play_counts is not None:
+            if original_play_counts is not None and not plan.preserve_play_counts:
                 consumed = session.guard(recovery / "Play Counts.consumed")
                 consumed.parent.mkdir(parents=True, exist_ok=True)
                 session.revalidate()
@@ -3490,7 +3641,7 @@ def commit_stock_ipod_sync(
                     session.atomic_write(database, original_database)
                 except Exception as rollback_exc:
                     rollback_failures.append(f"iTunesDB: {rollback_exc}")
-                if original_play_counts is not None and not play_counts.exists():
+                if original_play_counts is not None and not plan.preserve_play_counts and not play_counts.exists():
                     try:
                         session.atomic_write(play_counts, original_play_counts)
                     except Exception as rollback_exc:
@@ -3685,6 +3836,8 @@ def rollback_committed_stock_ipod_sync(
     iTunesDB is published last; newly copied media is removed only afterward,
     when it is already unreferenced.
     """
+    if plan.preserve_play_counts:
+        raise StockIpodError('A stock-only playlist-order plan cannot enter composite rollback')
     if (plan.media_deletes or plan.artwork_delete_paths) and not plan.defer_cleanup:
         raise StockIpodError(
             "A stock plan that already cleaned orphan files cannot be rolled back")

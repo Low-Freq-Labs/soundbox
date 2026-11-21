@@ -115,10 +115,29 @@ class ThemeController(QObject):
                 and isinstance(obj, QWidget)):
             self._updating = True
             try:
+                if isinstance(obj, QAbstractScrollArea):
+                    from .browser_scrollbar import ensure_scrollbar
+                    ensure_scrollbar(obj)
+                    bar = getattr(obj, '_soundbox_overlay_scrollbar', None)
+                    if bar is not None:self.polish(bar)
                 self.polish(obj)
             finally:
                 self._updating = False
+        if event.type() == QEvent.Hide and isinstance(obj, QAbstractScrollArea):
+            # A popup can close before its trackpad's end event is delivered.
+            # Reopening is an idle surface, not a continuation of that gesture.
+            for bar in (getattr(obj, '_soundbox_overlay_scrollbar', obj.verticalScrollBar()),
+                        obj.horizontalScrollBar()):
+                self._clear_scroll_feedback(bar)
         return False
+
+    @staticmethod
+    def _clear_scroll_feedback(bar):
+        timer = getattr(bar, '_soundbox_scroll_feedback', None)
+        if timer is not None:timer.stop()
+        if bar.property('wheelScrolling'):
+            bar.setProperty('wheelScrolling', False)
+            bar.style().unpolish(bar);bar.style().polish(bar);bar.update()
 
     @staticmethod
     def _scroll_feedback(bar,*,phase=Qt.NoScrollPhase):

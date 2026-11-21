@@ -48,7 +48,8 @@ class TestResync(unittest.TestCase):
 
         engine.resync_device(lib2, self.dev)
         self.assertEqual(self._m3u8s(),
-                         ["Playlists/crates/Bass.m3u8", "Playlists/sets/SONNY.AIF v7.m3u8"])
+                         ["Playlists/Bass.m3u8", "Playlists/SONNY.AIF v7.m3u8",
+                          "Playlists/crates/Bass.m3u8", "Playlists/sets/SONNY.AIF v7.m3u8"])
         self.assertEqual(self._music(), ["A", "B", "C", "Shared"])  # shared kept (P1 still uses it)
 
     def test_only_drifted_playlist_is_reexported(self):

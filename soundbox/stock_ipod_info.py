@@ -7,7 +7,7 @@ creates, edits, renames, or removes anything on the mounted device.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import io
 import json
 import os
@@ -57,6 +57,7 @@ class StockIpodTrackSnapshot:
     year: int = 0
     bpm: int = 0
     comments: str = ""
+    bookmark_time: int = 0
 
 
 @dataclass(frozen=True)
@@ -119,6 +120,22 @@ class StockIpodSnapshot:
     usb_family: str = ""
     firewire_guid: str = ""
     identity_conflict: bool = False
+    play_counts_sha256: str = ""
+
+
+def playback_refresh_compatible(before: StockIpodSnapshot, after: StockIpodSnapshot) -> bool:
+    """A read-only history update may patch the current native view in place."""
+    observed = ('free_bytes', 'tracks', 'pending_playback_records', 'playback_status',
+                'sync_state', 'sync_detail', 'sync_local_changes', 'sync_committed_at',
+                'play_counts_sha256')
+    if replace(after, **{name: getattr(before, name) for name in observed}) != before:
+        return False
+    if len(before.tracks) != len(after.tracks):
+        return False
+    history = ('play_count', 'skip_count', 'rating', 'last_played', 'last_skipped',
+               'pending_plays', 'pending_skips', 'bookmark_time')
+    return all(replace(new, **{name: getattr(old, name) for name in history}) == old
+               for old, new in zip(before.tracks, after.tracks))
 
 
 def read_stock_ipod_header(root: str | Path) -> StockIpodHeader:
@@ -310,6 +327,7 @@ def read_stock_ipod_snapshot(
             year=int(raw.get("year") or 0),
             bpm=int(raw.get("bpm") or 0),
             comments=str(raw.get("Comment") or raw.get("comment") or ""),
+            bookmark_time=int(raw.get("bookmarkTime") or 0),
         ))
 
     model = normalize_display_model(observed_model_number)
@@ -390,4 +408,5 @@ def read_stock_ipod_snapshot(
         dac_name=dac_name,
         dac_source=dac_source,
         identity_conflict=identity_conflict,
+        play_counts_sha256=captured.play_counts_sha256,
     )

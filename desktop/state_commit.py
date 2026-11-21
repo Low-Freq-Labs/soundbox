@@ -3,6 +3,7 @@ import json
 import logging
 import threading
 from collections import deque
+from copy import deepcopy
 
 from PySide6.QtCore import QObject, QThread, QTimer
 
@@ -20,22 +21,41 @@ class StatePublicationChangedError(StateChangedError):
 
 
 _ROOTS={'settings':'settings','title_overrides':'titles','artist_overrides':'overrides',
-        'artist_aliases':'aliases'}
+        'artist_aliases':'aliases','playlist_removals':'removals'}
 PREFERENCE_KEYS=frozenset(('quantize','beat_jump_mode','waveform_zoom','autoplay_mode',
     'columns_state','columns_keys','sidebar_split','sidebar_width','window_geometry','window_rect','keyboard',
     'analysis','waveform_mode','beat_count_mode','custom_playlist_expanded','theme_accent',
     'theme_text_mode','theme_text_custom','device_views',
-    'stock_ipod_identity','stock_ipod_models'))  # display history only, never writer/signing authority
+    'stock_ipod_identity','stock_ipod_models','my_tag_order'))  # display history only, never writer/signing authority
 
 
 class _CommitTask(QThread):
     """An admitted durable continuation finishes even during shutdown drain."""
-    def __init__(self,repository,patch):
+    def __init__(self,repository,patch,expected_queues=None):
         super().__init__();self.repository=repository;self.patch=patch;self.result=None
+        self.expected_queues=expected_queues
 
     def run(self):
-        try:self.result=self.repository.commit_patch(self.patch)
+        try:self.result=_checked_commit(self.repository,self.patch,self.expected_queues)
         except Exception as exc:self.result=exc
+
+
+def _checked_commit(repository,patch,expected_queues):
+    """Selected queue comparison and replacement share the canonical lock."""
+    if not expected_queues:return repository.commit_patch(patch)
+    with repository.area.lock:
+        for key,allowed in expected_queues.items():
+            path=('settings',key)
+            matched=False
+            for queue in allowed:
+                try:
+                    if not queue and not repository.contains_selected_path(path):
+                        repository.verify_selected_values({},missing=(path,))
+                    else:repository.verify_selected_values({path:queue})
+                    matched=True;break
+                except StateChangedError:continue
+            if not matched:raise StateChangedError('Saved source queue changed; preserve and reconcile its current intentions')
+        return repository.commit_patch(patch)
 
 
 class _CheckpointTask(QThread):
@@ -62,9 +82,10 @@ class _CheckpointTask(QThread):
 def apply_gui_patch(window,patch:StatePatch):
     """Merge committed leaves; unrelated navigation/preferences retain ownership."""
     replacements,removals=patch.edits()
-    roots={key:getattr(window,attribute) for key,attribute in _ROOTS.items()}
+    changed={path[0] for path in (*replacements,*removals)}
+    roots={key:getattr(window,attribute) for key,attribute in _ROOTS.items() if key in changed}
     roots=apply_state_patch(roots,replacements,removals)
-    for key,attribute in _ROOTS.items():setattr(window,attribute,roots[key])
+    for key,value in roots.items():setattr(window,_ROOTS[key],value)
 
 
 class StateCommitter(QObject):
@@ -193,10 +214,10 @@ class StateCommitter(QObject):
         self.owner.drain()
         return not self.preferences_pending
 
-    def submit(self,replacements,removals,committed,failed,*,current=None):
-        return self._submit(replacements,removals,committed,failed,current=current)
+    def submit(self,replacements,removals,committed,failed,*,current=None,expected_queues=None):
+        return self._submit(replacements,removals,committed,failed,current=current,expected_queues=expected_queues)
 
-    def queue_checkpoint(self,capture,completed,failed,*,current,validate=None):
+    def queue_checkpoint(self,capture,completed,failed,*,current,validate=None,with_verification=False):
         """Freeze selected data at one canonical FIFO position, not backlog end.
 
         ``capture`` runs on the GUI owner only after the current native/canonical
@@ -204,6 +225,7 @@ class StateCommitter(QObject):
         paths. The worker verifies those leaves; admission is never success.
         """
         row=dict(token=object(),capture=capture,completed=completed,failed=failed,current=current,validate=validate,
+                 with_verification=with_verification,
                  epoch=self._epoch(),cancelled=False)
         self._checkpoints.append(row)
         QTimer.singleShot(0,self,self._pump_checkpoints)
@@ -258,6 +280,7 @@ class StateCommitter(QObject):
                         row['failed'](StateChangedError('Export capture no longer owns its request'))
                     elif not repository.current_verification(task.result):
                         row['failed'](StateChangedError('Canonical state changed before export capture completed'))
+                    elif row['with_verification']:row['completed'](task.payload,task.result)
                     else:row['completed'](task.payload)
                 finally:
                     if self._checkpoints and self._checkpoints[0] is row:self._checkpoints.popleft()
@@ -266,7 +289,7 @@ class StateCommitter(QObject):
         except Exception as exc:
             reject(exc);return False
 
-    def _submit(self,replacements,removals,committed,failed,*,publish_gui=True,current=None):
+    def _submit(self,replacements,removals,committed,failed,*,publish_gui=True,current=None,expected_queues=None):
         w=self.window
         if self._active or getattr(w,'_state_publication',False):return False
         def is_current():
@@ -282,6 +305,13 @@ class StateCommitter(QObject):
         if any(len(path)<2 for path in removals):
             raise ValueError('Metadata commit cannot remove a canonical state root')
         repository=w._state_repository
+        if expected_queues is not None:
+            if (not isinstance(expected_queues,dict) or any(type(key) is not str or not key
+                    or not isinstance(options,list) or not 1<=len(options)<=4
+                    or any(not isinstance(queue,list) or len(queue)>256 for queue in options)
+                    for key,options in expected_queues.items())):
+                raise ValueError('Source queue guards require bounded exact canonical alternatives')
+            expected_queues=deepcopy(expected_queues)
         patch=repository.prepare_patch(replacements,removals)
         token=object();self.token=token;w._state_publication=True
         tags=w.tag_controller
@@ -313,9 +343,9 @@ class StateCommitter(QObject):
         if self.owner.stopping:
             # Shutdown/maintenance still reconciles already admitted source
             # work. Browsing has ended; never discard its durable continuation.
-            try:result=repository.commit_patch(patch)
+            try:result=_checked_commit(repository,patch,expected_queues)
             except Exception as exc:result=exc
             complete(result);return True
-        worker=_CommitTask(repository,patch)
+        worker=_CommitTask(repository,patch,expected_queues)
         self.owner.adopt(worker,lambda task:complete(task.result))
         worker.start();return True

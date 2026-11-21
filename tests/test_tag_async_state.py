@@ -84,13 +84,22 @@ class TagAsyncState(unittest.TestCase):
         while not predicate() and time.monotonic()<deadline:QTest.qWait(2)
         self.assertTrue(predicate(),'Tag/canonical task did not settle')
 
-    def settled(self):self.wait(lambda:not self.tags.busy and not self.tags.tag_ack_pending and not self.w._state_committer.pending)
+    def settled(self):
+        self.wait(lambda:not self.tags.busy and not self.tags.tag_ack_pending
+                  and not self.tags.tag_state_lane.pending and not self.tags.assignment_reserved
+                  and not self.w._state_committer.pending)
+
+    @staticmethod
+    def is_admission(patch):
+        jobs=patch.edits()[0].get(('settings',KEY))
+        return bool(jobs and all(not job['error'] for job in jobs))
 
     @contextmanager
     def held_commit(self):
         entered,release=threading.Event(),threading.Event()
         original=self.w._state_repository.commit_patch
         def held(patch):
+            if self.is_admission(patch):return original(patch)
             entered.set()
             if not release.wait(5):raise RuntimeError('TEMP commit release missing')
             return original(patch)
@@ -98,7 +107,24 @@ class TagAsyncState(unittest.TestCase):
             try:yield entered,release
             finally:release.set();self.settled()
 
-    def request(self):self.assertTrue(self.tags.request(['one'],'11',True))
+    @contextmanager
+    def failed_ack_commit(self,message):
+        original=self.w._state_repository.commit_patch
+        def failed(patch):
+            if self.is_admission(patch):return original(patch)
+            raise OSError(message)
+        with mock.patch.object(self.w._state_repository,'commit_patch',side_effect=failed):yield
+
+    def request(self):
+        self.assertTrue(self.tags.request(['one'],'11',True))
+        # These cases inspect the independently durable source/ACK stage.
+        # Immediate pre-admission gestures are exercised in their own suite.
+        self.wait(lambda:not self.tags.tag_state_lane.pending)
+
+    def request_durable_only(self):
+        previous=self.tags.prep_priority;self.tags.prep_priority=True
+        try:self.request()
+        finally:self.tags.prep_priority=previous;self.tags._tag_timer.stop()
 
     def test_one_worker_ack_clears_queue_and_promotes_order_before_publication_without_gui_scan(self):
         main=self.main
@@ -115,8 +141,10 @@ class TagAsyncState(unittest.TestCase):
             commits.append(patch.edits());return original(patch)
         with mock.patch.object(self.w._state_repository,'commit_patch',side_effect=record):
             self.request();self.settled()
-        self.assertEqual(len(self.saves),1)  # durable admission only
-        self.assertEqual(len(commits),1);self.assertEqual(len(self.saved),1)
+        self.assertEqual(len(self.saves),0)  # admission and ACK are sparse worker commits
+        self.assertEqual(len(commits),2);self.assertEqual(len(self.saved),1)
+        self.assertTrue(commits[0][0][('settings',KEY)])
+        self.assertEqual(commits[1][0][('settings',KEY)],[])
         self.assertEqual(self.w.settings[order.KEY]['sequence'],1)
         self.assertTrue(any('uuid-one' in ranks for ranks in self.w.settings[order.KEY]['playlists'].values()))
         self.assertFalse(self.tags.tag_ack_pending);self.assertFalse(self.tags.owned)
@@ -134,17 +162,17 @@ class TagAsyncState(unittest.TestCase):
             release.set()
         self.assertEqual(self.w.settings['quantize'],False)
         self.assertEqual(read_state(self.w._state_repository.path)['settings']['quantize'],False)
-        self.assertEqual(len(self.saved),1);self.assertEqual(len(self.saves),1)
+        self.assertEqual(len(self.saved),1);self.assertEqual(len(self.saves),0)
 
     def test_failed_ack_keeps_durable_request_and_retry_replays_receipt_without_second_native_mutation(self):
-        with mock.patch.object(self.w._state_repository,'commit_patch',side_effect=OSError('TEMP disk full')):
+        with self.failed_ack_commit('TEMP disk full'):
             self.request();self.settled()
         document=read_state(self.w._state_repository.path)
         request=deepcopy(self.w.settings[KEY][0]['request'])
         self.assertEqual(document['settings'][KEY][0]['request'],request)
         self.assertFalse(document['settings'][KEY][0]['error'])
         self.assertNotIn(order.KEY,self.w.settings);self.assertFalse(self.saved)
-        self.assertTrue(self.w.settings[KEY][0]['error']);self.assertEqual(len(self.saves),1)
+        self.assertTrue(self.w.settings[KEY][0]['error']);self.assertEqual(len(self.saves),0)
         self.assertTrue(self.tags.retry());self.wait(lambda:bool(self.saved));self.settled()
         self.assertEqual(len(self.writes),1);self.assertEqual(self.writes[0].operation_id,request['operation_id'])
         self.assertEqual(len(self.saved),1);self.assertFalse(self.w.settings[KEY])
@@ -188,7 +216,7 @@ class TagAsyncState(unittest.TestCase):
         self.assertEqual(self.w.settings[KEY],newer);self.assertFalse(self.saved)
         self.assertIn('newer library/view state',self.errors[-1])
         self.assertEqual(read_state(self.w._state_repository.path)['settings'][KEY],[])
-        self.assertEqual(len(self.saves),1)
+        self.assertEqual(len(self.saves),0)
 
     def test_newer_ram_order_after_commit_preserves_it_and_never_reports_uncommitted_failure(self):
         with self.held_commit() as (entered,release):
@@ -228,7 +256,9 @@ class TagAsyncState(unittest.TestCase):
     def test_actual_restore_before_delivery_preserves_even_an_identical_restored_intent(self):
         original=self.w._state_repository.commit_patch;finished=threading.Event()
         def hold_delivery(patch):
-            result=original(patch);finished.set();return result
+            result=original(patch)
+            if not self.is_admission(patch):finished.set()
+            return result
         with mock.patch.object(self.w._state_repository,'commit_patch',side_effect=hold_delivery):
             self.request()
             # Dispatch the native completion, then stop dispatching Qt until
@@ -254,6 +284,7 @@ class TagAsyncState(unittest.TestCase):
     def test_busy_coordinator_retains_private_ack_until_idle_without_repeating_native_readback(self):
         commit=self.w._commit_tag_state;calls=[]
         def delayed(*args,**kw):
+            if self.tags._tag_ack is None:return commit(*args,**kw)
             calls.append(1)
             if len(calls)==1:return False
             return commit(*args,**kw)
@@ -264,7 +295,7 @@ class TagAsyncState(unittest.TestCase):
         self.assertEqual(len(self.saved),1);self.assertEqual(len(self.writes),1)
 
     def test_worker_proof_for_different_request_cannot_clear_retained_head(self):
-        with mock.patch.object(self.tags,'_pump_tag_intent'):self.request()
+        self.request_durable_only()
         job=deepcopy(self.w.settings[KEY][0])
         from desktop.tag_assignment_intents import restore_request
         request=restore_request(job['request'])
@@ -277,7 +308,8 @@ class TagAsyncState(unittest.TestCase):
         self.assertIn('readback differs',self.errors[-1])
 
     def test_shutdown_drains_accepted_ack_without_early_completion_or_late_source_admission(self):
-        self.request();self.tags.shutdown();self.w._state_committer.owner.drain()
+        self.request();self.wait(lambda:self.tags.busy)
+        self.tags.shutdown();self.w._state_committer.owner.drain()
         self.assertFalse(self.tags.tag_ack_pending);self.assertFalse(self.w.settings[KEY])
         self.assertFalse(self.saved)  # Closed UI never receives publication.
         self.assertEqual(len(self.writes),1)
@@ -285,7 +317,7 @@ class TagAsyncState(unittest.TestCase):
         self.assertFalse(read_state(self.w._state_repository.path)['settings'][KEY])
 
     def test_discard_yes_cannot_clear_intent_admitted_by_nested_dialog_events(self):
-        with mock.patch.object(self.tags,'_pump_tag_intent'):self.request()
+        self.request_durable_only()
         reviewed=deepcopy(self.w.settings[KEY]);entered,release=threading.Event(),threading.Event()
         self.addCleanup(release.set)
         def loader(_):
@@ -298,18 +330,18 @@ class TagAsyncState(unittest.TestCase):
             return QMessageBox.Yes
         with mock.patch('desktop.tag_assignment_intents.QMessageBox.question',side_effect=answer):
             self.assertFalse(self.tags.discard())
-        self.assertEqual(self.w.settings[KEY],reviewed);self.assertEqual(len(self.saves),1)
+        self.assertEqual(self.w.settings[KEY],reviewed);self.assertEqual(len(self.saves),0)
         release.set();self.wait(lambda:bool(self.saved));self.settled()
         self.assertEqual(len(self.writes),1);self.assertFalse(self.w.settings[KEY])
 
     def test_discard_yes_does_not_replace_a_different_reviewed_queue_or_scope(self):
-        with mock.patch.object(self.tags,'_pump_tag_intent'):self.request()
+        self.request_durable_only()
         reviewed=deepcopy(self.w.settings[KEY]);newer=deepcopy(reviewed)
         newer[0]['error']='newer attention'
         def answer(*_args):self.w.settings[KEY]=newer;return QMessageBox.Yes
         with mock.patch('desktop.tag_assignment_intents.QMessageBox.question',side_effect=answer):
             self.assertFalse(self.tags.discard())
-        self.assertIs(self.w.settings[KEY],newer);self.assertEqual(len(self.saves),1)
+        self.assertIs(self.w.settings[KEY],newer);self.assertEqual(len(self.saves),0)
         self.w.settings[KEY]=reviewed
         def source_changed(*_args):
             self.w.lib=replace(self.w.lib,source_library_id='replacement');return QMessageBox.Yes
@@ -319,21 +351,23 @@ class TagAsyncState(unittest.TestCase):
 
     def test_source_error_plus_failed_local_error_note_never_claims_native_save(self):
         with mock.patch.object(self.store,'apply',side_effect=OSError('TEMP source refused before write')):
-            with mock.patch.object(self.w._state_repository,'commit_patch',side_effect=OSError('TEMP local storage failed')):
+            with self.failed_ack_commit('TEMP local storage failed'):
                 self.request();self.settled()
         self.assertFalse(self.writes);self.assertFalse(self.saved)
         self.assertIn('source refused before write',self.errors[-1])
         self.assertNotIn('saved in rekordbox',self.errors[-1])
-        self.assertEqual(len(self.saves),1);self.assertTrue(self.w.settings[KEY])
+        self.assertEqual(len(self.saves),0);self.assertTrue(self.w.settings[KEY])
 
     def test_actual_app_publication_uses_committed_order_without_second_save_or_inventory_walk(self):
         fixture=order_fixtures.SmartPlaylistTagHandoff();self.addCleanup(fixture.doCleanups)
         host=fixture.host();host.tag_controller.durable_assignment_ack=True
         host.tag_controller.order_error=''
         host.model.set_rows([dict(id='one',title='Zebra')]);fixture.select(host,'one')
+        assignment=order.capture(host.lib,host._selected_ids(),'11',True)
         MainWindow._assign_tag(host,'11',True)
+        self.assertEqual(host._tag_order_context,(str(host.lib.source),host.lib.source_library_id,None))
         fresh=order_fixtures.verified(host.lib)
-        host.settings[order.KEY]=order.record(None,host._tag_order_context[2],fresh)
+        host.settings[order.KEY]=order.record(None,assignment,fresh)
         with mock.patch.object(order,'record',side_effect=AssertionError('GUI derived native order twice')):
             with mock.patch.object(host,'_save_state',side_effect=AssertionError('GUI saved full state after ACK')):
                 MainWindow._tag_saved(host,fresh)

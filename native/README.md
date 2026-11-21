@@ -12,5 +12,5 @@ Apple Silicon/macOS 14+ audio, rendering and process guards.
 Preserve callback/thread ownership, timing, atomics, eager pipeline readiness and waveform output.
 Never introduce allocation or blocking work into the realtime audio callback.
 
-Run `./build_native.sh`, then the full `./check.sh` (Cocoa/native phase is mandatory).
+Rebuild changed native code, then affected player/waveform checks; full `./check.sh --render` before publication.
 Read [player contracts](../docs/PLAYER.md) and [native gotchas](../docs/GOTCHAS.md) before changes.

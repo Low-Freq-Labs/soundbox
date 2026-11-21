@@ -51,6 +51,7 @@ class IpodArtworkAdmission(unittest.TestCase):
         self.addCleanup(fixture.doCleanups)
         self.window = fixture.window
         w = self.window
+        self.export_choice = self.enterContext(mock.patch.object(w, '_show_export_dialog'))
         for timer in w.findChildren(QTimer):
             timer.stop()
         self.target = w._data_file.parent / 'generated-device'
@@ -139,7 +140,11 @@ class IpodArtworkAdmission(unittest.TestCase):
         self.app.processEvents()
 
     def request(self):
-        self.window.stock_ipod_pages.sync_playlist_button.click()
+        # Exercise the explicit selected export/catalog controller. Primary
+        # buttons now use global pending state rather than a focused row.
+        from desktop.stock_catalog_sync import request_sync
+        row = next(row for row in self.snapshot.playlists if row.playlist_id == PLAYLIST_ID)
+        request_sync(self.window, (str(PLAYLIST_ID), row.title, len(row.entries)))
 
     def seat(self):
         w = self.window
@@ -214,7 +219,9 @@ class IpodArtworkAdmission(unittest.TestCase):
         self.assertEqual(device, self.device)
         self.assertEqual(self.plan_stock.call_args.kwargs['title_overrides'], {'1': 'Captured title'})
         self.assertEqual(self.plan_stock.call_args.kwargs['artist_overrides'], {'1': 'Captured artist'})
-        self.commit_stock.assert_not_called()
+        self.commit_stock.assert_called_once_with(self.stock_plan)
+        self.assertEqual(w.titles['1'], 'Later saved title')
+        self.assertEqual(w.overrides['1'], 'Later saved artist')
 
     def test_cancel_after_plan_finishes_before_delivery_never_commits(self):
         self.request()
@@ -357,40 +364,40 @@ class IpodArtworkPlaylistActions(unittest.TestCase):
         pages.playlist_tree.setCurrentItem(pages.playlist_tree.topLevelItem(0))
         return pages
 
-    def test_button_uses_raw_stock_identity_and_count_on_unmanaged_dual_row(self):
+    def test_button_requests_shared_primary_action_on_unmanaged_dual_row(self):
         for dual in (False, True):
             with self.subTest(dual=dual):
                 pages = self.pages(dual=dual)
                 selected = []
-                pages.sync_requested.connect(selected.append)
+                pages.primary_action_requested.connect(lambda:selected.append('primary'))
                 row = pages.playlist_tree.topLevelItem(0)
                 self.assertEqual(row.childCount(), 1)
                 if dual: self.assertEqual(row.data(0, Qt.UserRole), '')
                 self.assertTrue(pages.sync_playlist_button.isEnabled())
                 pages.sync_playlist_button.click()
-                self.assertEqual(selected, [(str(PLAYLIST_ID), 'Favorites', 2)])
+                self.assertEqual(selected, ['primary'])
 
-    def test_context_artwork_action_keeps_clicked_playlist_after_selection_changes(self):
+    def test_context_action_does_not_retarget_after_current_row_changes(self):
         pages = self.pages(dual=True)
         original = pages.playlist_tree.topLevelItem(0)
         other = QTreeWidgetItem(pages.playlist_tree, ['Other'])
         other.setData(0, Qt.UserRole + 1, '123')
         other.setData(0, Qt.UserRole + 2, 9)
         selected = []
-        pages.sync_requested.connect(selected.append)
+        pages.primary_action_requested.connect(lambda:selected.append('primary'))
         def choose(menu, _position):
             pages.playlist_tree.setCurrentItem(other)
             menu.actions()[0].trigger()
         with mock.patch.object(pages.playlist_tree, 'itemAt', return_value=original), \
                 mock.patch('desktop.stock_device_view.exec_transient_menu', side_effect=choose):
             pages._playlist_context_menu(QPoint(1, 1))
-        self.assertEqual(selected, [(str(PLAYLIST_ID), 'Favorites', 2)])
+        self.assertEqual(selected, ['primary'])
 
     def test_context_artwork_action_rejects_a_replaced_snapshot(self):
         pages = self.pages(dual=True)
         original = pages.playlist_tree.topLevelItem(0)
         selected = []
-        pages.sync_requested.connect(selected.append)
+        pages.primary_action_requested.connect(lambda:selected.append('primary'))
         def choose(menu, _position):
             pages.set_snapshot(snapshot('/synthetic/replacement-device'))
             menu.actions()[0].trigger()

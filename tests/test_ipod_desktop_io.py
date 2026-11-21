@@ -41,7 +41,7 @@ def host():
         _stock_device_key=lambda *args: "identity",
         _sync_playlists=lambda: [Playlist('custom', [], [], 'custom')],
         _device_operation_owned=lambda: False,
-        _defer_device_operation_until_scan_finishes=lambda *args: False,
+        _defer_device_operation_until_scan_finishes=mock.Mock(return_value=False),
         _release_eject_ready=mock.Mock(), _validate_export_target=mock.Mock(),
         _set_device_progress=mock.Mock(), _start_pulse=mock.Mock(),
         _start_device_worker=mock.Mock(), _set_status_count=mock.Mock(),
@@ -135,6 +135,9 @@ class IpodDesktopIOTests(unittest.TestCase):
         ):
             MainWindow._begin_dual_ipod_sync(owner, "/fixture/ipod", [selected], reconcile=True, confirmed=True,
                                             _export_capture=capture)
+            owner._defer_device_operation_until_scan_finishes.assert_called_once()
+            self.assertEqual(owner._defer_device_operation_until_scan_finishes.call_args.kwargs,
+                             {'target':'/fixture/ipod'})
             read.assert_not_called()
             probe.assert_called_once_with("/fixture/ipod", cached_only=True)
             worker = owner._dual_plan_worker

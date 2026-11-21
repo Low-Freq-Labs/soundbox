@@ -1,7 +1,9 @@
-"""Persisted playlist feedback with an actual isolated desktop sidebar."""
+"""RAM feedback and durable playlist publication in an isolated desktop sidebar."""
 from copy import deepcopy
+from contextlib import contextmanager
 from pathlib import Path
 import tempfile
+import threading
 import time
 import unittest
 from unittest import mock
@@ -12,7 +14,7 @@ from PySide6.QtCore import QItemSelectionModel
 from desktop.rekordbox_playlists import PlaylistEditController, QUEUE
 from soundbox import engine, rekordbox_playlist_plan as planner
 from soundbox.library import Library, Playlist, Track
-from soundbox.state_repository import StateRepository
+from soundbox.state_repository import StateRepository,read_state
 from soundbox.rekordbox_playlist_store import request_for
 
 
@@ -46,7 +48,11 @@ class PlaylistPresentation(unittest.TestCase):
             Playlist('Other',['Keep'],['t'],'4')],'/synthetic/master.db',
             source_kind='rekordbox-db',source_library_id='synthetic',source_playlist_catalog=catalog)
         self.win.tag_controller.configure(self.win.lib,True)
-        self.win.tag_controller.busy=True  # deterministic delayed publication; no native API can run
+        # Hold native execution independently of canonical admission. A fake
+        # tags.busy hold also blocks the real StateCommitter's source token.
+        self.source=self.enterContext(mock.patch.object(self.win.tag_controller,'run_playlist_job',return_value=False))
+        self.win.settings['rekordbox_db_path']=str(self.win.lib.source)
+        self.assertTrue(self.win._save_state())
         self.win._populate_tree(engine.summary(self.win.lib))
         self.win._find_tree_item('','3').setExpanded(True)
         self.win.tree.setCurrentItem(self.win._find_tree_item('Folder / Delete','2'))
@@ -55,6 +61,70 @@ class PlaylistPresentation(unittest.TestCase):
     def close(self):
         self.controller.stop();self.win.tag_controller.busy=False
         self.win.shutdown();self.win.close();self.win.deleteLater();self.app.processEvents()
+
+    def wait(self,condition):
+        from PySide6.QtTest import QTest
+        deadline=time.monotonic()+5
+        while not condition() and time.monotonic()<deadline:QTest.qWait(5)
+        self.assertTrue(condition(),'Playlist canonical publication did not settle')
+
+    def durable(self):
+        self.wait(lambda:not self.controller.admission_pending and not self.win._state_publication)
+        self.assertFalse(self.controller.admission_error)
+        return StateRepository(self.win._state_repository.path).load()['settings'].get(QUEUE,[])
+
+    def failed_admission(self):
+        self.wait(lambda:bool(self.controller.admission.error) and not self.controller.admission.active
+                  and not self.win._state_publication)
+        self.assertTrue(self.controller.pending)
+        self.assertFalse(StateRepository(self.win._state_repository.path).load()['settings'].get(QUEUE))
+        self.source.assert_not_called()
+
+    def discard(self):
+        with mock.patch('desktop.rekordbox_playlists.QMessageBox.question',return_value=QMessageBox.Yes):
+            self.assertTrue(self.controller.discard())
+        self.assertEqual(self.durable(),[])
+        self.assertEqual(self.controller.pending,[])
+
+    @contextmanager
+    def held_canonical(self):
+        entered,release=threading.Event(),threading.Event()
+        commit=self.win._state_repository.commit_patch
+        def held(patch):
+            entered.set()
+            if not release.wait(5):raise RuntimeError('Canonical fixture hold timed out')
+            return commit(patch)
+        with mock.patch.object(self.win._state_repository,'commit_patch',side_effect=held):
+            try:yield entered,release
+            finally:
+                release.set()
+                self.wait(lambda:not self.win._state_publication)
+
+    def test_ram_sidebar_feedback_precedes_durability_and_never_becomes_native_or_export_truth(self):
+        from PySide6.QtTest import QTest
+        from desktop.trees import RB_NODE_ROLE
+        before=deepcopy(self.win.lib.source_playlist_catalog)
+        saved=StateRepository(self.win._state_repository.path).load()
+        playlists=deepcopy(self.win.lib.playlists)
+        self.win.table.selectRow(0);seat=self.win._browser_seat()
+        with self.held_canonical() as (entered,release):
+            self.assertTrue(self.win._native_request('rename',identity='2',name='Pending label'))
+            self.assertTrue(entered.wait(2))
+            self.assertIsNotNone(self.win._find_tree_item('Folder / Pending label','2'))
+            self.assertEqual(self.win.tree.currentItem().data(0,RB_NODE_ROLE),'2')
+            self.assertEqual(self.win._browser_seat(),seat)
+            self.assertTrue(self.controller.admission_pending)
+            self.assertTrue(self.win._pending_save_reason())
+            self.assertTrue(self.win._source_selection_reason())
+            self.assertEqual(read_state(self.win._state_repository.path),saved)
+            self.assertEqual(self.win.lib.source_playlist_catalog,before)
+            self.assertEqual(self.win.lib.playlists,playlists)
+            QTest.qWait(10);self.source.assert_not_called();release.set()
+        self.assertEqual(self.durable(),self.controller.pending)
+        self.wait(lambda:self.source.call_count>0)
+        self.assertEqual(self.win.lib.source_playlist_catalog,before)
+        self.assertEqual(self.win.lib.playlists,playlists)
+        self.assertEqual(self.win._browser_seat(),seat)
 
     def test_virtual_artists_stays_second_and_only_exact_generated_native_bindings_are_hidden(self):
         from soundbox import playlist_unification as merge
@@ -116,7 +186,7 @@ class PlaylistPresentation(unittest.TestCase):
         self.assertEqual(self.win.tree.currentItem().data(0,RB_NODE_ROLE),'2')
         self.assertEqual(self.win._browser_seat(),seat)
         self.assertTrue(all(self.win._find_tree_item('',identity).isExpanded() for identity in ('1','3')))
-        persisted=StateRepository(self.win._state_repository.path).load()['settings'][QUEUE]
+        persisted=self.durable()
         self.assertEqual(persisted,self.controller.pending)
         self.assertEqual(persisted[0]['request']['operation'],'reorder')
         self.assertEqual(self.win.lib.source_playlist_catalog,source)
@@ -124,16 +194,22 @@ class PlaylistPresentation(unittest.TestCase):
         self.assertTrue(self.win._native_reorder('1','3',False))
         self.assertEqual(len(self.controller.pending),2)
         self.assertEqual(self.win._browser_seat(),seat)
+        self.assertEqual(self.durable(),self.controller.pending)
 
-    def test_virtual_artists_stays_fixed_and_failed_reorder_persistence_does_not_move_anything(self):
+    def test_virtual_artists_stays_fixed_and_failed_reorder_retains_only_the_unsaved_intention(self):
         from desktop.trees import RB_NODE_ROLE,ARTISTS_ROLE,PINNED_TREE_ROLE
         artists=self.win.tree.topLevelItem(1)
         self.assertTrue(artists.data(0,ARTISTS_ROLE));self.assertTrue(artists.data(0,PINNED_TREE_ROLE))
         self.assertFalse(self.win.tree.mimeData([artists]).hasFormat(self.win.tree._native_mime))
         before=[self.win.tree.topLevelItem(i).data(0,RB_NODE_ROLE) for i in range(self.win.tree.topLevelItemCount())]
-        with mock.patch.object(self.win,'_save_state',return_value=False):
-            self.assertFalse(self.win._native_reorder('3','1',False))
-        self.assertEqual(self.controller.pending,[])
+        source=deepcopy(self.win.lib.source_playlist_catalog);seat=self.win._browser_seat()
+        with mock.patch.object(self.win._state_repository,'commit_patch',side_effect=OSError('Fixture disk full')):
+            self.assertTrue(self.win._native_reorder('3','1',False))
+            request=deepcopy(self.controller.pending[0]['request']);self.failed_admission()
+        self.assertEqual(self.controller.pending[0]['request'],request)
+        self.assertEqual(self.win.lib.source_playlist_catalog,source)
+        self.assertEqual(self.win._browser_seat(),seat)
+        self.discard()
         self.assertEqual([self.win.tree.topLevelItem(i).data(0,RB_NODE_ROLE) for i in range(self.win.tree.topLevelItemCount())],before)
 
     def test_batch_projection_shows_created_playlist_membership_after_one_durable_admission(self):
@@ -152,7 +228,7 @@ class PlaylistPresentation(unittest.TestCase):
         self.assertIsNotNone(item)
         self.win.tree.setCurrentItem(item)
         self.assertEqual({row['id'] for row in self.win.model._rows},{'t','u'})
-        self.assertEqual(StateRepository(self.win._state_repository.path).load()['settings'][QUEUE],self.controller.pending)
+        self.assertEqual(self.durable(),self.controller.pending)
 
     def _large_collection(self):
         for number in range(3200):
@@ -241,8 +317,7 @@ class PlaylistPresentation(unittest.TestCase):
         self.assertEqual([p.pid for p in self.win.lib.playlists],['2','4'])
         self.assertEqual(self.win.removals,{})
         self.assertTrue(self.win._find_tree_item('', '3').isExpanded())
-        state=StateRepository(self.win._state_repository.path).load()
-        self.assertEqual(state['settings'][QUEUE],self.controller.pending)
+        self.assertEqual(self.durable(),self.controller.pending)
         self.win._populate_tree(engine.summary(self.win.lib))
         self.assertIsNone(self.win._find_tree_item('Folder / Delete','2'))
         self.assertEqual(self.controller.pending[0]['error'],'')
@@ -250,10 +325,18 @@ class PlaylistPresentation(unittest.TestCase):
 
     def test_failure_and_discard_reconcile_newest_catalog_and_retry_reprojects(self):
         self.assertTrue(self.win._native_request('delete',identity='1'))
+        self.durable()
         self.win.lib.source_playlist_catalog['nodes'][1]['Name']='External'
         self.win.lib.playlists[0].name='External'
-        self.controller.fail('Source changed')
-        self.assertTrue(self.win._refresh_pending)
+        deferred=[];reconcile=self.win._native_reconcile_source
+        def reconciled():
+            reconcile();deferred.append(self.win._refresh_pending)
+        with mock.patch.object(self.win,'_native_reconcile_source',side_effect=reconciled):
+            self.controller.fail('Source changed');self.durable()
+        self.assertEqual(deferred,[True])
+        self.wait(lambda:self.win._start_rekordbox_refresh.call_count==1)
+        self.win._start_rekordbox_refresh.assert_called_once_with(Path('/synthetic/master.db'))
+        self.win._start_rekordbox_refresh.reset_mock()
         with (
                 mock.patch.object(self.win,'_apply_loaded_library'),
                 mock.patch.object(self.win,'_refresh_devices'),
@@ -267,19 +350,22 @@ class PlaylistPresentation(unittest.TestCase):
             completion.assert_not_called()
         self.assertIsNotNone(self.win._find_tree_item('Folder / External','2'))
         self.assertTrue(self.win._find_tree_item('', '3').isExpanded())
-        self.controller.retry()
+        self.assertTrue(self.controller.retry());self.durable()
         self.assertIsNone(self.win._find_tree_item('Folder / External','2'))
-        self.win.tag_controller.busy=False
-        with mock.patch('desktop.rekordbox_playlists.QMessageBox.question',return_value=QMessageBox.Yes):
-            self.controller.discard()
+        self.discard()
         self.assertEqual(self.controller.pending,[])
+        self.wait(lambda:self.win._start_rekordbox_refresh.call_count==1)
         self.win._start_rekordbox_refresh.assert_called_once_with(Path('/synthetic/master.db'))
         self.assertIsNotNone(self.win._find_tree_item('Folder / External','2'))
         self.assertEqual(self.win.removals,{})
 
     def test_failed_admission_keeps_row_and_identity_mismatch_does_not_hide_a_new_song_list(self):
-        with mock.patch.object(self.win,'_save_state',return_value=False):
-            self.assertFalse(self.win._native_request('delete',identity='1'))
+        source=deepcopy(self.win.lib.source_playlist_catalog)
+        with mock.patch.object(self.win._state_repository,'commit_patch',side_effect=OSError('Fixture disk full')):
+            self.assertTrue(self.win._native_request('delete',identity='1'));self.failed_admission()
+        self.assertEqual(self.win.lib.source_playlist_catalog,source)
+        self.assertEqual(self.win._native_presentation().source_playlist_catalog,source)
+        self.discard()
         self.assertIsNotNone(self.win._find_tree_item('Folder / Delete','2'))
         self.assertTrue(self.win._native_request('delete',identity='1'))
         self.win.lib.source_playlist_catalog['nodes'][0]['UUID']='00000000-0000-4000-8000-999999999999'
@@ -300,8 +386,7 @@ class PlaylistPresentation(unittest.TestCase):
         self.assertIsNotNone(self.win._find_tree_item('Renamed folder / New set',identity))
         self.win._native_append(identity,['u','t'])
         self.assertEqual([r['id'] for r in self.win.model._rows],['u','t'])
-        state=StateRepository(self.win._state_repository.path).load()
-        self.assertEqual(state['settings'][QUEUE],self.controller.pending)
+        self.assertEqual(self.durable(),self.controller.pending)
         self.assertEqual(self.win.lib.source_playlist_catalog,before)
         self.assertEqual([p.pid for p in self.win.lib.playlists],['2','4'])
         # A fresh snapshot/rebuilt sidebar must retain the pending view.
@@ -319,19 +404,23 @@ class PlaylistPresentation(unittest.TestCase):
         self.assertEqual([r['id'] for r in self.win.model._rows],['u'])
         self.assertEqual(self.win.lib.playlists[0].keys,['t'])
         self.assertEqual(self.win.lib.source_playlist_catalog,before)
-        self.controller.fail('Synthetic source conflict')
+        self.durable()
+        self.controller.fail('Synthetic source conflict');self.durable()
         self.assertEqual([r['id'] for r in self.win.model._rows],['t'])
-        self.controller.retry()
+        self.assertTrue(self.controller.retry());self.durable()
         self.assertEqual([r['id'] for r in self.win.model._rows],['u'])
-        self.win.tag_controller.busy=False
-        with mock.patch('desktop.rekordbox_playlists.QMessageBox.question',return_value=QMessageBox.Yes):
-            self.controller.discard()
+        self.discard()
         self.assertEqual([r['id'] for r in self.win.model._rows],['t'])
         self.assertEqual(self.win.lib.source_playlist_catalog,before)
 
     def test_failed_create_save_and_foreign_or_newer_source_do_not_project(self):
-        with mock.patch.object(self.win,'_save_state',return_value=False):
-            self.assertFalse(self.win._native_request('create',name='Not saved'))
+        before=deepcopy(self.win.lib.source_playlist_catalog)
+        with mock.patch.object(self.win._state_repository,'commit_patch',side_effect=OSError('Fixture disk full')):
+            self.assertTrue(self.win._native_request('create',name='Not saved'))
+            request=deepcopy(self.controller.pending[0]['request']);self.failed_admission()
+        self.assertEqual(self.controller.pending[0]['request'],request)
+        self.assertEqual(self.win._native_presentation().source_playlist_catalog,before)
+        self.discard()
         self.assertEqual(self.controller.pending,[])
         self.assertTrue(self.win._native_request('rename',identity='2',name='Queued name'))
         self.assertIsNotNone(self.win._find_tree_item('Folder / Queued name','2'))

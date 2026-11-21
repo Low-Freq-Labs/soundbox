@@ -39,6 +39,7 @@ COMMANDS = (
       for i in range(8)),
     *(Command(f"cues.delete.{i}", "Cue pages", f"Delete cue {i + 1} · active page", (f"Ctrl+{i + 1}",))
       for i in range(8)),
+    Command("browser.select_all", "Library", "Select all", ("Ctrl+A",)),
     Command("browser.rename", "Library", "Rename selected item", ("Ctrl+R",)),
     Command("browser.load", "Library", "Load selected track"),
     Command("browser.search", "Library", "Focus search"),
@@ -90,7 +91,7 @@ class Keymap:
         raw = self.overrides.get(action, BY_ID[action].defaults)
         if not isinstance(raw, (list, tuple)):
             raw = BY_ID[action].defaults
-        if action.startswith('cues.delete.') and action not in self.overrides:
+        if (action.startswith('cues.delete.') or action == 'browser.select_all') and action not in self.overrides:
             # New defaults cannot displace a user's preexisting explicit map.
             assigned = {normalize(value) for other, values in self.overrides.items()
                         if other in BY_ID and other != action and isinstance(values, (list, tuple))

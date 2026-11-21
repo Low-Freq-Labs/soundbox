@@ -22,7 +22,7 @@ Every authored folder has a short README. Vendor trees stay pinned; generated/pr
 
 - `.venv/`: active pinned development environment; the installed app is independent of it.
 - `build/native/`, `build/cdj/release/soundbox-cdj`: checked native outputs required by source runs/tests.
-- `build/check/`: current full-gate inventories, results and verification reports.
+- `build/check/`: current full-gate inventories/results; `focused/` holds explicitly scoped exact/named-area checks and phase receipts, never complete-release proof.
 - `build/rekordbox-write-proof/`: retained private copy-only proof evidence; no source authority.
 - `build/personal/`, `build/public/`, `dist/`: reproducible packaging intermediates/candidates; preserve an unaccepted handoff until resolved.
 - Python, mypy and Hypothesis caches are generated. Ignored never automatically means disposable.

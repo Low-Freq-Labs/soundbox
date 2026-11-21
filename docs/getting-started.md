@@ -36,7 +36,10 @@ Ordinary playback/export preserves source audio; accepted recoverable conversion
 ## Verify and package
 
 ```sh
-./check.sh --render
+./check.sh --list-suites                        # areas and test levels
+./check.sh --suite tags --level quick           # selected area
+./check.sh --focus tests/test_sidebar_layout.py  # exact local regression
+./check.sh --render                            # full gate before commit/push
 ./build_app.sh
 ./build_app.sh public
 ```

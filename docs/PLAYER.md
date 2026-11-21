@@ -76,7 +76,7 @@ bare unlocked MPEG-1 CBR/no-Info/Xing stereo44.1kHz MP3. Other profiles and
 existing-analysis replacement remain gated; [HANDOFF](HANDOFF.md) records exact
 installed proof and the published-source versus signed-build provenance.
 
-## Current installed behavior — November2–5
+## November2–5 behavior checkpoint
 
 The November4 USB/theme follow-up preserves the native player, audio, waveform
 and musical-data contracts below. Shared progress lettering uses the saved
@@ -129,9 +129,12 @@ full-file hash runs on the UI thread and no audio reload is required for ordinar
 hydration. Native publication verifies every saved adaptive-grid row, tempo and
 endpoint; the headline BPM does not require all beat rows to share one tempo.
 An errored song keeps its intent while other imported songs continue saving.
-Normal window close/Cmd+Q stays open while captured import/analysis/source saves
-remain; editing and source pumps keep running. Ordinary waveform/artwork reads do
-not prevent Quit. The next Quit proceeds once those saves finish.
+Normal window close/Cmd+Q keeps editing and source pumps running while captured
+import/analysis/source saves finish, then closes automatically. Failed durable
+intentions may remain queued for next launch only after a fresh canonical
+checkpoint proves they are retained. Unsaved RAM intentions or failed checkpoint
+storage keep the window open with an attention message. Ordinary waveform/artwork
+reads do not prevent Quit; teardown joins admitted workers.
 
 Playlist saves do not reload audio, seek, replace a grid or reset a held cue/scrub.
 Unrelated saves leave Collection rows intact. Relevant refreshes preserve current
@@ -245,7 +248,9 @@ The Playlists sidebar keeps Collection's home icon, Artists' person icon and
 folder expansion icons fixed. Only playlist icons are configurable: right-click
 the icon for Star, Music note or Vinyl crate. These scoped local preferences
 preserve navigation and do not enqueue native database writes. Right-clicking
-row text retains the ordinary playlist menu.
+row text retains the ordinary playlist menu. A smart playlist adds a small gear
+badge to its chosen base icon, including selected rows. The sidebar divider stays
+one pixel wide, with Qt's wider invisible mouse grab area for resizing.
 
 Columns can reach the frame’s right edge, including FORMAT. The visible scrollbar
 overlays the row edge below the header; it reserves no column-width gutter.
@@ -287,6 +292,41 @@ browser dismisses that modeless panel and delivers the same pointer gesture;
 one double click loads the song. Escape, button toggle, app deactivation and
 shutdown dismiss it too. The panel keeps transport shortcuts scoped to its own
 controls until it closes.
+
+Tag clicks update their checkboxes immediately and retain the full captured song
+selection through ordered background admission and source saving. A new tag is
+available immediately for assignments and smart-playlist creation; those dependent
+intentions wait for its exact native creation and verified library publication.
+Literal names such as `R&B` retain their ampersand. Pending presentation never
+claims native save success, and failures retain the exact intentions for retry.
+iPod export/sync/delete ownership does not block desktop tag or cue/grid capture;
+each export keeps its frozen generation while later edits save independently.
+Native source writers still serialize through their shared guarded worker.
+
+Drag a tag label to reorder the two-column grid when that source's order
+capability is available; assignment readiness is independent. Native DB order
+uses its separately accepted shared-source FIFO, exact category/tag bindings and
+fresh native readback. Its authority defaults off until native acceptance; an
+old display preference never overrides native order. XML/public sources retain
+the source/UUID-scoped display preference. A stale source/catalog gesture is
+refused. A normal label click changes an available checkbox; right-click offers
+Rename Tag and Delete Tag for the exact captured definition. Each native edit
+requires its own accepted capability and rechecks source/category/tag identity
+after the form or confirmation.
+
+Regular playlists, smart playlists and folders can move between native folders,
+including nested and empty destinations, under the separately accepted node-move
+capability. A folder row has three targets whether expanded or collapsed: its
+upper quarter inserts before, lower quarter inserts after, and middle half appends
+inside at the bottom. The inside target draws both row-edge lines. Expanded
+children also accept precise sibling placement. Root whitespace appends at the
+top level; root sibling edges allow explicit placement. Self/descendant cycles,
+stale bindings and unsupported source states are refused. The older smart-only
+append capability remains separately scoped. Pending moves preserve the current
+song selection and computed membership in presentation, while authoritative
+source and export state wait for verified publication and durable acknowledgement.
+Creating from an existing row's context menu captures placement directly after
+that row; changing the destination in the form clears that captured placement.
 
 Smart playlists show the latest matching My Tag assignment first by default.
 The native snapshot supplies active assignment creation dates, including tags
@@ -457,7 +497,10 @@ Transport controls:
 
 Keyboard settings expose the transport and cue actions with remappable modifier
 combinations and multiple bindings per action. Space, C and Command-R retain
-their defaults. Numbers 1–8 trigger populated slots on the selected Hot/Memory
+their defaults. Library → Select all defaults to Command-A on macOS and selects
+the active browser's rows; text editors retain normal text selection. A new
+default never displaces an existing explicit conflicting binding.
+Numbers 1–8 trigger populated slots on the selected Hot/Memory
 page, or create empty slots at the captured native playhead (nearest beat when Q
 is on); Command-1–8 deletes.
 9 selects Hot Cue and 0 selects Memory Cue. `=` zooms in and `-` zooms out by
@@ -1434,13 +1477,16 @@ rows plus DAT/EXT hashes; only Cue receipts contain after_revision. Exact legacy
 receipt/base proofs reconcile already committed nudges without repeating them.
 
 Normal UI close/Cmd+Q keeps the usable app and source pumps open while captured
-imports/detection/source saves remain. The next Quit proceeds after completion;
-ordinary waveform/artwork/read-only preparation does not block it. Explicit
-teardown still drains accepted active work and preserves unstarted durable
-intentions. Unknown recovery stays guarded; no whole-library restore, cache purge
-or detector rerun is part of retry. Variable-tempo scaling and
-intelligent-playlist creation remain separate work. Active supported native
-Collection audio is already discovered without playlist membership.
+imports/detection/source saves remain, then closes automatically after completion
+or a verified retention checkpoint for failed durable intentions. Unsaved RAM
+intentions keep Quit guarded. Ordinary waveform/artwork/read-only preparation
+does not block it. Explicit teardown drains accepted active work and preserves
+unstarted durable intentions. Unknown recovery stays guarded; no whole-library
+restore, cache purge or detector rerun is part of retry. Variable-tempo scaling
+retains its separate acceptance boundary. Positive My Tag ANY/OR smart-playlist
+creation uses its own accepted source protocols, described in
+[the prep guide](rekordbox-prep.md). Active supported native Collection audio is
+already discovered without playlist membership.
 
 ## Explicit analysis default — October30
 
@@ -1497,6 +1543,9 @@ Global Search includes Graveyard metadata and Restore keeps its visible anchor.
 Trackpad/momentum briefly colors the actual scrollbar thumb in the current theme;
 feedback ends after120ms of inactivity following ScrollEnd; phase-less wheels
 use the same interval. An inactive axis receiving only ScrollEnd stays inactive.
+Dialog lists and scroll areas, including Create Smart Playlist's tag choices,
+use the same rest, hover and gesture feedback as the main browser. Hiding a
+surface clears gesture feedback when Qt omits ScrollEnd.
 See HANDOFF for tested versus installed state.
 
 Native prep intentions use v2 exact native grid arithmetic, retaining terminal

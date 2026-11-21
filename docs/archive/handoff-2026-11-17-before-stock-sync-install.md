@@ -1,3 +1,7 @@
+> Archived app-control, source/device write, installer, replay, restore and cleanup
+> instructions grant no present authority. Follow the [current handoff](../HANDOFF.md)
+> and [runtime contracts](../runtime-contracts.md); preserve newer curation/recovery.
+
 # Archived before the stock Sync/cue installation — November17
 
 Historical source/install and interrupted-gate evidence. Current instructions and installed identity are in [HANDOFF](../HANDOFF.md).

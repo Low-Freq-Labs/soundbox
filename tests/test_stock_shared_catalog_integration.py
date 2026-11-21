@@ -34,10 +34,13 @@ class SharedCatalogIntegration(unittest.TestCase):
         for local, color in (('alpha', 'red'), ('beta', 'red'), ('foreign', 'green')):
             self.cover(local, color)
         self.infos = [TrackInfo(title=title, artist='Artist', dbid=dbid,
+            album='SoundBox' if dbid in (101, 102) else '',
             location=f':iPod_Control:Music:F00:{dbid}.wav', size=1808,
             length=10, filetype='wav', sample_rate=44100, rating=80,
             play_count=7, skip_count=2, composer='Untouched composer')
             for dbid, title in ((101, 'Alpha'), (102, 'Beta'), (103, 'Foreign'))]
+        # Start these shared-cover no-op checks at the current export baseline.
+        # Blank source albums render as SoundBox; foreign metadata stays exact.
         folder = self.target / 'iPod_Control/Artwork'; folder.mkdir(parents=True)
         rendered = render_stock_artwork([self.infos[0], self.infos[2]],
             {101: self.cache.prepare(self.art.image_path('alpha')),

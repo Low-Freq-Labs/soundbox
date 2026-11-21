@@ -4,6 +4,7 @@ from dataclasses import replace
 import threading
 from types import SimpleNamespace
 import unittest
+from unittest import mock
 
 from soundbox import prep_edits
 from tests import test_deferred_prep as fixture
@@ -62,6 +63,54 @@ class AsyncPrepPipeline(unittest.TestCase):
         self.assertEqual(self.window.lib.tracks_by_id[tid].source_cues[0]['position_ms'],777)
         self.assertEqual(self.window.lib.tracks_by_id[tid].name,'Newer title')
         self.assertEqual(len(self.case.writes),1)
+
+    def test_audio_identity_renewal_uses_selected_durable_queue_before_publication(self):
+        track=self.case.bare_track()
+        self.case.native.shared.busy=True
+        track.path.chmod(track.path.stat().st_mode ^ 0o100)
+        self.assertTrue(self.controller.request_grid(self.case.tid,'shift',1))
+        captured=deepcopy(self.controller.pending)
+        self.assertTrue(captured[0]['identity_pending'])
+        self.case.native.shared.busy=False
+        with mock.patch.object(self.window,'_save_state',
+                               side_effect=AssertionError('Identity proof must save only its queue delta')):
+            self.controller.timer.stop();self.controller.pump()
+            self.wait_commit()
+        self.assertEqual(self.controller.pending,captured)
+        self.assertNotIn('_detected_epoch',self.window.player_bar._analysis_parts)
+        self.assertEqual(self.case.writes,[])
+        self.finish()
+        self.assertNotIn('identity_pending',self.controller.pending[0])
+        self.assertEqual(self.window.player_bar._analysis_parts['_detected_epoch'],
+                         self.controller.pending[0]['epoch'])
+        self.assertEqual(self.case.writes,[])
+
+    def test_newer_cue_retains_native_upgrade_when_identity_proof_ack_was_waiting(self):
+        track=self.case.bare_track()
+        submit=self.window._commit_tag_state
+        del self.window._commit_tag_state
+        self.case.native.shared.busy=True
+        track.path.chmod(track.path.stat().st_mode ^ 0o100)
+        self.assertTrue(self.controller.request_cue(self.case.tid,'hot',0,'add',777))
+        self.assertEqual(self.controller.pending[0]['version'],1)
+        self.window._commit_tag_state=submit
+        self.case.native.shared.busy=False
+        self.controller.timer.stop();self.controller.pump()
+        self.wait_commit()
+        self.assertTrue(self.controller.request_cue(self.case.tid,'hot',1,'add',1555))
+        self.finish()  # The completed identity proof upgrades the native job.
+        self.assertEqual(self.controller.pending[0]['version'],2)
+        self.wait_commit()
+        queued=self.commits[0][0][0]
+        self.assertEqual(queued['version'],2)
+        self.assertTrue(queued['native_ready'])
+        self.assertNotIn('identity_pending',queued)
+        self.finish()
+        for _ in range(4):
+            self.wait_commit();self.finish()
+        self.assertFalse(self.controller.pending)
+        self.assertEqual([kind for kind,_ in self.case.writes],['cue','cue'])
+        self.assertEqual(sorted(row['InMsec'] for row in self.case.native.state.cues),[777,1555])
 
     def test_state_failure_after_queue_ownership_changes_releases_logical_busy(self):
         self.assertTrue(self.controller.request_cue(self.case.tid,'hot',0,'add',777))
