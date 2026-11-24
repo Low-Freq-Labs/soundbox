@@ -84,6 +84,115 @@ class GridSourceTransactions(unittest.TestCase):
         snapshot = self.store.snapshot()
         return GridEdit('2', UID, snapshot.revision, operation, value)
 
+    def prepared_record(self, operation='shift', value=1):
+        def stop(phase):
+            if phase == 'journal-ready':raise RuntimeError('synthetic prepared journal')
+        request = self.request(operation, value)
+        with mock.patch.object(grids, '_fault', side_effect=stop), \
+                self.assertRaisesRegex(RuntimeError, 'synthetic prepared journal'):
+            self.store.apply(request)
+        return json.loads(self.store.journal.read_bytes())
+
+    def test_recovery_plan_reuse_keeps_fresh_payload_reads_endpoint_and_cold_store_proof(self):
+        record = self.prepared_record()
+        original_read = Path.read_bytes
+        reads = []
+        def read(path):
+            reads.append(path)
+            return original_read(path)
+        with mock.patch.object(grids, 'plan_grid_edit', wraps=grids.plan_grid_edit) as plan, \
+                mock.patch.object(self.store, '_exact_end', wraps=self.store._exact_end) as endpoint:
+            for decision in ('prepared', 'committed'):
+                record['decision'] = decision
+                self.store.journal.write_bytes(grids._json(record))
+                reads.clear()
+                with mock.patch.object(Path, 'read_bytes', autospec=True, side_effect=read):
+                    self.assertEqual(self.store._record(), record)
+                for name in ('before.DAT', 'before.EXT', 'after.DAT', 'after.EXT'):
+                    self.assertEqual(reads.count(self.store.payloads / name), 1)
+            self.assertEqual(plan.call_count, 1)
+            self.assertEqual(endpoint.call_count, 2)
+            # A new owner, including a cold recovery owner, reconstructs fully.
+            cold = grids.PilotGridStore(self.authority, self.root)
+            self.assertIsNone(cold._record_proof)
+            self.assertEqual(cold._record(), record)
+            self.assertEqual(plan.call_count, 2)
+        self.assertEqual(self.dat_path.read_bytes(), self.dat)
+        self.assertEqual(self.ext_path.read_bytes(), self.ext)
+
+    def test_successful_grid_save_reconstructs_once_then_independently_recovers(self):
+        request = self.request()
+        with mock.patch.object(grids, 'plan_grid_edit', wraps=grids.plan_grid_edit) as plan:
+            self.assertTrue(self.store.apply(request))
+        self.assertEqual(plan.call_count, 2)  # initial plan plus first journal proof
+        self.assertEqual(read_grid(self.dat_path.read_bytes())[0].time_ms,
+                         read_grid(self.dat)[0].time_ms + 1)
+        self.assertFalse(self.store.journal.exists())
+
+    def test_failed_content_file_semantics_do_not_seed_recovery_proof(self):
+        self.enable_manual_bpm()
+        record = self.prepared_record('bpm', 9100)
+        original = grids._json(record)
+        record['content_file_after']['Size'] += 1
+        self.store.journal.write_bytes(grids._json(record))
+        with self.assertRaisesRegex(offline.RecoveryRequired, 'Grid recovery evidence'):
+            self.store._record()
+        self.assertIsNone(self.store._record_proof)
+        self.store.journal.write_bytes(original)
+        with mock.patch.object(grids, 'plan_grid_edit', wraps=grids.plan_grid_edit) as plan:
+            self.store._record();self.store._record()
+        self.assertEqual(plan.call_count, 1)
+
+    def test_warm_grid_proof_still_rejects_every_changed_archived_payload(self):
+        record = self.prepared_record()
+        self.store._record()
+        for name in ('before.DAT', 'before.EXT', 'after.DAT', 'after.EXT'):
+            path = self.store.payloads / name
+            original = path.read_bytes()
+            with self.subTest(payload=name):
+                path.write_bytes(original + b'changed fixture bytes')
+                with self.assertRaises(offline.RecoveryRequired):self.store._record()
+                # Matching a changed payload hash is still not a valid plan.
+                side, role = name.split('.')
+                record['files'][role][side] = grids._sha(path.read_bytes())
+                self.store.journal.write_bytes(grids._json(record))
+                with self.assertRaises((offline.RecoveryRequired, offline.WriteProofError)):
+                    self.store._record()
+                path.write_bytes(original)
+                record['files'][role][side] = grids._sha(original)
+                self.store.journal.write_bytes(grids._json(record))
+                self.assertEqual(self.store._record(), record)
+
+    def test_warm_grid_proof_binds_request_authority_marker_and_fresh_decision(self):
+        record = self.prepared_record();self.store._record()
+        original = grids._json(record)
+        for change in ('request', 'decision', 'marker'):
+            with self.subTest(change=change):
+                if change == 'request':record['request']['value'] = 2
+                elif change == 'decision':record['decision'] = 'unexpected'
+                else:(self.store.payloads / 'operation.json').write_bytes(b'{}')
+                self.store.journal.write_bytes(grids._json(record))
+                with self.assertRaises(offline.RecoveryRequired):self.store._record()
+                record = json.loads(original);self.store.journal.write_bytes(original)
+                (self.store.payloads / 'operation.json').write_bytes(
+                    grids._json({'operation_id': record['operation_id']}))
+        self.store.authority = replace(self.authority, manual_bpm_accepted=True)
+        with mock.patch.object(grids, 'plan_grid_edit', wraps=grids.plan_grid_edit) as plan:
+            self.assertEqual(self.store._record(), record)
+        self.assertEqual(plan.call_count, 1)
+
+    def test_warm_grid_proof_reacquires_pcm_endpoint_before_accepting_a_hit(self):
+        audio = self.ambiguous_fixture()
+        self.prepared_record('bpm', 13800)
+        self.store._record()
+        with mock.patch.object(grids, 'plan_grid_edit', wraps=grids.plan_grid_edit) as plan:
+            self.store._record()
+            plan.assert_not_called()
+            audio.touch()
+            with self.assertRaisesRegex(offline.RecoveryRequired, 'Audio endpoint identity changed'):
+                self.store._record()
+            plan.assert_not_called()
+
     def state(self):
         conn = offline._connect(self.source, readonly=True)
         try:

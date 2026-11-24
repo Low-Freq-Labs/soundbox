@@ -14,6 +14,7 @@ from desktop.app import MainWindow
 from desktop.cdj import _source_edits_error, _source_edits_pending
 from desktop.native_deck import NativeGainControl, PlaybackState, UnavailableDeckBackend
 from soundbox import analysis
+from soundbox import prep_edits
 from soundbox.library import Library, Track
 from soundbox.providers import Providers
 from soundbox.state_repository import read_state
@@ -102,6 +103,111 @@ class CueGestureHotpath(unittest.TestCase):
     def restore_deck(self):
         self.player.player = self.original
         self.player.audio = self.original_audio
+
+    def queued_grid(self, tid='A'):
+        controller=self.window.prep_controller
+        job=controller._new(self.window.lib.tracks_by_id['A'],kind='cue')
+        job.update(track_id=tid,grid=[[1,0,120],[2,500,120]])
+        job=prep_edits.operation(job,'cue','add',page='hot',slot=0,position=1000)
+        self.window.settings.setdefault(prep_edits.KEY,[]).append(job)
+        self.addCleanup(lambda:self.window.settings.pop(prep_edits.KEY,None))
+        return job
+
+    def test_grid_sync_checks_availability_once_and_never_walks_unselected_grid_rows(self):
+        class UnreadRows(list):
+            def __iter__(self):raise AssertionError('UI walked an unrelated grid')
+        job=self.queued_grid('B');job['grid']=UnreadRows(job['grid'])
+        w=self.window;controller=w.prep_controller
+        with mock.patch.object(controller,'presentation_reason',wraps=controller.presentation_reason) as reason, \
+                mock.patch.object(controller,'reason',side_effect=AssertionError('UI used admission validation')):
+            w._sync_grid()
+        reason.assert_called_once_with('A')
+        self.assertTrue(all(button.isEnabled() for button in w.grid_edit_buttons))
+
+    def test_grid_availability_fully_validates_selected_rows_on_every_sync(self):
+        job=self.queued_grid();controller=self.window.prep_controller
+        self.assertEqual(controller.presentation_reason('A'),'')
+        job['grid'][1][1]=0
+        self.assertEqual(controller.presentation_reason('A'),'Invalid pending grid')
+        self.window._sync_grid()
+        self.assertTrue(all(not button.isEnabled() for button in self.window.grid_edit_buttons))
+        self.assertIn('Invalid pending grid',self.window.bpm_value.toolTip())
+
+    def test_grid_availability_retains_unrelated_headers_cues_operations_and_requests(self):
+        from copy import deepcopy
+        job=self.queued_grid('B');original=deepcopy(job);controller=self.window.prep_controller
+        cases=(('epoch',[-1,2,3,4,5]),('native_ready','yes'),('grid',()),
+               ('grid',[None]*400001),('source_uuid',''),('cues',[{}]),
+               ('operations',[{}]),('prepared',{}))
+        for key,value in cases:
+            with self.subTest(key=key,value_type=type(value).__name__):
+                job.clear();job.update(original);job[key]=value
+                with self.assertRaises(ValueError) as invalid:prep_edits.validate([job])
+                self.assertEqual(controller.presentation_reason('A'),str(invalid.exception))
+
+    def test_ui_projection_grants_no_grid_admission_or_native_pump_permission(self):
+        job=self.queued_grid('B');job['grid'][1][1]=0
+        w=self.window;controller=w.prep_controller
+        self.assertEqual(controller.presentation_reason('A'),'')
+        self.assertEqual(controller.reason('A',grid=True),'Invalid pending grid')
+        self.assertEqual(w.grid_controller.reason('A',allow_checking=True),'Invalid pending grid')
+        with mock.patch.object(controller.state_lane,'admit') as admit, \
+                mock.patch.object(controller.tags,'run_prep_job') as native, \
+                mock.patch.object(controller,'_status') as status:
+            self.assertFalse(controller.request_grid('A','shift',1))
+            self.assertFalse(w.grid_controller.request('A','shift',1))
+            controller.pump()
+        admit.assert_not_called();native.assert_not_called()
+        status.assert_called_once_with('Invalid pending grid')
+        self.assertTrue(controller.tags.prep_priority)
+
+    def test_local_presentation_reasons_preserve_lock_binding_error_and_bpm_eligibility(self):
+        job=self.queued_grid();w=self.window;c=w.prep_controller;g=w.grid_controller
+        track=w.lib.tracks_by_id['A']
+        self.assertEqual(g.presentation_reasons('A'),('',''))
+        job['grid'][1][2]=121
+        self.assertEqual(g.presentation_reasons('A'),('', 'Manual BPM requires a constant-tempo grid'))
+        job['grid'][1][2]=120
+        g._requires_authority=True
+        from types import SimpleNamespace
+        g._authority=SimpleNamespace(manual_bpm_accepted=False)
+        self.assertIn('awaits native acceptance',g.presentation_reasons('A')[1])
+        g._authority.manual_bpm_accepted=True
+        self.assertEqual(g.presentation_reasons('A'),('',''))
+        for flags,message in ((128,'Analysis Lock'),(-1,'Refresh native analysis metadata')):
+            track.info['nativeAnalysisFlags']=flags
+            reason=g.presentation_reasons('A')
+            self.assertIn(message,reason[0]);self.assertEqual(reason[0],reason[1])
+        track.info.pop('nativeAnalysisFlags')
+        job['path']='/different/source.wav'
+        self.assertIn('different source',g.presentation_reasons('A')[0])
+        job['path']=str(track.path);c.errors['A']='saved readback failed'
+        self.assertEqual(g.presentation_reasons('A'),('saved readback failed',)*2)
+        c.errors.clear();w._state_maintenance=True
+        self.addCleanup(setattr,w,'_state_maintenance',False)
+        self.assertEqual(g.presentation_reasons('A'),('Restoring library state…',)*2)
+
+    def test_grid_sync_skips_bpm_specific_reads_while_ui_blocked_and_keeps_source_error_first(self):
+        self.queued_grid();w=self.window;pb=self.player
+        cases=((pb,'_pending_autoplay',True,'Wait for the track'),
+               (pb,'_native_error','failed','Wait for the track'),
+               (pb.cue_panel,'_loaded',False,'Wait for the track'),
+               (w,'_state_maintenance',True,'Restoring library state'),
+               (w,'_shutting_down',True,'Finishing library edits'))
+        with mock.patch.object(w.grid_controller,'_bpm_reason',side_effect=AssertionError('blocked UI read BPM grid')):
+            for owner,key,value,message in cases:
+                with self.subTest(key=key),mock.patch.object(owner,key,value):
+                    w._sync_grid()
+                    self.assertTrue(w.bpm_value.isReadOnly())
+                    self.assertIn(message,w.bpm_value.toolTip())
+            with mock.patch.object(pb,'_pending_autoplay',True), \
+                    mock.patch.dict(w.lib.tracks_by_id['A'].info,nativeAnalysisFlags=128):
+                w._sync_grid()
+                self.assertIn('Analysis Lock',w.bpm_value.toolTip())
+            with mock.patch.object(w.grid_controller,'is_local',return_value=False), \
+                    mock.patch.dict(pb._analysis_parts,provenance={'grid':'soundbox-manual'}):
+                w._sync_grid()
+                self.assertIn('SoundBox manual grid',w.bpm_value.toolTip())
 
     def wait(self, condition):
         deadline=time.monotonic()+5

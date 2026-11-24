@@ -25,7 +25,7 @@ _HOT_CUE_FALLBACKS = (
 )
 _MEMORY_CUE_RGB = (255, 52, 52)
 _WAVEFORM_MODES = {"BLUE": 1, "RGB": 2, "3BAND": 3}
-_NATIVE_ABI_VERSION = 6
+_NATIVE_ABI_VERSION = 9
 _NATIVE_GEOMETRY_EVENTS = tuple(
     event_type
     for event_type in (
@@ -299,6 +299,14 @@ def _bind(path: Path):
         *lib.sb_deck_set_waveform_streams.argtypes[1:],
     ]
     lib.sb_deck_set_waveform_streams_for_generation.restype = ctypes.c_int
+    lib.sb_deck_set_blue_overview_for_generation.argtypes = [
+        handle, ctypes.c_uint64, ctypes.POINTER(ctypes.c_uint8), ctypes.c_size_t,
+    ]
+    lib.sb_deck_set_blue_overview_for_generation.restype = ctypes.c_int
+    lib.sb_deck_set_three_band_overview_for_generation.argtypes = [
+        handle, ctypes.c_uint64, ctypes.POINTER(ctypes.c_uint8), ctypes.c_size_t,
+    ]
+    lib.sb_deck_set_three_band_overview_for_generation.restype = ctypes.c_int
     lib.sb_deck_set_waveform_mode.argtypes = [handle, ctypes.c_uint32]
     lib.sb_deck_set_waveform_mode.restype = ctypes.c_int
     lib.sb_deck_waveform_mode.argtypes = [handle]
@@ -438,6 +446,10 @@ def _bind(path: Path):
         handle, ctypes.c_uint32, ctypes.c_uint32,
     ]
     lib.sb_deck_begin_frame_trace.restype = ctypes.c_int
+    lib.sb_deck_begin_surface_trace.argtypes = [
+        handle, ctypes.c_uint32, ctypes.c_uint32,
+    ]
+    lib.sb_deck_begin_surface_trace.restype = ctypes.c_int
     lib.sb_deck_frame_trace_status.argtypes = [
         handle, ctypes.POINTER(_FrameTraceStatus),
     ]
@@ -813,13 +825,16 @@ class NativeDeckBackend(QObject):
         return int(self._snapshot.underruns)
 
     def diagnostic_begin_frame_trace(
-            self, max_frames: int, crop_width_pixels: int = 768):
-        """Arm a bounded exact-drawable capture with no display-thread I/O."""
+            self, max_frames: int, crop_width_pixels: int = 768, *,
+            include_overview: bool = False):
+        """Arm a bounded drawable capture; optionally include the mini lane."""
         max_frames = int(max_frames)
         crop_width_pixels = int(crop_width_pixels)
         if max_frames < 1 or crop_width_pixels < 0:
             raise ValueError("invalid Metal frame-trace bounds")
-        if not self._lib.sb_deck_begin_frame_trace(
+        begin = (self._lib.sb_deck_begin_surface_trace if include_overview
+                 else self._lib.sb_deck_begin_frame_trace)
+        if not begin(
                 self._handle, max_frames, crop_width_pixels):
             raise RuntimeError(
                 "Metal frame trace could not allocate its bounded capture")
@@ -1068,11 +1083,34 @@ class NativeDeckBackend(QObject):
                 if audio_detail is None and "heights" in detail:
                     audio_detail = detail
                 self._set_audio_detail(audio_detail, generation)
+                blue_ok = self._set_blue_preview(detail.get('_blue_preview'), generation)
+                if generation and generation != self._analysis_generation:
+                    return False, False
+                three_band_ok = self._set_three_band_preview(detail.get('_three_band_preview'), generation)
+                if generation and generation != self._analysis_generation:
+                    return False, False
                 detail_ok = bool(
-                    band_ok or self.diagnostic_detail_shape() != before)
+                    blue_ok and three_band_ok and (band_ok or self.diagnostic_detail_shape() != before))
         finally:
             self._lib.sb_deck_end_waveform_update(self._handle)
         return overview_ok, detail_ok
+
+    def _set_blue_preview(self, rows, generation=0) -> bool:
+        """Set or clear this generation's optional native six-byte palette rows."""
+        if rows is None:rows = b''
+        if not isinstance(rows, bytes) or len(rows) not in (0, 1200 * 6):return False
+        packed = (ctypes.c_uint8 * len(rows)).from_buffer_copy(rows) if rows else None
+        return bool(self._lib.sb_deck_set_blue_overview_for_generation(
+            self._handle, int(generation or self._analysis_generation), packed, len(rows) // 6))
+
+    def _set_three_band_preview(self, rows, generation=0) -> bool:
+        """Set or clear all1200 native PWV6 rows before the first mini frame."""
+        if rows is None:rows = b''
+        if (not isinstance(rows, bytes) or len(rows) not in (0, 1200 * 3)
+                or any(value > 127 for value in rows)):return False
+        packed = (ctypes.c_uint8 * len(rows)).from_buffer_copy(rows) if rows else None
+        return bool(self._lib.sb_deck_set_three_band_overview_for_generation(
+            self._handle, int(generation or self._analysis_generation), packed, len(rows) // 3))
 
     def _set_waveform_streams(
             self, detail: dict, rate: float,

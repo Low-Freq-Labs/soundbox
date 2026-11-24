@@ -121,6 +121,45 @@ class Inject(unittest.TestCase):
             self.assertEqual(imported["sb-a"]["time"], 3594)
             self.assertEqual(imported["sb-a"]["size"], len(b"old imported record"))
 
+    def test_complete_typed_metadata_needs_no_path_or_source_observation(self):
+        record = dict(path='/missing/retained.wav', time=240, size=1234)
+        with mock.patch.object(imports, 'Path', side_effect=AssertionError('Observed complete metadata')):
+            self.assertEqual(imports.refresh_metadata({'sb-retained': record}), 0)
+        self.assertEqual(record, dict(path='/missing/retained.wav', time=240, size=1234))
+
+    def test_complete_missing_reference_still_joins_the_pool(self):
+        lib = self._lib()
+        imported = {'sb-retained': dict(path='/missing/retained.wav', time=240, size=1234)}
+        with mock.patch.object(Path, 'is_file', side_effect=AssertionError('Unneeded health stat')):
+            self.assertEqual(imports.inject(lib, imported), 0)
+        self.assertEqual(lib.tracks_by_id['sb-retained'].path, Path('/missing/retained.wav'))
+        self.assertEqual(lib.tracks_by_id['sb-retained'].total_time, 240)
+        self.assertEqual(lib.tracks_by_id['sb-retained'].size, 1234)
+
+    def test_incomplete_and_legacy_scalar_values_keep_their_original_repair_path(self):
+        for time_value, size_value in ((0, 7), (12, 0), ('12', '7'), (True, 7), (12.5, 7), (None, 7)):
+            with self.subTest(time=time_value, size=size_value):
+                record = dict(path='/generated/audio.wav', time=time_value, size=size_value)
+                with (mock.patch.object(Path, 'is_file', return_value=True) as observed,
+                      mock.patch.object(Path, 'stat', return_value=SimpleNamespace(st_size=7)),
+                      mock.patch.object(imports, 'duration_seconds', return_value=12)):
+                    changed = imports.refresh_metadata({'sb-a': record})
+                observed.assert_called_once()
+                self.assertEqual(changed, int(time_value in (0, None) or size_value == 0))
+                self.assertEqual(record['time'], 12 if time_value in (0, None) else time_value)
+                self.assertEqual(record['size'], 7 if size_value == 0 else size_value)
+
+    def test_malformed_metadata_keeps_missing_file_precedence_and_existing_file_error(self):
+        for field in ('time', 'size'):
+            with self.subTest(field=field):
+                record = dict(path='/generated/audio.wav', time=12, size=7)
+                record[field] = 'malformed'
+                with mock.patch.object(Path, 'is_file', return_value=False):
+                    self.assertEqual(imports.refresh_metadata({'sb-a': record}), 0)
+                with mock.patch.object(Path, 'is_file', return_value=True):
+                    with self.assertRaises(ValueError):
+                        imports.refresh_metadata({'sb-a': record})
+
 
 
 class FixLinks(unittest.TestCase):

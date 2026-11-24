@@ -1,5 +1,161 @@
 # UI polish review — November 3, 2026
 
+## Current delivery boundary — reviewed November23
+
+The November20–21 artwork worker, complete review-cover and duplicate-comparison
+changes below are included in the November21 personal 174/runtime `7a5c` installation.
+Complete selected artwork still precedes Info's first frame; ordinary desktop
+controls remain prepared before interaction and device pages remain on demand.
+The later BLUE/3BAND waveform changes have their own geometry/readiness contracts
+in [PLAYER](PLAYER.md), not the unchanged-renderer scope of the November3 review.
+
+Measurements, inventories and test totals remain dated evidence, not universal
+latency guarantees or a new November23 full-gate result. Current runtime, gate
+and retention facts belong in [HANDOFF](HANDOFF.md). Historical install/device
+actions below confer no current permission, and unresolved risks remain explicit.
+
+## Responsive artwork preparation — November20 source follow-up
+
+Choosing a local image in Track Info or the artist catalog synchronously read and
+normalized its full payload on the GUI thread. Online results likewise normalized
+on GUI delivery. The existing artwork request worker now captures immutable bytes
+and prepares their device-safe image before joined GUI publication through
+`desktop.artwork_requests`. Its source/track/repository-generation and selected
+artwork owners remain exact, and a newer request supersedes an older result.
+Local image choices do not enter an online provider scope. The canonical artwork
+writer, policy checks, atomic save and corrupt-image fallback remain unchanged.
+Catalog batches capture one shared selection, split exact tokens per target and
+publish only still-current artist/avatar targets. A newer choice for one target
+does not discard the group's remaining choices. The profile query's extra artist
+and exact external-byte snapshot guards are retained alongside the owner's tokens.
+
+An accepted picker file/thumbnail/URL choice holds ordinary Quit, backup/restore
+and source switching until completion. Opening Info waits only for that selected
+track's latest accepted image, then keeps the complete-cover-before-show gate;
+an unrelated pending image cannot delay it. Both tabs still exist before first
+show, and an already-visible dialog retains its previous cover during preparation.
+Missing/unreadable images, failed normalization, cancellation and stale contexts
+retain explicit failure/ownership handling. This adds no source-write authority.
+
+Generated Cocoa control: Pillow noise PNG3000×3000/18,667,911bytes,3300synthetic
+art-index rows, five warmed samples per mode,2ms GUI heartbeat. The same selected
+image and ordinary canonical writer were used in both modes:
+
+| Measured component | Original synchronous action | Owned preparation worker |
+| --- | ---: | ---: |
+| GUI handler median |135.66ms|0.24ms|
+| Median maximum GUI timer gap |136.83ms|4.54ms|
+| Complete publication median |137.33ms|137.67ms|
+
+The same generated catalog fixture with two selected avatar targets measured
+134.60→0.24ms in its handler and135.36→4.81ms maximum GUI timer gap; full atomic
+publication measured134.54→136.69ms. These are ordinary guarded cache writes,
+without a new persistence path.
+
+This removes a GUI stall; it does not claim faster durable completion or physical
+compositor timing. A paired HEAD/current complete Info control (same static theme,
+generated immutable selected bytes, constructor through first show, eight warmed
+samples) measured35.82→37.69ms for500px JPEG and120.80→120.74ms for3000px PNG,
+with both covers present in every first show. Normal Info's decoder and readiness
+flow are unchanged; this is no claim of faster complete opening. That contract is
+never replaced by an earlier empty dialog. The selected-pending regression also
+requires the newly chosen blue cover in the first frame while an unrelated
+green cover is still pending. These are isolated fixture results, not live-library
+or hardware guarantees. Current source/install status belongs in [HANDOFF](HANDOFF.md).
+
+Focused evidence: `tests/test_artwork_requests.py`, existing Info lifetime and
+selection, provider/profile, Quit and maintenance tests; compact timings under
+`~/Library/Logs/Soundbox/responsiveness-pass-20261120/artwork.json`.
+
+## Complete review-cover preparation — November21 source follow-up
+
+The selected review cover now full-decodes into a QImage through an owned
+QImageReader worker. GUI pixmap conversion and the original smooth scaling remain
+unchanged. Exact PNG/JPEG pixels match at1×/2×, including transparency, palette,
+portrait/landscape, embedded sRGB ICC and EXIF orientation. A scaled JPEG decoder
+had changed pixels and was rejected. Direct QImage.loadFromData also failed the
+real responsiveness control: its pinned binding held the GIL, producing a93.18ms
+GUI timer gap. Full QImageReader.read preserved pixels with a2.59ms gap in that
+isolated decoder control; completed decode times were92.00/91.82ms respectively.
+
+The original exact CoverSnapshot byte capture stays on its existing path. Its
+digest is reused only within that immutable snapshot and primed off GUI; a new
+snapshot still rereads and proves current bytes. Approval/Undo and external-byte
+stale-cover guards remain exact. One active decode and one latest pending row
+bound rapid navigation; canceled results cannot paint or release ownership early.
+The prior complete cover/title/source remain together until selected preparation
+finishes. Pending different-track status reports preparation, selected edit actions
+wait, navigation/Close remain live, and the first comparison pane reveals only
+after completion. Same-track audition and global Exclusions/last-changed Undo
+retain their independent ownership.
+
+Eight warmed paired Cocoa samples compare the prior GUI decode/per-access digest
+with the complete owned-reader/snapshot-digest path. Both modes use the same
+generated image, static theme and ready comparison-cache entry, with no provider:
+
+| Selected image | Handler before → after | Maximum GUI gap before → after | Complete selected comparison before → after |
+| --- | ---: | ---: | ---: |
+|500px JPEG/102,494bytes|3.36→0.51ms|9.43→8.60ms|3.36→5.25ms|
+|3000px PNG/18,678,483bytes|102.66→3.38ms|110.03→7.10ms|102.66→105.97ms|
+
+This removes the large GUI freeze, with a small worker-dispatch/conversion cost;
+it does not claim faster full decoding or physical compositor presentation. An
+unmocked3000px PNG regression requires real navigation and multiple timer callbacks
+while decoding, alongside held-worker first-reveal, coalescing and Close controls.
+Other team CPU tests may overlap these generated measurements. Exact fixture and
+compact reproduction receipt: `~/Library/Logs/Soundbox/code-speed-audit-20261120/`
+`review-cover-reproducer.py` / `review-cover-preparation.json`.
+
+That checkpoint left a separate GUI duplicate check: `_same_art` measured168.29ms
+per comparison of that3000px PNG against a500px JPEG, including full Pillow decode
+and fitting of the original. The next source follow-up below addresses it.
+Focused selected-cover proof is in
+`tests/test_review_cover_preparation.py`, existing artwork review/recovery and scan
+tests. Current validation and installed identity belong in [HANDOFF](HANDOFF.md).
+
+## Duplicate-art comparison — November21 next source follow-up
+
+Cached, streamed and saved-preview suggestions now compare images on their
+existing owned workers. Each batch prepares the selected original's exact64×64
+RGB/fit bytes once and reuses that immutable sample. Colour difference, blur and
+correlation operations, thresholds and candidate order are unchanged. An unreadable
+original still permits valid replacement art. The regular picker keeps its
+unfiltered human-choice behavior; its optional pure worker filter is used by review.
+
+Cached suggestions finish comparison before the first complete comparison reveal.
+Late cache or policy changes continue through the same bounded selected owner,
+carrying its already decoded QImage/sample rather than decoding the cover again.
+Streamed/saved-preview delivery requires the exact selected snapshot, cache/art
+owner and generation, plus a fresh policy check. Finished stale searches cannot
+record a restored target as an artless miss. Close, latest selection, transport,
+global controls and exact byte/recovery guards retain their previous ownership.
+
+Six warmed paired Cocoa samples compare hash-matched installed6f source copies
+with this next source. The generated source is3000×3000 noise PNG/18,667,911bytes,
+with three500px JPEG previews and a2ms GUI heartbeat. No network/provider account
+or live-library inputs are used; other team generated CPU checks may overlap.
+
+| Review path | Maximum GUI gap before → after | Complete comparison/candidates before → after |
+| --- | ---: | ---: |
+| Cached choices, including selected cover |517.22→8.78ms|619.61→287.92ms|
+| Streamed search, selected cover already ready |514.47→7.00ms|520.20→184.73ms|
+| Saved previews, selected cover already ready |514.72→4.75ms|517.87→190.70ms|
+
+Final current/suggested pixels and candidate order/count match in every pair.
+This measures complete GUI-ready comparisons, not physical presentation or live
+network latency. Candidate pixmap decoding retains its existing GUI path; no
+image-size, visual-quality or matching-threshold shortcut is introduced.
+
+Nine added comparison cases cover the frozen installed classifier, source-sample
+reuse on all three paths, actual navigation during large Pillow work, complete
+first cached reveal, late-cache continuation without another reader, detached
+payloads/picker defaults, fresh exclusions, restore/finished ownership and failed
+policy-capture retry. Together with prior review/scan/provider cases65 Cocoa tests
+pass;57 adjacent Info/manual-save/Quit/maintenance cases pass separately. These
+focused scopes overlap earlier proof and are not a full release gate.
+Reproducer, compact timing/freeze receipts and per-file audit depth are under
+`~/Library/Logs/Soundbox/wide-speed-audit-20261121/`.
+
 At the November8 cleanup checkpoint, personal build169 was installed and accepted. It includes eager Info and
 Artists preparation plus explicit window-filter retirement, while retaining the
 selected-cover-before-show contract. The November3–5 measurements below remain
@@ -172,12 +328,13 @@ worker ownership, and the complete gate was rerun successfully.
 These are identified code paths, not assertions that Sonny has experienced every
 symptom. Preserve their correctness contracts when moving work off the GUI.
 
-1. Manual image-file choices still read bytes and normalize/publish canonical
-   art from GUI callbacks (`MainWindow._art_pick`, `_apply_catalog_action`,
-   `ArtCache.store_ok`). Large images or slow selected storage can pause input.
-   Artwork review also captures exact canonical cover bytes synchronously on
-   selection. Moving this work needs publication/restore generation guards and
-   exact review-baseline retention, rather than an unguarded background write.
+1. The selected review's exact canonical CoverSnapshot capture and final guarded
+   canonical publication still run on their existing GUI-owned paths. Large
+   bytes, artwork-lock contention or slow storage can delay those boundaries.
+   Manual file reads/image normalization, selected review decoding and duplicate
+   comparison now prepare on owned workers as described above; they are no
+   longer wholly synchronous GUI operations. Further changes must preserve exact
+   review bytes, latest-choice/restore guards and complete first-frame artwork.
 2. Catalog thumbnails intentionally decode visible rows one event turn at a
    time. Normal local JPEGs were previously measured in milliseconds, but a slow
    or abnormal file can delay a turn and progressively reveal images. A bounded
@@ -196,9 +353,11 @@ symptom. Preserve their correctness contracts when moving work off the GUI.
    scenario captures. This pass verifies the reported Info opening and selected
    generated regressions, not every possible UI state.
 
-Evidence lives under `~/Library/Logs/Soundbox/ui-polish-2026-11-03/`, including
-the per-file source review and frozen source/test manifest. Keep final check,
-package and installation receipts there; never replay an earlier installer.
+The original November3 evidence lives under
+`~/Library/Logs/Soundbox/ui-polish-2026-11-03/`, including the per-file review and
+frozen source/test manifest. Later sections identify their separate evidence
+roots; current release receipts belong to the current HANDOFF. Never replay an
+earlier installer or overwrite its dated proof with another release's results.
 
 ## November4 export follow-up
 

@@ -105,6 +105,26 @@ class PlaylistRemovalOverlay(unittest.TestCase):
         self.assertIs(self.w.removals,owner);self.assertEqual(owner['1000']['logical-one'],'newer-date')
         self.assertEqual(self.w.lib.removed_by_playlist['1000'],set(owner['1000']))
 
+    def test_two_atomic_membership_moves_rebase_and_keep_masks_after_exact_native_ack(self):
+        from soundbox import playlist_presentation, playlist_track_order
+        original = deepcopy(self.w.removals)
+        rows = sorted(self.w.lib.source_playlist_catalog['members'], key=lambda row: row['TrackNo'])
+        first, _ = playlist_track_order.request(self.w.lib, '1000', [rows[0]])
+        self.assertTrue(self.c.enqueue(first, selected_tracks=[self.track, self.other]))
+        projected = playlist_presentation.project(self.w.lib, self.c.pending)
+        pending_rows = sorted(projected.source_playlist_catalog['members'], key=lambda row: row['TrackNo'])
+        # Bind the second move to the first request's future membership ID.
+        second, _ = playlist_track_order.request(projected, '1000', [pending_rows[-1]], pending_rows[0])
+        self.assertTrue(self.c.enqueue(second, selected_tracks=[self.track, self.other]))
+        self.assertEqual([job['removal_overlay']['entries'] for job in self.c.pending], [[], []])
+        self.turn(); self.assertEqual(len(self.c.pending), 1)
+        self.turn(); self.assertFalse(self.c.pending)
+        self.assertEqual(self.w.removals, original)
+        self.assertEqual(read_state(self.w._state_repository.path)['playlist_removals'], original)
+        final = sorted((row for row in self.writer.snapshot()['members'] if row['rb_local_deleted'] == 0),
+                       key=lambda row: row['TrackNo'])
+        self.assertEqual([row['ContentID'] for row in final], ['track', 'track-two'])
+
     def test_failed_ack_restores_exact_map_and_library_mask_owners_then_restart_replays_same_request(self):
         self.enqueue();job=deepcopy(self.c.pending[0]);owners=self.w.removals,self.w.lib.removed_by_playlist
         self.w.save_ok=False;self.turn()

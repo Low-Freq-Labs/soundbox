@@ -24,7 +24,7 @@ from typing import Any
 
 import mutagen
 from mutagen.flac import FLAC
-from mutagen.id3 import COMM, ID3, TIT2, TPE1, TXXX
+from mutagen.id3 import ID3, TIT2, TPE1
 from mutagen.mp4 import MP4
 
 from .operation_control import OperationCancelled, checkpoint, phase_progress, record_metric
@@ -387,75 +387,6 @@ def _riff_info_values(path: Path) -> tuple[str, str]:
                     cursor = data_end + (subsize & 1)
             handle.seek(end + (size & 1))
     return found[b"INAM"], found[b"IART"]
-
-
-def _is_purchase_receipt(value: Any) -> bool:
-    """Recognize vendor receipt text that must not become player metadata."""
-    values = value if isinstance(value, (list, tuple)) else (value,)
-    for item in values:
-        if isinstance(item, bytes):
-            text = item.rstrip(b"\0").decode("utf-8", errors="replace")
-        else:
-            text = str(item or "")
-        if "purchased at beatport" in text.casefold():
-            return True
-    return False
-
-
-def _has_purchase_receipt(path: Path) -> bool:
-    """Inspect tag chunks only; audio payload bytes are never decoded."""
-    if path.suffix.lower() == ".wav":
-        total = path.stat().st_size
-        with path.open("rb") as handle:
-            header = handle.read(12)
-            if header[:4] != b"RIFF" or header[8:12] != b"WAVE":
-                raise RockboxMediaError(
-                    f"Unsupported WAV metadata layout: {path}")
-            while handle.tell() < total:
-                chunk_header = handle.read(8)
-                if not chunk_header:
-                    break
-                if len(chunk_header) != 8:
-                    raise RockboxMediaError(
-                        f"Truncated WAV chunk header: {path}")
-                kind, size = (
-                    chunk_header[:4],
-                    struct.unpack("<I", chunk_header[4:])[0],
-                )
-                start = handle.tell()
-                end = start + size
-                if end > total:
-                    raise RockboxMediaError(f"Invalid WAV chunk size: {path}")
-                if kind == b"LIST" and size >= 4 and handle.read(4) == b"INFO":
-                    cursor = start + 4
-                    while cursor + 8 <= end:
-                        handle.seek(cursor)
-                        subheader = handle.read(8)
-                        tag = subheader[:4]
-                        subsize = struct.unpack("<I", subheader[4:])[0]
-                        data_start = cursor + 8
-                        data_end = data_start + subsize
-                        if data_end > end:
-                            raise RockboxMediaError(
-                                f"Invalid WAV INFO chunk: {path}")
-                        if tag == b"ICMT" and _is_purchase_receipt(
-                                handle.read(subsize)):
-                            return True
-                        cursor = data_end + (subsize & 1)
-                handle.seek(end + (size & 1))
-        return False
-    audio = mutagen.File(path)
-    if audio is None:
-        raise RockboxMediaError(f"Could not identify audio container: {path}")
-    tags = getattr(audio, "tags", None)
-    return bool(
-        isinstance(tags, ID3)
-        and any(
-            isinstance(frame, (COMM, TXXX))
-            and _is_purchase_receipt(getattr(frame, "text", ()))
-            for frame in tags.values()
-        )
-    )
 
 
 def _riff_list_chunk(list_type: bytes, subchunks: list[bytes]) -> bytes:

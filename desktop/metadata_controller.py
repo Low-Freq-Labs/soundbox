@@ -2,6 +2,7 @@
 from copy import deepcopy
 import hashlib
 import json
+import math
 from pathlib import Path
 import time
 from uuid import uuid4
@@ -1337,8 +1338,12 @@ class MetadataController(QObject):
             self.timer.start(0);return
         if self.background_paused and not self.pending and not self.window.settings.get(ACKS) and not self._paused_progress_pending():
             self._show_paused_status();return
-        if not self.closing and (self.pending or self.migration_pending or self.window.settings.get(ACKS)) and not self.timer.isActive():
-            self.timer.start(max(0,int((self.not_before-time.monotonic())*1000)))
+        if self.pending or self.migration_pending or self.window.settings.get(ACKS):
+            # A released source lane supersedes its old contention poll. Only a
+            # measured failure/native-owner deadline may postpone the next try.
+            delay=max(0,math.ceil((self.not_before-time.monotonic())*1000))
+            if not self.timer.isActive() or self.timer.remainingTime()>delay:
+                self.timer.start(delay)
 
     def _retains(self,job):
         return next((i for i,current in enumerate(self.pending) if isinstance(current,dict)

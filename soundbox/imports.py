@@ -293,6 +293,11 @@ def refresh_metadata(imported: dict) -> int:
     """
     changed = 0
     for rec in imported.values():
+        # Complete typed metadata needs no repair. This former health stat
+        # produced no observation or source proof, including for missing files.
+        if (type(rec.get('time')) is int and rec['time'] > 0
+                and type(rec.get('size')) is int and rec['size'] > 0):
+            continue
         path = Path(str(rec.get("path", "")))
         if not path.is_file():
             continue

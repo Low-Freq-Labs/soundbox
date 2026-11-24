@@ -103,13 +103,12 @@ def validate_result(record):
 def _source_context(library, track):
     if library.source_kind != 'rekordbox-db' or track.imported:
         return {}
-    from pyrekordbox import Rekordbox6Database
+    from .native_snapshot import native_snapshot
     from .rekordbox_db import _copy_stable_snapshot, _deleted
     with tempfile.TemporaryDirectory(prefix='soundbox-analysis-db-') as folder:
         target = Path(folder)/'master.db'
         _copy_stable_snapshot(Path(library.source), target)
-        db = Rekordbox6Database(path=str(target))
-        try:
+        with native_snapshot(target) as db:
             properties = list(db.get_property())
             row = db.get_content(ID=track.native_id)
             if (len(properties) != 1 or str(properties[0].DBID) != library.source_library_id
@@ -126,8 +125,6 @@ def _source_context(library, track):
                         analysis_updated=row.AnalysisUpdated, analysis_path=row.AnalysisDataPath)
             if track.source_native_id and not row.AnalysisDataPath:context['bare_registration']=True
             return context
-        finally:
-            db.close()
 
 
 def analyze(library, track, preferences=None, *, should_cancel=lambda:False,automatic=False,

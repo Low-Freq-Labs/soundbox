@@ -6,10 +6,12 @@ from copy import deepcopy
 import io
 from pathlib import Path
 from collections import deque
+from dataclasses import dataclass, replace
+from functools import cached_property
 from threading import Lock, Event
 
-from PySide6.QtCore import QSize, Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor
+from PySide6.QtCore import QBuffer, QIODevice, QSize, Qt, QThread, QTimer, Signal
+from PySide6.QtGui import QIcon, QImage, QImageReader, QPixmap, QPainter, QColor
 from PySide6.QtWidgets import (
     QDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
     QMessageBox, QPushButton, QSplitter, QTabBar, QVBoxLayout, QWidget,
@@ -18,7 +20,7 @@ from PySide6.QtWidgets import (
 from .choices import ComboBox as QComboBox, Menu as QMenu
 
 from soundbox.art_sources import account_name, excluded_source, same_art_source, profile_source
-from soundbox.artwork import ArtResult
+from soundbox.artwork import ArtResult, CoverSnapshot
 from soundbox.art_review_scan import ReviewScanStore, context_stamp
 from soundbox.providers import provider_operation
 from .artpicker import ArtPickerDialog, _CandidateSearch
@@ -26,31 +28,42 @@ from .task_owner import TaskOwner
 from . import theme
 
 
+def _art_sample(data):
+    """Exact original RGB/fit operation, detached as immutable worker input."""
+    from PIL import Image, ImageOps
+    try:
+        with Image.open(io.BytesIO(data)) as image:
+            return ImageOps.fit(image.convert("RGB"), (64, 64),
+                                method=Image.Resampling.LANCZOS).tobytes()
+    except (OSError, ValueError):
+        return None
+
+
+def _same_samples(original, preview):
+    if original is None or preview is None:
+        return False
+    from PIL import Image, ImageChops, ImageStat, ImageFilter
+    a = Image.frombytes("RGB", (64, 64), original)
+    b = Image.frombytes("RGB", (64, 64), preview)
+    if sum(ImageStat.Stat(ImageChops.difference(a, b)).mean) / 3 <= 3:
+        return True
+    # Preserve the original coarse layout/colour and correlation thresholds.
+    a = a.resize((32, 32), Image.Resampling.LANCZOS).filter(ImageFilter.GaussianBlur(1))
+    b = b.resize((32, 32), Image.Resampling.LANCZOS).filter(ImageFilter.GaussianBlur(1))
+    if sum(ImageStat.Stat(ImageChops.difference(a, b)).mean) / 3 > 8:
+        return False
+    x, y = list(a.convert("L").get_flattened_data()), list(b.convert("L").get_flattened_data())
+    mx, my = sum(x) / len(x), sum(y) / len(y)
+    vx, vy = sum((v - mx) ** 2 for v in x), sum((v - my) ** 2 for v in y)
+    if not vx or not vy:
+        return False
+    correlation = sum((u - mx) * (v - my) for u, v in zip(x, y)) / (vx * vy) ** .5
+    return correlation >= .985
+
+
 def _same_art(original, preview):
     """Omit effectively identical art, including different CDN image sizes."""
-    from PIL import Image, ImageChops, ImageOps, ImageStat, ImageFilter
-    try:
-        with Image.open(io.BytesIO(original)) as a, Image.open(io.BytesIO(preview)) as b:
-            a = ImageOps.fit(a.convert("RGB"), (64, 64), method=Image.Resampling.LANCZOS)
-            b = ImageOps.fit(b.convert("RGB"), (64, 64), method=Image.Resampling.LANCZOS)
-            if sum(ImageStat.Stat(ImageChops.difference(a, b)).mean) / 3 <= 3:
-                return True
-            # Downsampling/compression can move sharp edges enough to defeat a
-            # raw pixel comparison. Compare coarse layout AND colour after blur;
-            # keep the bounds narrow so another design remains a real choice.
-            a = a.resize((32, 32), Image.Resampling.LANCZOS).filter(ImageFilter.GaussianBlur(1))
-            b = b.resize((32, 32), Image.Resampling.LANCZOS).filter(ImageFilter.GaussianBlur(1))
-            if sum(ImageStat.Stat(ImageChops.difference(a, b)).mean) / 3 > 8:
-                return False
-            x, y = list(a.convert("L").get_flattened_data()), list(b.convert("L").get_flattened_data())
-            mx, my = sum(x) / len(x), sum(y) / len(y)
-            vx, vy = sum((v - mx) ** 2 for v in x), sum((v - my) ** 2 for v in y)
-            if not vx or not vy:
-                return False
-            correlation = sum((u - mx) * (v - my) for u, v in zip(x, y)) / (vx * vy) ** .5
-            return correlation >= .985
-    except (OSError, ValueError):
-        return False
+    return _same_samples(_art_sample(original), _art_sample(preview))
 
 
 def _usable(candidate, snapshot, exclusions):
@@ -58,6 +71,25 @@ def _usable(candidate, snapshot, exclusions):
             not excluded_source(candidate.get("uploader", ""), candidate.get("url", ""),
                                 excluded_accounts=exclusions) and
             not same_art_source(candidate.get("url", ""), snapshot.entry.get("src", "")))
+
+
+class _PreviewComparison:
+    """One worker's exact selected original, reused across its small previews."""
+    def __init__(self, snapshot, exclusions, previous=None):
+        self.snapshot = snapshot
+        self.exclusions = tuple(exclusions)
+        if previous is not None and previous.snapshot is snapshot and 'original' in vars(previous):
+            self.original = previous.original
+
+    @cached_property
+    def original(self):
+        return _art_sample(self.snapshot.data)
+
+    def __call__(self, candidate, data):
+        if len(data) > 512 * 1024 or not _usable(candidate, self.snapshot, self.exclusions):
+            return False
+        # An unreadable current image must not prevent choosing valid repair art.
+        return not _same_samples(self.original, _art_sample(data))
 
 
 class _ReviewScan(QThread):
@@ -188,13 +220,14 @@ class _ReviewScan(QThread):
 
     def _check_track(self, snapshot, exclusions, artist, title):
         choices = []
+        compare = _PreviewComparison(snapshot, exclusions)
         for candidate in self.provider.search_candidates(artist, title)[:12]:
             if self._stop:
                 break
             if not _usable(candidate, snapshot, exclusions):
                 continue
             preview = self.provider.preview_image(candidate)
-            if preview and len(preview) <= 512 * 1024 and not _same_art(snapshot.data, preview):
+            if preview and compare(candidate, preview):
                 choices.append((candidate, preview))
                 break
         return dict(entry=snapshot.entry, digest=snapshot.digest, choices=choices)
@@ -203,9 +236,10 @@ class _ReviewScan(QThread):
 class _ReviewPreview(QThread):
     found = Signal(dict, bytes)
 
-    def __init__(self, provider, candidates, preview_root=None):
+    def __init__(self, provider, candidates, preview_root=None, *, accept_preview=None):
         super().__init__()
-        self.provider, self.candidates = provider, candidates
+        self.provider, self.candidates = provider, deepcopy(candidates)
+        self.accept_preview = accept_preview
         self._stop = False
         self.preview_root = preview_root
         self.error = ""
@@ -231,12 +265,75 @@ class _ReviewPreview(QThread):
                 except Exception:
                     continue
                 if data and not self._stop:
-                    self.found.emit(candidate, data)
+                    data = bytes(data)
+                    if self.accept_preview is None or self.accept_preview(candidate, data):
+                        if not self._stop:
+                            self.found.emit(candidate, data)
         except Exception as exc:
             self.error = str(exc)
         finally:
             if store is not None:
                 store.close()
+
+
+@dataclass(frozen=True)
+class _CachedChoices:
+    entry: dict
+    digest: str
+    choices: tuple
+
+
+@dataclass(frozen=True)
+class _CoverSelection:
+    generation: int
+    row: tuple
+    cache: object
+    artwork: object
+    snapshot: CoverSnapshot
+    exclusions: tuple = ()
+    cached: _CachedChoices | None = None
+
+
+class _ReviewCover(QThread):
+    """Decode exactly the captured bytes; GUI retains pixmap conversion/scaling."""
+    def __init__(self, selection, *, image=None, comparison=None):
+        super().__init__()
+        self.selection = selection
+        self.image = QImage(image) if image is not None else QImage()
+        self._decoded = image is not None
+        self.comparison = comparison
+        self.choices = None
+        self._stop = False
+
+    def stop(self):
+        self._stop = True
+
+    def run(self):
+        if self._stop or self.isInterruptionRequested():
+            return
+        _ = self.selection.snapshot.digest
+        if self._stop or self.isInterruptionRequested():
+            return
+        if not self._decoded:
+            buffer = QBuffer()
+            buffer.setData(self.selection.snapshot.data)
+            buffer.open(QIODevice.ReadOnly)
+            # Full reader.read releases the GIL; pinned loadFromData blocks GUI Python.
+            image = QImageReader(buffer).read()
+            if self._stop or self.isInterruptionRequested():
+                return
+            self.image = image
+        selected = self.selection
+        cached = selected.cached
+        if cached is not None and cached.entry == selected.snapshot.entry and cached.digest == selected.snapshot.digest:
+            self.comparison = _PreviewComparison(selected.snapshot, selected.exclusions, self.comparison)
+            choices = []
+            for candidate, data in cached.choices:
+                if self._stop or self.isInterruptionRequested():
+                    return
+                if self.comparison(candidate, data):
+                    choices.append((candidate, data))
+            self.choices = tuple(choices)
 
 
 class _Spinner(QWidget):
@@ -326,6 +423,9 @@ class ArtReviewDialog(QDialog):
         self._preparing = False
         self._last_changed = None
         self._generation = 0
+        self._cover_generation = 0
+        self._cover_worker = None
+        self._cover_pending = None
         self._cached = OrderedDict()
         self._metadata = {}
         self._checked = set()
@@ -537,6 +637,8 @@ class ArtReviewDialog(QDialog):
         self._views.setCurrentWidget(self._empty_page)
 
     def _reveal(self):
+        if self._tasks.stopping or self._cover_worker is not None or self._cover_pending is not None:
+            return
         self._loading_spinner.set_running(False)
         self._views.setCurrentWidget(self._review_page)
 
@@ -568,7 +670,12 @@ class ArtReviewDialog(QDialog):
     @staticmethod
     def _show_image(label, data):
         pix = QPixmap()
-        if pix.loadFromData(data):
+        pix.loadFromData(data)
+        ArtReviewDialog._show_pixmap(label, pix)
+
+    @staticmethod
+    def _show_pixmap(label, pix):
+        if not pix.isNull():
             ratio=label.devicePixelRatioF()
             pix=pix.scaled(round(300*ratio),round(300*ratio),Qt.KeepAspectRatio,Qt.SmoothTransformation)
             pix.setDevicePixelRatio(ratio)
@@ -616,14 +723,36 @@ class ArtReviewDialog(QDialog):
                                     "You can still browse every cover in All."))
 
     def _selected(self, item, _old=None):
+        row = tuple(item.data(Qt.UserRole)) if item else None
+        if row == self._row:
+            if self._cover_pending is not None:
+                return  # only the newest row waits behind the one active decode
+            if self._cover_worker is not None:
+                selected = self._cover_worker.selection
+                if selected.cache is self.cache and self.cache.selection_current(selected.artwork):
+                    return  # newly scanned suggestions will be read on delivery
         self._generation += 1
+        self._cover_generation += 1
         if isinstance(self._worker, (_CandidateSearch, _ReviewPreview)):
             self._worker.stop()
         self._snapshot = None
-        self._row = item.data(Qt.UserRole) if item else None
+        previous_tid = self._row[0] if self._row else None
+        self._row = row
+        self._cover_pending = (self._cover_generation, row) if row else None
+        if self._cover_worker is not None:
+            self._cover_worker.stop()
         if item is not None:
             self._advance_after = None
-        self.audition.set_track(self._row[0] if self._row else None)
+        if (row[0] if row else None) != previous_tid:
+            self.audition.set_track(None)
+            if row is not None:
+                self.status.setText("Preparing this comparison… Your current cover is unchanged.")
+        self._controls()
+        if row is None:
+            self._clear_comparison()
+        self._start_cover()
+
+    def _clear_comparison(self):
         self.candidates.clear()
         self.options.clear()
         self.options.hide()
@@ -632,43 +761,115 @@ class ArtReviewDialog(QDialog):
         self.source.clear()
         self.title.clear()
         self.evidence.clear()
-        if self._row:
-            tid, artist, title, origin = self._row
-            self.title.setText(title)
-            self.title.setTextFormat(Qt.PlainText)
-            try:
-                self._snapshot = self.cache.cover_snapshot(tid)
-                if self.cache.source_excluded(tid):
-                    self.current.setText("Excluded source\nArtist profile art is being prepared")
-                else:
-                    self._show_image(self.current, self._snapshot.data)
-                origin = {"manual": "Manual", "auto": "Automatic"}.get(
-                    self._snapshot.entry.get("origin"), "Unrecorded history")
-                reason = self._reason(tid)
-                self.source.setText(f"{origin} · protected" + (f"\n{reason}" if reason else "") + "\nCurrent source: "
-                                    f"{self._snapshot.entry.get('src') or 'Not recorded'}")
-                cached = self._cached.get(tid)
-                if cached and cached.get("entry") == self._snapshot.entry and cached.get("digest") == self._snapshot.digest:
-                    for cand, data in cached["choices"]:
-                        self._found(cand, data)
-                    if self.candidates.count():
-                        self.candidates.setCurrentRow(0)
-                    self._search_status()
-                elif (meta := self._metadata.get(tid)) and meta["entry"] == self._snapshot.entry and meta["digest"] == self._snapshot.digest:
-                    if meta["candidates"]:
-                        self._load_preview(meta["candidates"])
-                    else:
-                        self._search_status()
-                elif self._preparing and self._prepare_worker is not None:
-                    self._prepare_worker.prioritize(tid)
-                    self.status.setText("Preparing this comparison… Your current cover is unchanged.")
-                elif self.provider is not None and not self.cache.source_excluded(tid) and not (self._preparing and tid in self._targets):
-                    token = self._generation
-                    QTimer.singleShot(0, lambda: self._search() if token == self._generation and
-                                      not self._tasks.stopping else None)
-            except (OSError, ValueError) as exc:
-                self.status.setText(str(exc))
+
+    def _cached_choices(self, tid):
+        cached = self._cached.get(tid)
+        if not cached:
+            return None
+        return _CachedChoices(deepcopy(cached.get('entry')), cached.get('digest'),
+            tuple((deepcopy(candidate), bytes(data)) for candidate, data in cached.get('choices', ())))
+
+    def _start_cover(self):
+        if self._tasks.stopping or self._cover_worker is not None or self._cover_pending is None:
+            return
+        generation, row = self._cover_pending
+        self._cover_pending = None
+        try:
+            artwork = self.cache.selection_token((row[0],))
+            snapshot = self.cache.cover_snapshot(row[0])
+            if not self.cache.selection_current(artwork):
+                raise ValueError("The cover changed. Select the track again.")
+            selected = _CoverSelection(generation, row, self.cache, artwork, snapshot,
+                tuple(self.cache.source_exclusions()), self._cached_choices(row[0]))
+        except (OSError, ValueError) as exc:
+            self._cover_failed(row, str(exc))
+            return
+        self._adopt_cover(selected)
+
+    def _adopt_cover(self, selected, *, image=None, comparison=None):
+        worker = _ReviewCover(selected, image=image, comparison=comparison)
+        self._cover_worker = worker
+        self._tasks.adopt(worker, self._cover_retired)
+        worker.start()
+
+    def _cover_failed(self, row, message):
+        self._snapshot = None
+        self._clear_comparison()
+        self.title.setText(row[2])
+        self.title.setTextFormat(Qt.PlainText)
+        self.current.setText("Artwork unavailable")
+        self.status.setText(message)
         self._controls()
+        if self.tabs.currentIndex() == 1:
+            self._reveal()
+
+    def _cover_retired(self, worker):
+        self._cover_worker = None
+        selected = worker.selection
+        try:
+            if (not self._tasks.stopping and not worker._stop
+                    and self._cover_generation == selected.generation and self._row == selected.row):
+                if self.cache is selected.cache and self.cache.selection_current(selected.artwork):
+                    cached = self._cached_choices(selected.row[0])
+                    exclusions = tuple(self.cache.source_exclusions())
+                    if cached != selected.cached or exclusions != selected.exclusions:
+                        # A late scan/cache update needs comparison, never another
+                        # full cover decode. Transfer only after the worker joins.
+                        self._adopt_cover(replace(selected, cached=cached, exclusions=exclusions),
+                            image=worker.image, comparison=worker.comparison)
+                    else:
+                        self._snapshot = selected.snapshot
+                        self._paint_selected(worker.image, worker.choices, selected)
+                else:
+                    self._cover_failed(selected.row, "The cover changed. Select the track again.")
+        except (OSError, ValueError) as exc:
+            self._cover_failed(selected.row, str(exc))
+        finally:
+            worker.image = QImage()
+            worker.selection = None
+            worker.comparison = None
+            worker.choices = None
+        self._start_cover()
+
+    def _paint_selected(self, image, choices, comparison):
+        tid, artist, title, origin = self._row
+        excluded = self.cache.source_excluded(tid)
+        reason = self._reason(tid)
+        origin = {"manual": "Manual", "auto": "Automatic"}.get(
+            self._snapshot.entry.get("origin"), "Unrecorded history")
+        self._clear_comparison()
+        self.title.setText(title)
+        self.title.setTextFormat(Qt.PlainText)
+        self.audition.set_track(tid)
+        if excluded:
+            self.current.setText("Excluded source\nArtist profile art is being prepared")
+        else:
+            self._show_pixmap(self.current, QPixmap.fromImage(image))
+        self.source.setText(f"{origin} · protected" + (f"\n{reason}" if reason else "") + "\nCurrent source: "
+                            f"{self._snapshot.entry.get('src') or 'Not recorded'}")
+        if choices is not None:
+            for cand, data in choices:
+                self._found(cand, data, comparison=comparison)
+            if self.candidates.count():
+                self.candidates.setCurrentRow(0)
+            self._search_status()
+        elif (meta := self._metadata.get(tid)) and meta["entry"] == self._snapshot.entry and meta["digest"] == self._snapshot.digest:
+            if meta["candidates"]:
+                self._load_preview(meta["candidates"])
+            else:
+                self._search_status()
+        elif self._preparing and self._prepare_worker is not None:
+            self._prepare_worker.prioritize(tid)
+            self.status.setText("Preparing this comparison… Your current cover is unchanged.")
+        elif self.provider is not None and not excluded and not (self._preparing and tid in self._targets):
+            token = self._generation
+            QTimer.singleShot(0, lambda: self._search() if token == self._generation and
+                              not self._tasks.stopping else None)
+        else:
+            self._search_status()
+        self._controls()
+        if self.tabs.currentIndex() == 1:
+            self._reveal()
 
     def refresh_profile(self, tid):
         if self._tasks.stopping:
@@ -687,7 +888,8 @@ class ArtReviewDialog(QDialog):
         self.tracks.setEnabled(not replacing)
         self.filter.setEnabled(not replacing)
         self.tabs.setEnabled(not replacing)
-        self.candidates.setEnabled(not self._busy)
+        self.candidates.setEnabled(selected and not self._busy)
+        self.options.setEnabled(selected and not self._busy)
         self.find.setEnabled(selected and not self._busy and self.provider is not None)
         self.scan.setEnabled(not self._busy and self.provider is not None)
         self.more.setEnabled(not replacing)
@@ -695,7 +897,7 @@ class ArtReviewDialog(QDialog):
                             self.candidates.currentItem() is not None)
         self.next.setEnabled(not replacing and self._row is not None)
         self.keep.setEnabled(selected and not replacing and not self.cache.read_only)
-        undo_tid = self._last_changed or (self._row[0] if self._row else None)
+        undo_tid = self._last_changed or (self._row[0] if selected and self._row else None)
         self.undo.setEnabled(not self._busy and not self.cache.read_only and
                              undo_tid is not None and self.cache.has_review_undo(undo_tid))
         self._exclude_action.setEnabled(not replacing)
@@ -716,6 +918,11 @@ class ArtReviewDialog(QDialog):
         if self._preparing and self._prepare_worker is not None and self._row[0] not in self._checked:
             self._prepare_worker.prioritize(self._row[0])
             return
+        try:
+            comparison = self._selected_comparison()
+        except (OSError, ValueError) as exc:
+            self.status.setText(str(exc))
+            return
         self.candidates.clear()
         self.options.clear()
         self.options.hide()
@@ -724,21 +931,34 @@ class ArtReviewDialog(QDialog):
         self._controls()
         self.status.setText("Finding suggestions… Your current cover stays unchanged.")
         _, artist, title, _ = self._row
-        worker = _CandidateSearch(artist, title, self.provider, limit=12)
+        worker = _CandidateSearch(artist, title, self.provider, limit=12,
+            accept_preview=_PreviewComparison(comparison.snapshot, comparison.exclusions))
         token = self._generation
-        worker.found.connect(lambda cand, data, t=token: self._found(cand, data, t))
-        self._tasks.adopt(worker, lambda w, t=token: self._search_retired(w, t))
+        worker.found.connect(lambda cand, data, t=token, c=comparison: self._found(cand, data, t, comparison=c))
+        self._tasks.adopt(worker, lambda w, t=token, c=comparison: self._search_retired(w, t, comparison=c))
         self._worker = worker
         worker.start()
 
-    def _found(self, cand, data, token=None):
+    def _selected_comparison(self):
+        return _CoverSelection(self._cover_generation, self._row, self.cache,
+            self.cache.selection_token((self._row[0],)), self._snapshot,
+            tuple(self.cache.source_exclusions()))
+
+    def _comparison_current(self, comparison):
+        return (comparison is not None and comparison.snapshot is self._snapshot
+            and comparison.generation == self._cover_generation and comparison.row == self._row
+            and comparison.cache is self.cache and self.cache.selection_current(comparison.artwork))
+
+    def _found(self, cand, data, token=None, *, comparison=None):
         if self._tasks.stopping or not self._snapshot:
             return
         if token is not None and token != self._generation:
             return
+        if not self._comparison_current(comparison):
+            return
         if len(data) > 512 * 1024:
             return
-        if not _usable(cand, self._snapshot, self.cache.source_exclusions()) or _same_art(self._snapshot.data, data):
+        if not _usable(cand, self._snapshot, self.cache.source_exclusions()):
             return
         pix = QPixmap()
         if not pix.loadFromData(data):
@@ -757,17 +977,19 @@ class ArtReviewDialog(QDialog):
     def _load_preview(self, candidates):
         if self._busy or self.provider is None or self._tasks.stopping:
             return
-        worker = _ReviewPreview(self.provider, candidates, self.cache.root.parent / "art_review_scan")
+        comparison = self._selected_comparison()
+        worker = _ReviewPreview(self.provider, candidates, self.cache.root.parent / "art_review_scan",
+            accept_preview=_PreviewComparison(comparison.snapshot, comparison.exclusions))
         self._worker = worker
         self._busy = True
         token = self._generation
-        worker.found.connect(lambda c, data, t=token: self._found(c, data, t))
-        self._tasks.adopt(worker, lambda w, t=token: self._search_retired(w, t))
+        worker.found.connect(lambda c, data, t=token, p=comparison: self._found(c, data, t, comparison=p))
+        self._tasks.adopt(worker, lambda w, t=token, c=comparison: self._search_retired(w, t, comparison=c))
         self._controls()
         self.status.setText("Loading the prepared comparison…")
         worker.start()
 
-    def _search_retired(self, _worker, token=None):
+    def _search_retired(self, _worker, token=None, *, comparison=None):
         if self._tasks.stopping:
             return
         self._busy = False
@@ -778,6 +1000,11 @@ class ArtReviewDialog(QDialog):
             if self._row and self._row[0] not in self._cached:
                 QTimer.singleShot(0, lambda: self._selected(self.tracks.currentItem())
                                   if not self._tasks.stopping else None)
+            return
+        if comparison is not None and not self._comparison_current(comparison):
+            self._snapshot = None
+            self.status.setText("The cover changed. Select the track again.")
+            self._controls()
             return
         if self._row and self._snapshot:
             tid = self._row[0]
@@ -915,7 +1142,7 @@ class ArtReviewDialog(QDialog):
             self.status.setText("Stopping after the current request. Completed suggestions stay available.")
 
     def _candidate_selected(self, item, _old=None):
-        if item:
+        if item and self._snapshot is not None:
             cand, data = item.data(Qt.UserRole)
             self._show_image(self.proposed, data)
             evidence = "From your public likes" if cand.get("liked") else "General SoundCloud search"
@@ -935,7 +1162,7 @@ class ArtReviewDialog(QDialog):
 
     def _manage_exclusions(self):
         from .uploader_exclusions import UploaderExclusionsDialog
-        item = self.candidates.currentItem()
+        item = self.candidates.currentItem() if self._snapshot is not None else None
         candidate = item.data(Qt.UserRole)[0] if item is not None else {}
         observed = set()
         for metadata in self._metadata.values():
@@ -991,7 +1218,7 @@ class ArtReviewDialog(QDialog):
         worker.start()
 
     def _choose_other(self):
-        if self._busy or not self._row:
+        if self._busy or not self._row or self._snapshot is None:
             return
         _, artist, title, _ = self._row
         dialog = ArtPickerDialog(artist, title, self, provider=self.provider)

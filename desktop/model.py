@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections import defaultdict, deque
 
 from PySide6.QtCore import QAbstractTableModel, QMimeData, Qt, Signal
 
@@ -205,7 +206,7 @@ class TrackModel(QAbstractTableModel):
         if normalized == self._filter:
             return
         self._filter = normalized
-        self._apply_filter()
+        self._apply_filter(unchanged_ok=True)
 
     def sort(self, column: int, order=Qt.AscendingOrder) -> None:
         """Header-click sort — VIEW ONLY (export always uses rekordbox order).
@@ -214,20 +215,50 @@ class TrackModel(QAbstractTableModel):
         if sorting == self._sort and not self._sort_dirty:
             return
         self._sort = sorting
-        self._apply_filter()
+        self._apply_filter(unchanged_ok=True,reorder=True)
 
-    def _apply_filter(self) -> None:
-        self.beginResetModel()
+    def _apply_filter(self, *, unchanged_ok=False, reorder=False) -> None:
         if self._filter:
             terms = self._filter.split()
-            self._rows = [r for r in self._all_rows if row_matches(r, terms)]
+            rows = [r for r in self._all_rows if row_matches(r, terms)]
         else:
-            self._rows = list(self._all_rows)
+            rows = list(self._all_rows)
         if self._sort:
             key, desc = self._sort
-            self._rows.sort(key=lambda r: _sort_value(key, r), reverse=desc)
+            rows.sort(key=lambda r: _sort_value(key, r), reverse=desc)
         self._sort_dirty = False
+        if unchanged_ok and len(rows)==len(self._rows) and all(a is b for a,b in zip(rows,self._rows)):
+            return
+        if reorder and self._reorder_rows(rows):return
+        self.beginResetModel()
+        self._rows=rows
         self.endResetModel()
+
+    def _reorder_rows(self, rows, *, identity=id) -> bool:
+        """A view-only permutation keeps persistent selection/editor indices."""
+        if len(rows)!=len(self._rows):return False
+        positions=defaultdict(deque)
+        for at,row in enumerate(rows):positions[identity(row)].append(at)
+        permutation=[]
+        for row in self._rows:
+            indices=positions.get(identity(row))
+            if not indices:return False
+            permutation.append(indices.popleft())
+        self.layoutAboutToBeChanged.emit()
+        previous=self.persistentIndexList()
+        self._rows=rows
+        self.changePersistentIndexList(previous,[self.index(permutation[index.row()],index.column())
+                                                  for index in previous])
+        self.layoutChanged.emit()
+        return True
+
+    def reorder_occurrences(self, rows, identity) -> bool:
+        """Replace unchanged musical rows by their stable occurrence identity."""
+        if self._filter or self._sort:return False
+        if not self._reorder_rows(rows, identity=identity):return False
+        self._all_rows = list(rows)
+        self._sort_dirty = False
+        return True
 
     def refresh_art(self, kind_for_id) -> None:
         """Update the art-status column in place as the background fill progresses
@@ -268,8 +299,9 @@ class TrackModel(QAbstractTableModel):
             return False
         if (self._filter and changed & {'bpm', 'key'}
                 or self._sort and self._sort[0] in changed):
-            self._apply_filter()
-            return True
+            previous=self._rows
+            self._apply_filter(unchanged_ok=True)
+            if self._rows is not previous:return True
         columns = [i for i, (key, _label, _hidden) in enumerate(COLUMNS)
                    if key in changed or key == 'bpm' and 'bpm_estimated' in changed]
         for index, row in enumerate(self._rows):

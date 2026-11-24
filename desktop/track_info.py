@@ -304,6 +304,13 @@ class TrackInfoMixin:
             self._flash_status('Select a track to view its information');return
         tid=track.track_id
         identity=_edit_identity(self.lib,track)
+        requests=getattr(self,'_art_requests',None)
+        if requests is not None:
+            requests.wait_for_manual(tid)
+            selected=self.lib.tracks_by_id.get(tid) if self.lib else None
+            if selected is None or _edit_identity(self.lib,selected)!=identity:
+                self._flash_status('The song identity changed; reopen Track information before editing');return
+            track=selected
         def current():
             selected=self.lib.tracks_by_id.get(tid) if self.lib else None
             if selected is None or _edit_identity(self.lib,selected)!=identity:

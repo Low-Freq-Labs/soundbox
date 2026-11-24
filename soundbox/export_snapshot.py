@@ -39,15 +39,26 @@ def source_paths(library: Library, standalone=()) -> tuple[Path, ...]:
     A materialized selection retains the original full boundary independently
     of its smaller tracks dictionary.
     """
-    paths = [*getattr(library, 'export_source_paths', ()), Path(library.source)]
+    paths: dict[str, Path] = {}
+    def add(raw):
+        if str(raw) in paths:
+            return
+        path = raw if isinstance(raw, Path) else Path(raw)
+        # Path already performs lexical dot/separator normalization. POSIX
+        # string identity retains its equality rules without repeatedly
+        # constructing and hashing identical analysis/native Path objects.
+        paths.setdefault(str(path), path)
+    for path in getattr(library, 'export_source_paths', ()):
+        add(path)
+    add(library.source)
     for track in (*library.tracks_by_id.values(), *standalone):
-        paths.append(track.path)
+        add(track.path)
         if track.source_analysis_path:
-            paths.append(Path(track.source_analysis_path))
+            add(track.source_analysis_path)
         native_path = getattr(track, 'source_native_path', '')
         if native_path:
-            paths.append(Path(native_path))
-    return tuple(dict.fromkeys(paths))
+            add(native_path)
+    return tuple(paths.values())
 
 
 @dataclass(frozen=True)

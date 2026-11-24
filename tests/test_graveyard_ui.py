@@ -226,6 +226,80 @@ class GraveyardUI(unittest.TestCase):
         w.search.setText('unfindable');self.assertTrue(all(item.isHidden() for item in items.values()))
         w.search.clear();self.assertFalse(any(item.isHidden() for item in items.values()))
 
+    def test_empty_search_reveals_rows_without_projecting_historical_metadata(self):
+        w=self.w;g=w._grave
+        w.search.setText('unfindable')
+        self.assertTrue(all(g.topLevelItem(i).isHidden() for i in range(g.topLevelItemCount())))
+        with mock.patch.object(w.graveyard_controller,'info',side_effect=AssertionError('unneeded metadata copy')):
+            w.search.clear()
+        self.assertTrue(all(not g.topLevelItem(i).isHidden() for i in range(g.topLevelItemCount())))
+        self.assertEqual(g.selectedItems(),[])
+
+    def test_graveyard_titles_only_resolve_history_when_live_and_curated_titles_are_absent(self):
+        w=self.w;w.titles['numeric']='Curated historical title'
+        w.hidden.add('absent');original=w.graveyard_controller.info
+        with mock.patch.object(w.graveyard_controller,'info',wraps=original) as info:
+            w._refresh_graveyard()
+        self.assertEqual(info.call_args_list,[mock.call('absent')])
+        rows={w._grave.topLevelItem(i).data(0,Qt.UserRole+11)[1]:w._grave.topLevelItem(i).text(0)
+              for i in range(w._grave.topLevelItemCount())}
+        self.assertEqual(rows,{'chosen':'chosen','numeric':'Curated historical title','absent':'track absent'})
+
+    def test_unchanged_refresh_keeps_exact_items_selection_and_current_column(self):
+        w=self.w;g=w._grave
+        items=[g.topLevelItem(i) for i in range(g.topLevelItemCount())]
+        g.setCurrentItem(items[0],1);g.selectAll()
+        selected=set(g.selectedItems());current=g.currentItem()
+        changed=mock.Mock();g.currentItemChanged.connect(changed)
+        with mock.patch.object(g,'clear',side_effect=AssertionError('unchanged rows rebuilt')):
+            w._refresh_graveyard();w._refresh_graveyard()
+        self.assertEqual([g.topLevelItem(i) for i in range(g.topLevelItemCount())],items)
+        self.assertEqual(set(g.selectedItems()),selected)
+        self.assertIs(g.currentItem(),current);self.assertEqual(g.currentColumn(),1)
+        changed.assert_not_called()
+
+    def test_reuse_reads_current_paths_and_rejects_unsettled_source_metadata(self):
+        w=self.w;c=w.graveyard_controller;g=w._grave
+        c._source_identity=(str(w.lib.source),w.lib.source_kind,w.lib.source_library_id)
+        c._settled_key=c._key();w._refresh_graveyard()
+        item=next(g.topLevelItem(i) for i in range(g.topLevelItemCount())
+                  if g.topLevelItem(i).data(0,Qt.UserRole+11)[1]=='chosen')
+        self.assertEqual(item.toolTip(0),str(self.path))
+        newer=str(self.root/'new verified path.wav')
+        c.entries['chosen']['canonical']=newer
+        with mock.patch.object(g,'clear',side_effect=AssertionError('same rows rebuilt')):
+            w._refresh_graveyard()
+        self.assertEqual(item.toolTip(0),newer)
+        c._settled_key=None;w._refresh_graveyard()
+        self.assertEqual(item.toolTip(0),'')
+        self.assertEqual(c.prepared_paths(),{})
+
+    def test_source_restore_and_metadata_generations_cannot_reuse_old_item_owners(self):
+        from dataclasses import replace
+        w=self.w;g=w._grave;c=w.graveyard_controller
+        original_lib=w.lib;repository=w._state_repository
+        changes=(lambda:setattr(w,'lib',replace(w.lib,source=self.root/'other/master.db')),
+                 lambda:setattr(c,'_generation',c._generation+1),
+                 lambda:setattr(repository.area,'generation',repository.area.generation+1))
+        for change in changes:
+            with self.subTest(change=change):
+                old=[g.topLevelItem(i) for i in range(g.topLevelItemCount())]
+                change()
+                with mock.patch.object(g,'clear',wraps=g.clear) as clear:w._refresh_graveyard()
+                clear.assert_called_once()
+                self.assertTrue(all(g.topLevelItem(i) is not old[i] for i in range(len(old))))
+        w.lib=original_lib;repository.area.generation=repository.generation
+
+    def test_changed_dates_titles_and_membership_still_rebuild_exact_fresh_rows(self):
+        w=self.w;g=w._grave
+        g.setCurrentItem(g.topLevelItem(0),1)
+        w.titles['chosen']='New curated title';w.hidden_dates['chosen']='2026-11-21'
+        w.hidden.remove('numeric')
+        with mock.patch.object(g,'clear',wraps=g.clear) as clear:w._refresh_graveyard()
+        clear.assert_called_once();self.assertEqual(g.topLevelItemCount(),1)
+        self.assertEqual([g.topLevelItem(0).text(i) for i in (0,1)],['New curated title','2026-11-21'])
+        self.assertEqual(g.currentColumn(),1)
+
     def test_restore_keeps_viewport_anchor_for_middle_and_first_visible_rows(self):
         w=self.w;g=w._grave
         tracks={f't{i:03}':Track(f't{i:03}',f'Track {i:03}','Artist',self.path.as_uri()) for i in range(200)}

@@ -314,7 +314,7 @@ def _read_document(path: Path) -> tuple[dict, dict, dict, bool, bytes, tuple]:
 
 
 def read_state(path: Path) -> dict:
-    """Read logical state from legacy portable JSON or its versioned record store."""
+    """Read canonical song records or a complete portable backup document."""
     return _read_document(path)[0]
 
 

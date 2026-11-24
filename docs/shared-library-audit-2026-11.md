@@ -19,6 +19,13 @@ generic USB keeps its separate source-save contract. HANDOFF separates actual
 installation, focused/full checks and failed or completed gates.
 Other native field/artwork/analysis profiles below remain independently gated.
 
+The November21 regular-playlist ordering follow-up retains authored occurrence
+order and exact-occurrence dragging. Its compact durable batch reproduces the
+already accepted removal/append effects, including native clocks, tombstones and
+readback; it grants no new direct TrackNo write profile. Pending order and ACK
+preserve duplicates, selection, drafts and local removal masks. See
+[playlist ordering](native-playlist-order.md) for the current contract.
+
 ### November17 metadata investigation — dated rolling checkpoints
 
 The independently tested v2/v3/v4/v5 source profiles and bounded manual native
@@ -122,7 +129,7 @@ Device ownership and application preferences remain application-specific.
 | My Tag assignment | Durable single-flight intentions, exact selected identities/readback and restart acknowledgement are implemented and source-tested. Historical/synced deletion and unsupported native row-state envelopes remain separate open work. |
 | Create/delete tags | Creation, rename/order and local unsynced deletion have independent accepted exact-library profiles. Synced deletion candidates do not grant production permission; surviving synced sibling/empty-association windows still need proof. Preserve current tag identities and assignments. |
 | Smart playlists | Tag ANY creation, including separately accepted normalized destinations, is delivered. Independent local rename/mixed order/node placement and unsynced deletion profiles are enabled for the accepted library. Older-history deletion and rule editing remain separately guarded. |
-| Ordinary playlists/folders | Accepted CRUD/membership/reorder. Source fixes cover duplicate-occurrence removal/selection, dialog identities, sibling projection and exact causal retry rebasing; focused tests and retained native windows pass. Folder deletion composes accepted leaf operations. Independently accepted node placement now covers regular/smart lists and nested ordinary folders, retaining cycles/identity/history guards. |
+| Ordinary playlists/folders | Accepted CRUD/membership/reorder, authored regular-playlist occurrence order and exact-occurrence track dragging through compact accepted removal/append composition. Duplicate identity, pending projection, selection/drafts, failed ACK and causal retry retain their own proofs. Folder deletion composes accepted leaf operations. Independently accepted node placement covers regular/smart lists and nested ordinary folders, retaining cycles/identity/history guards. |
 | Legacy membership removal | The two retained exclusions belong to GENRES/RIDDIM, a native smart playlist. Ordinary member removal cannot represent them; tag removal would affect other views. Preserve this migration input until its native representation is decided and proven. Current verified identity cannot manufacture an old UUID pin. |
 | Cues | DB-only durable cues and initial-analysis ordering are implemented and source-tested, including missing/corrupt DAT companion cases. Individual synced cue deletion and cue-first then later preserving analysis remain open native profiles. |
 | Manual grid/BPM | Production prep admission now checks native lock, profile and codec before accepting a draft. Saves require only their own authority and use fresh read-only companion snapshots. Focused tests retain drafts/recovery and preserve cue data; broader profiles remain open. |
@@ -355,6 +362,13 @@ Efficiency is part of acceptance: batch refresh clones each changed override map
 at most once, own ACK handles only its origin, and no new idle library scan or
 audio reload belongs to these fixes. The [performance record](performance-audit.md)
 separates structural checks/component timings from actual interaction latency.
+
+## Historical verification and native-bootstrap checkpoints — November13–17
+
+Pending installs, disabled profiles and open metadata gaps in the checkpoints
+below describe those dates. The accepted v5 activation and completed migration
+in the current boundary section supersede them; they grant no new pilot,
+native-app input, source write or restoration.
 
 The final November13 bare `./check.sh --render` passed3,413 discovered cases
 (3,347offscreen+66Cocoa), zero skips/expected failures and780 unchanged frozen

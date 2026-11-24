@@ -1,5 +1,10 @@
 # Test runtime audit — November 2, 2026
 
+These scheduling measurements and pending-gate statements are dated checkpoints,
+not the present release inventory. [HANDOFF](HANDOFF.md) records current source
+validation and installed identity; [the release gate](test-release-gate.md) defines
+today's focused-versus-complete workflow.
+
 ## Focused workflow and scheduling review — November20
 
 Sonny requested focused testing for small local fixes, followed by the complete

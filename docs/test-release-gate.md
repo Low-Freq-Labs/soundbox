@@ -365,7 +365,46 @@ their supplied Desktop paths. BLUE/3BAND frames retain their recorded sRGB
 conversion; the RGB frame retains decoded BT.709 display codes. This is a new
 reference corpus, not recovery of the absent old screenshots or pixel parity.
 
-## Coverage correction
+## Current waveform regression coverage
+
+The November21 renderer retains RGB's exact encoded compositor and shared
+BLUE/RGB signed interval coverage. Both modes use physical-pixel phase increments
+at 64/128/184 points/s, logical-point increments at 576/864, and continuous motion
+at the other stops. Independent PWV7 3BAND keeps continuous motion and its own
+per-band attributes, max-mips and 1.35 gain. No cross-mode geometry substitution
+is permitted for 3BAND.
+
+RGB's original numerical oracles remain unchanged. Generated before/after frame
+proof covers all 13 zooms, 1×/2× scales, three phases and signed detail present or
+absent; optional BLUE mini metadata is included. The November21 protected
+RGB/BLUE comparison has 624 exact frame/attribute cases, and all 312 constant or
+varying-band 3BAND attribute cases remain exact. These are bounded comparisons,
+not literal video equality or universal native color parity.
+
+BLUE's native palette/encoded-gradient tests include near-black partial coverage,
+unclassified spectral inputs and silence without an opacity floor. Its dense
+color-integration oracle permits at most half an 8-bit encoded code step; exact
+coverage and analytical controls retain their separate tighter bounds. Main
+3BAND joint membership tests compare crossing profiles against independently
+integrated vertical stripes, including absent bands and finite center pixels.
+They reject false overlap colors and fabricated zero-energy center ink.
+
+Optional previews have independent reader, grouped readiness and generation
+tests. The actual C++ PWV6 producer is compiled against independent native
+stack/global-normalization formulas; GPU sampling checks premultiplied bilinear
+pixels, the opaque native row 23 baseline and transparent row 24. The mini's
+native baseline never grants a main-waveform silence floor. Invalid/missing
+preview metadata must produce a complete resident fallback before publication.
+Routine tests use generated inputs and frozen fixtures, never live library,
+audio or device discovery. [PLAYER](PLAYER.md) describes current rendering;
+[HANDOFF](HANDOFF.md) separates focused evidence, full gates and installed identity.
+
+## Historical coverage corrections — October 2026
+
+The policies and measurements in this section describe their dated October
+checkpoints. November21 supersedes BLUE's radial/linear-light palette and phase
+rules and 3BAND's former product-of-averaged-masks compositor/derived mini. Current
+coverage contracts are above; preserve the original RGB numerical oracles.
 
 The old fragment replaced joint interval coverage with the minimum of two
 separately integrated edges. At a signed crossing, those edges can cover different
@@ -376,16 +415,16 @@ area contract. The October6 conservative occupied-column RGB presentation is
 historical. Current RGB retains the monotonic faint-coverage shoulder below0.18
 at every zoom, including384; its filled palette evaluates the same accepted
 92pt/s song-clock reference at every stop. Geometry, LOD and motion remain
-independent of that color policy. Current RGB uses logical-point increments at
-576/864; the October31 visually accepted correction uses physical-pixel increments
-at64/128/184. Other RGB stops and3BAND remain continuous. BLUE retains physical-pixel
-increments through384 and logical points at576–1500. The production offset helper
+independent of that color policy. At that October checkpoint, RGB used logical-point
+increments at576/864; the October31 accepted correction used physical-pixel
+increments at64/128/184. Other RGB stops and3BAND remained continuous. BLUE then
+retained physical-pixel increments through384 and logical points at576–1500. The production offset helper
 is compiled independently across all modes, zooms, scales, phases and overlapping
 tile origins; restoring fractional128/184 motion must violate the targeted contract.
 Native drawables verify the matching hold/one-pixel advance and retained translation.
 HANDOFF distinguishes current source/release/install evidence.
 The October28 RGB edge update integrates encoded channels and decodes the final
-encoded-space background blend for Metal; BLUE remains linear-light. Both existing
+encoded-space background blend for Metal; BLUE then remained linear-light. Both existing
 height/coverage visibility lifts, source extrema/colors, LOD, clocks and one-pixel
 footprint stay intact. No temporal blur or source smoothing was added.
 

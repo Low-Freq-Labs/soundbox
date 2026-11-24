@@ -13,6 +13,7 @@ ArtCache.store_ok, which normalizes everything to Rockbox-safe baseline JPEG).
 
 from __future__ import annotations
 
+from copy import deepcopy
 from PySide6.QtCore import QSize, Qt, QThread, Signal
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
@@ -33,13 +34,15 @@ class _CandidateSearch(QThread):
     found = Signal(dict, bytes)
     done = Signal(int)  # how many results total
 
-    def __init__(self, artist: str, title: str, provider: ArtworkProvider, *, limit=None):
+    def __init__(self, artist: str, title: str, provider: ArtworkProvider, *, limit=None,
+                 accept_preview=None):
         super().__init__()
         self.provider = provider
         self.artist = artist
         self.title = title
         self._stop = False
         self.limit = limit
+        self.accept_preview = accept_preview
 
     def stop(self):
         self._stop = True
@@ -64,6 +67,12 @@ class _CandidateSearch(QThread):
             if self._stop:
                 break
             if got:
+                if self.accept_preview is not None:
+                    c, got = deepcopy(c), bytes(got)
+                    if not self.accept_preview(c, got):
+                        continue
+                if self._stop:
+                    break
                 n += 1
                 self.found.emit(c, got)
         if not self._stop:

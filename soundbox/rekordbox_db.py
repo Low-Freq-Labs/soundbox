@@ -26,6 +26,7 @@ from urllib.parse import quote
 
 from .library import Library, LibraryTag, Playlist, TagCategory, Track
 from .rekordbox_analysis import resolve_dat_path
+from .native_snapshot import native_snapshot
 
 REKORDBOX_DB = Path.home() / "Library" / "Pioneer" / "rekordbox" / "master.db"
 
@@ -61,8 +62,6 @@ def load_live(path: str | Path | None = None, *, retain_tracks: dict | None = No
     source = Path(path or REKORDBOX_DB).expanduser()
     if not source.is_file():
         raise FileNotFoundError(f"rekordbox database not found: {source}")
-    from pyrekordbox import Rekordbox6Database  # imported lazily (heavy dep)
-
     tmp = Path(tempfile.mkdtemp(prefix="soundbox_rb_"))
     copy = tmp / "master.db"
     try:
@@ -71,8 +70,7 @@ def load_live(path: str | Path | None = None, *, retain_tracks: dict | None = No
         # be carried into the disposable reader.
         _copy_stable_snapshot(source, copy)
 
-        db = Rekordbox6Database(path=str(copy))
-        try:
+        with native_snapshot(copy) as db:
             tag_times: dict[str, dict[str, float]] = {}
             tag_categories: list[TagCategory] = []
             tags, memberships = _read_tags(db, assignment_times=tag_times,
@@ -106,11 +104,6 @@ def load_live(path: str | Path | None = None, *, retain_tracks: dict | None = No
                 if canonical!=track.path:
                     track.source_native_path=str(track.path)
                     track.location_uri='file://localhost'+quote(str(canonical))
-        finally:
-            try:
-                db.close()
-            except Exception:  # noqa: BLE001
-                pass
         # UUID pins remain readable for older state; Collection no longer needs
         # a playlist or a pin to discover an active native audio record.
         return Library(
@@ -292,6 +285,36 @@ def _tag_assignment_time(value) -> float | None:
     return float(timestamp)
 
 
+def _tag_link_rows(db, track_ids, *, timestamps):
+    """Read the required link scalars from this same private snapshot.
+
+    Raw timestamp text preserves UTC offsets. Bounded selected-ID predicates
+    retain the existing selected-reader cost and never construct ORM links.
+    """
+    connection=getattr(getattr(db,'session',None),'connection',None)
+    links=None
+    if not callable(connection):
+        links=db.get_my_tag_songs()
+        connection=getattr(getattr(links,'session',None),'connection',None)
+    if callable(connection):
+        conn=connection()
+        stamp='CAST(created_at AS TEXT)' if timestamps else 'NULL'
+        statement='SELECT ContentID,MyTagID,rb_local_deleted,'+stamp+' FROM "djmdSongMyTag"'
+        identities=sorted(track_ids) if track_ids is not None else None
+        batches=(identities[start:start+500] for start in range(0,len(identities),500)) if identities is not None else (None,)
+        for selected in batches:
+            suffix='' if selected is None else ' WHERE ContentID IN ('+','.join('?' for _ in selected)+')'
+            for content,tag,deleted,created in conn.exec_driver_sql(statement+suffix,tuple(selected or ())):
+                yield str(content),str(tag),bool(deleted),created
+        return
+    for row in links if links is not None else db.get_my_tag_songs():
+        created=None
+        if timestamps:
+            try:created=row.created_at_raw
+            except AttributeError:created=getattr(row,'created_at',None)
+        yield str(row.ContentID),str(row.MyTagID),_deleted(row),created
+
+
 def _read_tags(db, *, track_ids: set[str] | None = None, definitions=None,
                assignment_times: dict[str, dict[str, float]] | None = None,
                category_catalog: list[TagCategory] | None = None) -> tuple[list[LibraryTag], dict[str, list[str]]]:
@@ -317,25 +340,11 @@ def _read_tags(db, *, track_ids: set[str] | None = None, definitions=None,
     if track_ids is not None and not track_ids:return tags, {}
     memberships: dict[str, set[str]] = {}
     by_tag: dict[str, list[str]] = {}
-    links = db.get_my_tag_songs()
-    if assignment_times is not None and hasattr(links, 'with_entities'):
-        from sqlalchemy import String, cast
-        from pyrekordbox.db6.tables import DjmdSongMyTag
-        links = links.with_entities(DjmdSongMyTag.ContentID, DjmdSongMyTag.MyTagID,
-            DjmdSongMyTag.rb_local_deleted, cast(DjmdSongMyTag.created_at, String).label('created_at_raw'))
-    def selected_links():
-        if track_ids is not None and hasattr(links,'filter'):
-            from pyrekordbox.db6.tables import DjmdSongMyTag
-            identities=sorted(track_ids)
-            for start in range(0,len(identities),500):
-                yield from links.filter(DjmdSongMyTag.ContentID.in_(identities[start:start+500]))
-        else:yield from links
-    for link in selected_links():
-        if track_ids is not None and str(link.ContentID) not in track_ids:continue
-        if not _deleted(link) and str(link.MyTagID) in active:
-            tid, tag_id = str(link.ContentID), str(link.MyTagID)
+    for tid,tag_id,deleted,created in _tag_link_rows(db,track_ids,timestamps=assignment_times is not None):
+        if track_ids is not None and tid not in track_ids:continue
+        if not deleted and tag_id in active:
             if assignment_times is not None:
-                timestamp = _tag_assignment_time(getattr(link, 'created_at_raw', getattr(link, 'created_at', None)))
+                timestamp = _tag_assignment_time(created)
                 if timestamp is not None:
                     times = assignment_times.setdefault(tid, {})
                     times[tag_id] = max(times.get(tag_id, timestamp), timestamp)

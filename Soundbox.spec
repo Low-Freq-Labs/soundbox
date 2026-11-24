@@ -5,7 +5,7 @@ from pathlib import Path
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 sys.path.insert(0, str(Path(SPECPATH)))
-from scripts.build_composition import composition, runtime_submodule, write_manifest
+from scripts.build_composition import composition, collection_options, runtime_submodule, write_manifest
 
 profile = os.environ.get("SOUNDBOX_BUILD_PROFILE", "personal")
 config = composition(profile)
@@ -23,8 +23,7 @@ hiddenimports = []
 for package in config["submodules"]:
     hiddenimports += collect_submodules(package, filter=runtime_submodule)
 for package in config["collections"]:
-    options = (dict(include_py_files=False, filter_submodules=runtime_submodule,
-                    exclude_datas=["**/SelfTest/**"]) if package == "Crypto" else {})
+    options = collection_options(package)
     data, binary, imports = collect_all(package, **options)
     datas += data
     binaries += binary

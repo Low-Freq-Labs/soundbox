@@ -132,6 +132,26 @@ class GridInterface(unittest.TestCase):
         self.assertEqual(read_grid(self.dat)[0].time_ms, 40)
         self.assertEqual(self.errors, [])
 
+    def test_native_presentation_reasons_match_admission_lock_error_and_bpm_gates(self):
+        grid=self.grid;original=grid._snapshots['7']
+        def same():
+            expected=(grid.reason('7',allow_checking=True),grid.bpm_reason('7'))
+            with mock.patch.object(grid,'_source_reason',wraps=grid._source_reason) as source:
+                self.assertEqual(grid.presentation_reasons('7'),expected)
+            source.assert_called_once_with('7',presentation=True)
+        same()
+        grid._snapshots.pop('7');same()
+        grid._snapshots['7']=replace(original,track={**original.track,'Analysed':0x80});same()
+        grid._snapshots['7']=original;grid._errors['7']='Fresh saved grid differs';same()
+        grid._errors.clear();grid._snapshots['7']=replace(original,content_file=None);same()
+        grid._snapshots['7']=replace(original,dat=primary((Beat(1,9000,0),Beat(2,9100,500))));same()
+        grid._snapshots['7']=original;grid._requires_authority=True
+        from types import SimpleNamespace
+        grid._authority=SimpleNamespace(manual_bpm_accepted=False);same()
+        grid._authority.manual_bpm_accepted=True;same()
+        self.shared.admission_paused=True;same()
+        self.shared.admission_paused=False
+
     def test_focus_style_reprobes_have_no_edit_status_or_write(self):
         entered, release = threading.Event(), threading.Event()
         self.probe_gate = entered, release

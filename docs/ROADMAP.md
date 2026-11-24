@@ -1,6 +1,6 @@
 # SoundBox roadmap
 
-Reviewed November20,2026. [HANDOFF](HANDOFF.md) records the actual source, installed
+Reviewed November23,2026. [HANDOFF](HANDOFF.md) records the actual source, installed
 app, release checks and pending acceptance. This page tracks current work;
 [dated release evidence](test-release-gate.md) and the
 [earlier roadmap](archive/roadmap-through-2026-11-05.md) retain historical results.
@@ -15,6 +15,20 @@ first complete waveform remain release requirements. DB acknowledgement,
 source identity, recovery and normal-Quit drains remain independent of immediate
 presentation. [Player contracts](PLAYER.md) and [runtime contracts](runtime-contracts.md)
 define those boundaries.
+
+The accepted November21 player follow-up preserves RGB exactly. BLUE shares its
+signed outline, LOD and motion while using native palette families over resident
+spectral proxies; exact native BLUE pixel equality is unclaimed. Main 3BAND keeps
+its independent PWV7 contours, detail and continuous motion with a 1.35 display
+gain. Its seven-color compositor integrates joint pixel coverage. Optional native
+PWV4/PWV6 previews prepare before grouped first-frame publication; 3BAND's mini
+uses its dedicated stacked preview, independently of the main waveform.
+
+Regular playlists now retain authored occurrence order and support exact-occurrence
+track dragging. Durable batches compose the existing accepted removal/append
+effects with bounded replay; pending order, duplicate identity, selection and
+drafts survive until verified source acknowledgement. Collection and smart lists
+keep newest-first defaults. See [playlist ordering](native-playlist-order.md).
 
 The sidebar resizes horizontally; device captions show firmware/type and total
 capacity. Bounded read-only discovery supports Video/Classic identity with exact
@@ -49,8 +63,12 @@ is in [HANDOFF](HANDOFF.md); larger metadata coexistence, external-exporter and
 Rockbox/dual physical acceptance remain separate user workflow checks.
 
 The November20 follow-up makes newly created tags immediately usable through
-exact dependent intentions, preserves literal ampersands in My Tags, adds a gear
-to each smart playlist's chosen icon and keeps the sidebar divider thin/plain.
+exact dependent intentions, preserves literal ampersands in My Tags, adds a
+larger bright upper-right sparkle, slightly overlapping each smart playlist's
+normal icon (preview A, superseded by bolder B on November21), and keeps the
+sidebar divider thin/plain. The later native-save follow-up promotes eligible
+metadata wakeups and removes repeated cipher derivation/playlist reconstruction;
+fresh source checks and failure recovery remain intact.
 Smart/native playlist rename, reorder and cross-folder moves retain independently
 accepted exact-library protocols; folder-centre drops append inside either a
 collapsed or expanded folder. Guarded new-local tag/smart deletion remains
@@ -102,8 +120,9 @@ an unobserved hardware path or an incomplete architecture migration.
   iTunes workflow does not establish those independent paths.
 - CDJ export maintains both native catalogs; broader player/control/OneLibrary
   hardware acceptance remains open.
-- Current waveform appearance was accepted November9. Reopen tuning only at
-  Sonny's request; preserve load speed, complete geometry and musical timing.
+- The November21 BLUE palette and independent 3BAND thickness/palette/preview
+  follow-ups are accepted. Further tuning follows Sonny's request; preserve RGB,
+  complete first-frame readiness, independent 3BAND detail and musical timing.
 - Further public splitting/release remains deferred until the personal app is
   finished. Existing profiles remain; dependency/service clearance, notices,
   signing/notarization, clean-machine upgrades and hardware coverage are still required.

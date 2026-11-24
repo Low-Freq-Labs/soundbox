@@ -20,18 +20,17 @@ def remember_retirement(relative: Path, row: dict) -> dict:
 
 def legacy_flat_playlists(current: dict, selected: Sequence[Playlist]) -> dict[str, tuple[Path, dict]]:
     """Find only exact prior manifest-owned flat files replaced by leaf names."""
-    output = {}
+    output: dict[str, tuple[Path, dict]] = {}
+    if not selected:return output
+    pending = [(path, row, row[PENDING_RETIREMENT])
+               for path, row in current.get('files', {}).items()
+               if isinstance(row, dict) and isinstance(row.get(PENDING_RETIREMENT), dict)]
     for playlist in selected:
         key = playlist_key(playlist)
         desired = playlists.flat_playlist_path(Path('Playlists'), [], playlist.name)
         # A previous publication may already have replaced the canonical source
         # name/folder. Its retained file row still owns the original path/proof.
-        for device_path, row in current.get('files', {}).items():
-            if not isinstance(row, dict):
-                continue
-            proof = row.get(PENDING_RETIREMENT)
-            if not isinstance(proof, dict):
-                continue
+        for device_path, row, proof in pending:
             relative = Path(str(proof.get('path') or ''))
             if (set(proof) == {'source', 'path', 'size', 'sha256'}
                     and row.get('kind') == 'playlist' and row.get('owned') is True

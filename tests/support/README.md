@@ -7,6 +7,7 @@ Pure reusable builders and source readers, separate from discovered test modules
 - `native_library.py`: synthetic encrypted DB fixtures; never source authority.
 - `native_source.py`: canonical native/shader source loading used by independent oracles.
 - `ipod.py`: generated Play Counts and independent external-export catalog inputs.
+- `waveform_v4.py`: frozen historical container/conversion oracles, excluded from runtime.
 
 Keep imports free of discovery, app creation, live state, Keychain and network access.
 Authority-specific setup/assertions remain with their domain suites.

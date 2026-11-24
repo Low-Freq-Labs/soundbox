@@ -156,8 +156,7 @@ def _quote(name: str) -> str:
 
 def _connect(path: Path, *, create: bool = False, readonly: bool = False):
     """Internal copy-only connection. Never print the key or connection URI."""
-    from pyrekordbox.db6.database import BLOB
-    from pyrekordbox.utils import deobfuscate
+    from .native_cipher import key_connection
     from sqlcipher3 import dbapi2 as sqlcipher
 
     if (not path.is_absolute() or path != path.resolve()
@@ -175,9 +174,7 @@ def _connect(path: Path, *, create: bool = False, readonly: bool = False):
     conn = sqlcipher.connect(f"{path.as_uri()}?mode={mode}", uri=True,
                              isolation_level=None, timeout=0.25)
     try:
-        key = deobfuscate(BLOB)
-        # This is the pinned package's passphrase, never input or diagnostic text.
-        conn.execute("PRAGMA key='" + key.replace("'", "''") + "'")
+        key_connection(conn, reuse=not create)
         conn.execute("PRAGMA trusted_schema=OFF")
         conn.execute("PRAGMA synchronous=FULL")
         if readonly:

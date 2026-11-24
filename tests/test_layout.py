@@ -27,6 +27,7 @@ class RepositoryLayout(unittest.TestCase):
         self.write('soundbox/model.py', 'VALUE = 1\n')
         self.assertIn('soundbox: missing README.md', check(self.root))
         self.write('soundbox/README.md', '# Engine\n')
+        self.write('README.md', '# Project\n[Engine](soundbox/README.md)\n')
         self.assertEqual(check(self.root), [])
         self.write('soundbox/README.md', '# Engine\n' + 'Extra\n' * 25)
         self.assertIn('soundbox/README.md: keep the folder guide within 25 lines', check(self.root))
@@ -36,10 +37,21 @@ class RepositoryLayout(unittest.TestCase):
         self.write('build/native/output.h', '// generated\n')
         self.write('native/README.md', '# Native\n')
         self.write('native/cdj/README.md', '# CDJ\n')
+        self.write('README.md', '# Project\n[Native](native/README.md)\n')
+        self.write('native/README.md', '# Native\n[CDJ](cdj/README.md)\n')
         self.write('native/cdj/vendor/upstream/code.rs', '// pinned upstream\n')
         paths = authored_files(self.root)
         self.assertNotIn(Path('build/native/output.h'), paths)
         self.assertNotIn(Path('native/cdj/vendor/upstream/code.rs'), paths)
+        self.assertEqual(check(self.root), [])
+
+    def test_folder_notes_must_be_reachable_through_the_project_navigation(self):
+        self.write('soundbox/README.md', '# Engine\n')
+        self.write('soundbox/parsers/README.md', '# Parsers\n')
+        self.write('README.md', '# Project\n[Engine](soundbox/README.md)\n')
+        self.assertEqual(check(self.root), [
+            'soundbox/parsers/README.md: guide is not reachable from root README.md'])
+        self.write('soundbox/README.md', '# Engine\n[Parsers](parsers/)\n')
         self.assertEqual(check(self.root), [])
 
     def test_instruction_files_must_match(self):

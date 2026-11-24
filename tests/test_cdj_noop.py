@@ -98,6 +98,40 @@ class CdjNoop(unittest.TestCase):
         self.assertEqual([call.args[0] for call in renderer.call_args_list],['render','merge'])
         self.assertTrue(plan.requires_commit)
 
+    def test_selected_render_request_retains_root_values_and_detaches_mutable_inputs(self):
+        captured = self.fixture.request
+        captured['tracks'][0]['title'] = 'Changed selected native song'
+        retained = {'nested': ['retained']}
+        captured.update(retained_first=retained, retained_second=retained)
+        first, second = deepcopy(captured), deepcopy(captured)
+        roots = []
+        def copied(value, *args, **kwargs):
+            result = deepcopy(value, *args, **kwargs)
+            if isinstance(value, dict) and value.get('source_revision') == captured['source_revision']:
+                roots.append(result)
+            return result
+        original_renderer = cdj_incremental.run_renderer
+        def render(command, *args, **kwargs):
+            if command == 'render':
+                request = roots[-1]
+                self.assertEqual(list(request)[:len(captured)], list(captured))
+                self.assertEqual(request['retained_first'], retained)
+                self.assertIs(request['retained_first'], request['retained_second'])
+                self.assertIsNot(request['retained_first'], first['retained_first'])
+                self.assertEqual(request['tracks'][0]['title'], 'Changed selected native song')
+                self.assertIsNot(request['tracks'][0], first['tracks'][0])
+                self.assertIsNot(request['tracks'][0]['cues'], first['tracks'][0]['cues'])
+                self.assertIs(request['track_extras'][0], first['track_extras'][0])
+                request['retained_first']['nested'].append('render-private')
+            return original_renderer(command, *args, **kwargs)
+        with patch.object(cdj_incremental, 'deepcopy', side_effect=copied), \
+                patch.object(cdj_incremental, 'run_renderer', side_effect=render):
+            plan = self.plan([first, second])
+        self.assertTrue(plan.requires_commit)
+        self.assertEqual(retained, {'nested': ['retained']})
+        self.assertEqual(first['retained_first'], retained)
+        self.assertEqual(captured['tracks'][0]['title'], 'Changed selected native song')
+
     def change_player_profile(self):
         path=self.fixture.target/'PIONEER/MYSETTING.DAT'
         raw=path.read_bytes()

@@ -16,7 +16,7 @@ from PySide6.QtCore import QProcess
 from PySide6.QtWidgets import QInputDialog, QMessageBox
 from .choices import Menu as QMenu, exec_transient_menu
 
-from soundbox.paths import sanitize_component
+from soundbox.paths import sanitize_component, top_level_paths
 from soundbox.device_operations import DeviceCommand, Phase
 
 from .devices import (
@@ -605,19 +605,7 @@ class DeviceBrowserMixin:
             # Make the confirmation count match the actual top-level work: if
             # a selected folder already contains another selected row, deleting
             # the folder is the one operation the user is authorizing.
-            normalized: list[Path] = []
-            for relative in relatives:
-                if any(
-                    existing == relative or existing in relative.parents
-                    for existing in normalized
-                ):
-                    continue
-                normalized = [
-                    existing for existing in normalized
-                    if relative not in existing.parents
-                ]
-                normalized.append(relative)
-            relatives = normalized
+            relatives = top_level_paths(relatives)
             paths = [session.target / relative for relative in relatives]
         except (OSError, RuntimeError, ValueError) as exc:
             QMessageBox.critical(self, "Delete refused", str(exc))

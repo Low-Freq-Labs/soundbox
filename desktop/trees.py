@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from PySide6.QtCore import QEvent, QMimeData, QModelIndex, QPersistentModelIndex, QPoint, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QBrush, QColor, QDrag, QFontMetrics, QIcon, QPainter, QPainterPath, QPalette, QPen, QPixmap
+from PySide6.QtGui import QBrush, QColor, QDrag, QFontMetrics, QIcon, QPainter, QPainterPath, QPainterPathStroker, QPalette, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QLineEdit, QStyledItemDelegate, QTableView,
     QTreeWidget, QTreeWidgetItem, QStyle, QStyleOptionViewItem,
@@ -151,7 +151,7 @@ def _chip_pixmap(text: str) -> QPixmap:
     return pm
 
 
-def _start_chip_drag(view, md, label: str, actions) -> None:
+def _start_chip_drag(view, md, label: str, actions, *, default_action=Qt.IgnoreAction) -> None:
     """Begin a drag from `view` carrying `md`, using the chip pixmap as the ghost."""
     if md is None or not (md.hasText() or md.hasFormat('application/x-soundbox-native-playlist')):
         return
@@ -160,7 +160,7 @@ def _start_chip_drag(view, md, label: str, actions) -> None:
     pm = _chip_pixmap(label)
     drag.setPixmap(pm)
     drag.setHotSpot(QPoint(14, int(pm.height() / pm.devicePixelRatio() / 2)))
-    drag.exec(actions)
+    drag.exec(actions, default_action)
 
 
 class NoTypeAhead:
@@ -353,30 +353,34 @@ def sidebar_choice_icon(kind):
     return QIcon(pixmap)
 
 
-def _sidebar_smart_badge(painter, box, panel, widget):
-    """A small gear modifies the chosen base icon without changing row geometry."""
-    center=box.bottomRight()-QPoint(4,4)
-    halo=QPainterPath();halo.addEllipse(QRectF(center.x()-4,center.y()-4,8,8))
-    painter.save()
-    painter.setRenderHint(QPainter.Antialiasing,True)
-    painter.setClipPath(halo,Qt.IntersectClip)
-    # Repaint the same row panel under the badge, including selected/alternate
-    # and item backgrounds. A fixed dark halo would fail on a white accent.
-    painter.fillRect(box,panel.palette.brush(QPalette.Base))
+def _sidebar_smart_sparkle(painter, box, panel, widget, selected=False):
+    """Approved B: a bolder sparkle slightly overlaps the base's corner."""
+    x,y=box.center().x()+5.2,box.top()+1
+    sparkle=QPainterPath()
+    sparkle.moveTo(x,y-4.8)
+    for dx,dy in ((1.3,-1.3),(4.1,0),(1.3,1.3),(0,4.8),
+                  (-1.3,1.3),(-4.1,0),(-1.3,-1.3)):
+        sparkle.lineTo(x+dx,y+dy)
+    sparkle.closeSubpath()
+    stroke=QPainterPathStroker();stroke.setWidth(1.8)
+    stroke.setCapStyle(Qt.RoundCap);stroke.setJoinStyle(Qt.RoundJoin)
+    halo=stroke.createStroke(sparkle).united(sparkle)
+    gutter=QRectF(panel.rect);gutter.setRight(box.center().x()+10)
+    painter.save();painter.setRenderHint(QPainter.Antialiasing,True)
+    painter.setClipRect(gutter,Qt.IntersectClip)
+    painter.save();painter.setClipPath(halo,Qt.IntersectClip)
+    # Repaint the actual row through the narrow halo. This separates the two
+    # shapes without inventing a dark patch on selected/custom/alternate rows.
+    # Opaque selected/custom/alternate panels supply their own background.
+    # Painting Base underneath those through an antialiased clip would leak a
+    # dark fringe where the clip is only partially covered.
+    if (not selected and panel.backgroundBrush.style()==Qt.NoBrush
+            and not panel.features & QStyleOptionViewItem.Alternate):
+        painter.fillRect(panel.rect,panel.palette.brush(QPalette.Base))
     widget.style().drawPrimitive(QStyle.PE_PanelItemViewItem,panel,painter,widget)
     painter.restore()
-    gear=QPainterPath();gear.setFillRule(Qt.OddEvenFill)
-    for tooth in range(6):
-        angle=-math.pi/2+tooth*math.pi/3
-        for offset,radius in ((-.36,2.3),(-.25,3.2),(.25,3.2),(.36,2.3)):
-            point=(center.x()+radius*math.cos(angle+offset),
-                   center.y()+radius*math.sin(angle+offset))
-            if tooth==0 and offset==-.36:gear.moveTo(*point)
-            else:gear.lineTo(*point)
-    gear.closeSubpath()
-    gear.addEllipse(QRectF(center.x()-1.1,center.y()-1.1,2.2,2.2))
-    painter.save();painter.setRenderHint(QPainter.Antialiasing,True)
-    painter.fillPath(gear,painter.pen().color());painter.restore()
+    painter.fillPath(sparkle,QColor(theme.ON_ACCENT if selected else theme.TEXT_HI))
+    painter.restore()
 
 
 class _PlaylistDelegate(QStyledItemDelegate):
@@ -421,7 +425,7 @@ class _PlaylistDelegate(QStyledItemDelegate):
         painter.setPen(QColor(theme.ON_ACCENT if selected else theme.TEXT))
         _sidebar_icon(painter,icon,kind,bool(option.state & QStyle.State_Open))
         if index.data(PATH_ROLE) and index.data(RB_NODE_KIND_ROLE)==4:
-            _sidebar_smart_badge(painter,icon,panel,option.widget)
+            _sidebar_smart_sparkle(painter,icon,panel,option.widget,selected)
         painter.drawText(text,Qt.AlignVCenter|Qt.AlignLeft,
                          option.fontMetrics.elidedText(label,Qt.ElideRight,max(0,int(text.width()))))
         painter.restore()
@@ -1093,10 +1097,12 @@ class TrackTable(NoTypeAhead, QTableView):
     tracks_dropped = Signal(str, list)  # custom playlist name, [track_ids]
     rekordbox_tracks_dropped = Signal(str, list)
     rekordbox_files_dropped = Signal(str, list)
+    track_reorder_requested = Signal(object, object, bool)
     files_dropped = Signal(str, list)   # name ("" = Collection, import only), [paths]
 
     #: set by the app to () -> ("playlist", name) | ("collection", "") | None
     resolve_drop = None
+    capture_reorder = None
 
     def startDrag(self, actions):  # type: ignore[override]
         m = self.model()
@@ -1107,13 +1113,67 @@ class TrackTable(NoTypeAhead, QTableView):
         label = str(m.data(sel[0]) or "track")  # title column (col 0)
         if len(sel) > 1:
             label += f"   +{len(sel) - 1}"
-        _start_chip_drag(self, m.mimeData(sel), label, actions)
+        capture = self.capture_reorder
+        self._track_reorder_capture = (capture([m._rows[index.row()] for index in sel])
+                                       if callable(capture) else None)
+        try:
+            _start_chip_drag(self, m.mimeData(sel), label, actions | Qt.MoveAction, default_action=Qt.CopyAction)
+        finally:
+            self._track_reorder_capture = None
+            self._set_reorder_line(None)
+
+    def _set_reorder_line(self, position):
+        self._reorder_line = position
+        if position is None:
+            timer = getattr(self, '_reorder_scroll_timer', None)
+            if timer is not None:timer.stop()
+        self.viewport().update()
+
+    def _reorder_autoscroll(self):
+        position = self._reorder_pointer
+        margin = self.autoScrollMargin()
+        direction = -1 if position.y() < margin else 1 if position.y() >= self.viewport().height() - margin else 0
+        if not direction or not getattr(self, '_track_reorder_capture', None):
+            self._reorder_scroll_timer.stop();return
+        bar = self.verticalScrollBar()
+        bar.setValue(bar.value() + direction)
+        index = self.indexAt(position)
+        if index.isValid():
+            rect = self.visualRect(index)
+            self._reorder_line = rect.bottom() if position.y() >= rect.center().y() else rect.top()
+            self.viewport().update()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        position = getattr(self, '_reorder_line', None)
+        if position is not None:
+            painter = QPainter(self.viewport())
+            painter.setPen(QPen(QColor(theme.PURPLE_LIGHT), 2))
+            painter.drawLine(0, position, self.viewport().width(), position)
+
+    def _reorder_drop(self, event):
+        captured = getattr(self, '_track_reorder_capture', None)
+        if event.source() is not self or not captured:return None
+        target = self._drop_target()
+        if target != ('rekordbox', captured['scope'][2]):return None
+        index = self.indexAt(event.position().toPoint())
+        if not index.isValid():
+            last = self.model().rowCount() - 1
+            if last < 0:return None
+            return captured, None, True, self.visualRect(self.model().index(last, 0)).bottom()
+        rect = self.visualRect(index)
+        after = event.position().y() >= rect.center().y()
+        pin = self.model()._rows[index.row()].get('_native_membership')
+        if not isinstance(pin, dict):return None
+        return captured, dict(pin), after, rect.bottom() if after else rect.top()
 
     def _drop_target(self):
         fn = self.resolve_drop
         return fn() if callable(fn) else None
 
     def dragEnterEvent(self, e):
+        if self._reorder_drop(e) is not None:
+            e.setDropAction(Qt.MoveAction);e.accept();return
         md = e.mimeData()
         if self._drop_target() is not None and (_audio_paths(md) or "trk\t" in md.text()):
             e.acceptProposedAction()
@@ -1121,6 +1181,17 @@ class TrackTable(NoTypeAhead, QTableView):
             e.ignore()
 
     def dragMoveEvent(self, e):
+        reorder = self._reorder_drop(e)
+        if reorder is not None:
+            self._set_reorder_line(reorder[3])
+            self._reorder_pointer = e.position().toPoint()
+            if not hasattr(self, '_reorder_scroll_timer'):
+                self._reorder_scroll_timer = QTimer(self)
+                self._reorder_scroll_timer.setInterval(50)
+                self._reorder_scroll_timer.timeout.connect(self._reorder_autoscroll)
+            if not self._reorder_scroll_timer.isActive():self._reorder_scroll_timer.start()
+            e.setDropAction(Qt.MoveAction);e.accept();return
+        self._set_reorder_line(None)
         tgt = self._drop_target()
         if tgt is None:
             e.ignore()
@@ -1134,7 +1205,16 @@ class TrackTable(NoTypeAhead, QTableView):
         else:
             e.ignore()               # (never re-drop the table's own rows onto itself)
 
+    def dragLeaveEvent(self, e):
+        self._set_reorder_line(None)
+        super().dragLeaveEvent(e)
+
     def dropEvent(self, e):
+        self._set_reorder_line(None)
+        reorder = self._reorder_drop(e)
+        if reorder is not None:
+            self.track_reorder_requested.emit(*reorder[:3])
+            e.setDropAction(Qt.MoveAction);e.accept();return
         tgt = self._drop_target()
         if tgt is None:
             e.ignore()

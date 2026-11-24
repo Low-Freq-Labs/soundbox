@@ -391,6 +391,11 @@ def _edit_footer_text(controller):
 
 
 class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, AnalysisPriorityMixin, TrackInfoMixin, TrackMenuMixin, ExportSelectionMixin, CdjDeviceMixin, SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
+    """Compose the desktop and own its shared library and presentation state.
+
+    Controllers coordinate source/device work; task owners retain their workers.
+    Ordinary pages prepare eagerly, while device pages initialize on demand.
+    """
     def __init__(self, providers=None, *, isolated_dir=None):
         super().__init__()
         self._isolated = isolated_dir is not None
@@ -402,7 +407,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         self.resize(1240, 800)
         data_dir = (Path(isolated_dir) if isolated_dir is not None else
                     Path(QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)))
-        self._data_file = data_dir / "library.json"  # canonical state manifest / legacy JSON
+        self._data_file = data_dir / "library.json"  # canonical library state
         bind_provider = getattr(self.providers.connections, 'bind_root', None)
         if callable(bind_provider):
             bind_provider(data_dir)
@@ -460,6 +465,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         self._cache_process = None
         self.native_reader = None
         self._cache_tasks = TaskOwner(self)
+        from .artwork_requests import ArtworkRequests
+        self._art_requests = ArtworkRequests(self)
         self._import_location_worker = None
         self._shutting_down = False
         self._resync_worker: ResyncWorker | None = None
@@ -1098,11 +1105,15 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 key=lambda t:(-self._landed_time(t),t.name.casefold()))]
 
     def _playlist_rows(self, display_path: str) -> list[dict]:
-        """Latest matching tag assignment first; native/export order stays exact."""
+        """Regular lists keep authored occurrences; smart lists use recency."""
         pl = self._native_view_playlist(display_path)
         if pl is None:
             return []
-        rows = self._rows_for(self.lib.resolve(pl))
+        tracks = self.lib.resolve(pl)
+        node = next((row for row in self._native_presentation().source_playlist_catalog.get('nodes', [])
+                     if row['ID'] == pl.pid), None)
+        rows = (self._rows_for(tracks) if node and node['Attribute'] == 4
+                else [self._row_for(track) for track in tracks])
         rows = self._native_membership_rows(pl, rows)
         return smart_playlist_order.order_rows(rows,self.lib,pl.pid,
                                                self.settings.get(smart_playlist_order.KEY))
@@ -1249,7 +1260,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             tracks = [t for i in self.custom.get(cur.data(0, CUSTOM_ROLE), [])
                       if i not in self.hidden
                       and (t := self.lib.tracks_by_id.get(i))]
-            self._set_refreshed_rows(self._annotate_art(self._rows_for(tracks)))
+            self._set_refreshed_rows(self._annotate_art([self._row_for(track) for track in tracks]))
             return
         # A folder may own keyboard/mouse navigation while the browser keeps
         # showing its previous playlist. Refresh that actual active view.
@@ -1565,6 +1576,10 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         keep = getattr(self, "_keep_tid", None)
         if not keep:
             return
+        current=self.table.currentIndex()
+        if (current.isValid() and current.row()<len(self.model._rows)
+                and self.model._rows[current.row()].get('id')==keep):
+            return
         for r, row in enumerate(self.model._rows):
             if row.get("id") == keep:
                 cur = self.table.currentIndex()
@@ -1576,7 +1591,10 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
     def _on_search(self, text: str):
         """Filter EVERY track browser at once — the table (Collection/playlist
         views) and the Artists tree — by the same multi-field query."""
+        seat=self._browser_seat()
+        previous=self.model._rows
         self.model.set_filter(text)
+        if self.model._rows is not previous:self._restore_browser_seat(seat)
         self._reseat_selection()
         self._filter_artists()
         self._filter_graveyard()
@@ -1765,32 +1783,34 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         if self._autoplay_mode != "random":
             return None
 
+        checked=set()
+        renewed=False
         while True:
             while self._autoplay_random_queue:
                 index = self._autoplay_random_queue.pop()
                 track_id = self._autoplay_order[index]
                 if (track_id not in self._autoplay_random_seen
-                        and self._autoplay_playable(index)):
-                    return index
+                        and track_id not in checked):
+                    checked.add(track_id)
+                    if self._autoplay_playable(index):return index
 
-            # One shuffled cycle contains every playable song exactly once.
-            # A new cycle excludes the current song, preventing an immediate
-            # repeat at the boundary as well.
+            # Build the bag from scalar identities, then check only candidates
+            # actually drawn. Refilling must not stat the entire music library.
             unique: dict[str, int] = {}
             for index, track_id in enumerate(self._autoplay_order):
-                if (track_id not in unique
-                        and self._autoplay_playable(index)):
-                    unique[track_id] = index
+                unique.setdefault(track_id,index)
             candidates = [
                 index for track_id, index in unique.items()
-                if track_id not in self._autoplay_random_seen
+                if track_id not in self._autoplay_random_seen and track_id not in checked
             ]
             if not candidates:
+                if renewed:return None
+                renewed=True
                 current = self._autoplay_order[self._autoplay_index]
                 self._autoplay_random_seen = {current}
                 candidates = [
                     index for track_id, index in unique.items()
-                    if track_id != current
+                    if track_id != current and track_id not in checked
                 ]
             if not candidates:
                 return None
@@ -2196,21 +2216,24 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         if not hasattr(self, 'grid_edit_buttons'):
             return
         pb = self.player_bar
-        reason = self.grid_controller.reason(pb.current_track(), allow_checking=True)
-        if not reason and (self._state_maintenance or self._shutting_down):
-            reason = 'Library operation in progress'
-        if not reason and (pb._pending_autoplay or pb._native_error or not pb.cue_panel._loaded):
-            reason = 'Wait for the track to finish loading'
-        if (not reason and not self.grid_controller.is_local(pb.current_track())
-                and (pb._analysis_parts.get('provenance', {}).get('grid') == 'soundbox-manual'
-                     or pb._analysis_parts.get('provenance', {}).get('user_data') == 'soundbox')):
-            reason = 'This track has a SoundBox manual grid'
+        blocker = ''
+        if self._state_maintenance or self._shutting_down:
+            blocker = 'Library operation in progress'
+        elif pb._pending_autoplay or pb._native_error or not pb.cue_panel._loaded:
+            blocker = 'Wait for the track to finish loading'
+        elif ((pb._analysis_parts.get('provenance', {}).get('grid') == 'soundbox-manual'
+               or pb._analysis_parts.get('provenance', {}).get('user_data') == 'soundbox')
+                and not self.grid_controller.is_local(pb.current_track())):
+            blocker = 'This track has a SoundBox manual grid'
+        reason, bpm_reason = self.grid_controller.presentation_reasons(
+            pb.current_track(), include_bpm=not blocker)
+        reason = reason or blocker
         step = pb.grid_nudge_ms()
         for index, button in enumerate(self.grid_edit_buttons):
             button.setEnabled(not reason)
             detail = f'\n{step} ms · Shift: {step * 3} ms' if index in (1, 2) else ''
             button.setToolTip(button.accessibleName() + detail + ('\n' + reason if reason else ''))
-        bpm_reason = reason or self.grid_controller.bpm_reason(pb.current_track())
+        bpm_reason = reason or bpm_reason
         self.bpm_value.set_editable(not bpm_reason, bpm_reason)
         self._sync_prep_bpm()
 
@@ -2750,6 +2773,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         self.model = TrackModel()
         self.table.setModel(self.model)
         self.model.modelReset.connect(self._update_player_navigation)
+        self.model.layoutChanged.connect(self._update_player_navigation)
         self.model.cell_edited.connect(self._on_cell_edited)  # inline Title/Artist edits
         self.table.setItemDelegate(CellEditDelegate(self.table))  # pre-filled editors
         # No keypress/double-click editing — a stray Space would wipe a cell. The
@@ -2774,12 +2798,14 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         self.table.setSelectionBehavior(QTableView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.table.setDragEnabled(True)
-        self.table.setDragDropMode(QAbstractItemView.DragOnly)
+        self.table.setDragDropMode(QAbstractItemView.DragDrop)
         # Drop onto the browser adds to the playlist it's showing — same as the
         # sidebar. resolve_drop tells the table whether the current view is
         # writable (custom playlist / Collection) or off-limits (Artists, rb:).
         self.table.setAcceptDrops(True)
         self.table.resolve_drop = self._resolve_table_drop
+        self.table.capture_reorder = self._capture_track_reorder
+        self.table.track_reorder_requested.connect(self._drop_track_reorder)
         self.table.rekordbox_files_dropped.connect(self._native_import_files)
         self.table.tracks_dropped.connect(self._on_tracks_dropped)
         self.table.files_dropped.connect(
@@ -2993,6 +3019,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
     def _source_selection_reason(self, path=None):
         tags = getattr(self, 'tag_controller', None)
         prep = getattr(self, 'prep_controller', None)
+        if getattr(getattr(self, '_art_requests', None), 'manual_pending', lambda:False)():
+            return 'Finish artwork saves before changing library sources'
         if getattr(prep, 'admission_pending', False):
             return 'Finish cue/grid saves before changing library sources'
         if getattr(prep, 'admission_error', ''):
@@ -4647,7 +4675,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         tracks = [t for i in self.custom.get(name, [])
                   if i not in self.hidden
                   and (t := self.lib.tracks_by_id.get(i) if self.lib else None)]
-        self._set_refreshed_rows(self._annotate_art(self._rows_for(tracks)))
+        self._set_refreshed_rows(self._annotate_art([self._row_for(track) for track in tracks]))
         self.stack.setCurrentIndex(0)
 
     # ---------- devices ----------
@@ -8620,7 +8648,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
     def _apply_catalog_action(self, c: dict, done):
         """Apply one catalog change and call done(ok, image_path) on the main
         thread so the (still-open) dialog updates its row in place."""
-        tids = c["tids"]
+        c = deepcopy(c)
+        tids = tuple(c["tids"])
         if c["kind"] == "rename":
             # Same plane as a merge: alias old → new, canonical everywhere.
             self._apply_merges([(c["artist"], c["new"])], [])
@@ -8634,53 +8663,53 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             self._refresh_info_artwork(tids)
             done(True, None)
             return
-        if c["kind"] == "file":
-            try:
-                data = Path(c["path"]).read_bytes()
-            except OSError as exc:
-                QMessageBox.warning(self, "Couldn't read image", str(exc))
-                done(False, None)
-                return
-            mime = "image/png" if data[:8] == b"\x89PNG\r\n\x1a\n" else "image/jpeg"
-            affected = self._apply_artist_picture(tids, ArtResult(
-                data=data, mime=mime, confidence=1.0,
-                source_url=Path(c["path"]).as_uri(), matched_title=c["artist"]), avatar_only=True)
-            done(True, self.art_cache.image_path((affected or tids)[0]))
-            return
-        if (c["kind"] != "url" or not self.providers.allows("artwork.url")
-                or self._shutting_down or self._state_maintenance):
+        local = c["kind"] == "file"
+        if (c["kind"] not in ("file", "url") or self._shutting_down or self._state_maintenance
+                or (not local and (not self.providers.allows("artwork.url")
+                    or getattr(self, "_scan_worker", None) is not None))):
             done(False, None)
             return
-        # url fetch hits the network — off the UI thread, dialog stays live
-        from .workers import OneShotTask
-        if getattr(self, "_scan_worker", None) is not None:
+        if not tids:
             done(False, None)
             return
-        from soundbox.providers import provider_operation
-        def fetch(url=c['url'],provider=self.providers.artwork):
-            with provider_operation(provider,
-                    lambda:w.cancellation.is_set() or self._shutting_down or self._state_maintenance):
-                return provider.fetch_by_url(url)
-        w = OneShotTask(fetch)
-        self._scan_worker = w
+        from .workers import _OneShotArt
+        if local:
+            path = Path(c["path"])
+            def fetch():
+                data = path.read_bytes()
+                mime = "image/png" if data[:8] == b"\x89PNG\r\n\x1a\n" else "image/jpeg"
+                return ArtResult(data, mime, 1.0, path.as_uri(), c["artist"])
+        else:
+            fetch = lambda: self.providers.artwork.fetch_by_url(c["url"])
+        w = _OneShotArt(tids[0], fetch, provider=None if local else self.providers.artwork)
+        w.requires_save = True
+        w.local = local
 
-        def landed(res, tids=tids, done=done):
-            if self._shutting_down or self._state_maintenance:
-                return
-            if isinstance(res, Exception) or res is None:
+        def current_artist(tid):
+            track = self.lib.tracks_by_id.get(tid) if self.lib else None
+            return bool(track and metadata.effective_artist(tid, track.name, track.artist,
+                self.overrides, True, self.lib.artist_registry, stem=track.path.stem) == c["artist"])
+
+        def landed(worker, current_ids):
+            res = worker.result
+            if not current_ids or isinstance(res, Exception) or res is None:
+                if not current_ids:
+                    self._flash_status('Artwork target changed; choose the image again', 8)
+                elif isinstance(res, Exception):
+                    QMessageBox.warning(self, "Artwork wasn't saved", str(res))
                 done(False, None)
                 return
             try:
-                affected = self._apply_artist_picture(tids, res, avatar_only=True)
+                affected = self._apply_artist_picture(current_ids, res, avatar_only=True)
             except (OSError, ValueError) as exc:
                 QMessageBox.warning(self, "Artwork wasn't saved", str(exc))
                 done(False, None)
                 return
-            done(True, self.art_cache.image_path((affected or tids)[0]))
+            done(bool(affected), self.art_cache.image_path(affected[0]) if affected else None)
 
-        w.done.connect(landed)
-        w.finished.connect(lambda ww=w: self._finish_worker("_scan_worker", ww))
-        w.start()
+        if not self._art_requests.start_many(w, tids, landed, guard=current_artist):
+            w.deleteLater()
+            done(False, None)
 
     def _apply_artist_picture(self, tids, res, *, avatar_only=False):
         """Publish one artist action atomically, preserving newer real covers."""
@@ -8708,6 +8737,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         t = self.lib.tracks_by_id.get(tid) if self.lib else None
         if not t:
             return
+        from .artwork_requests import track_binding
+        binding = track_binding(self, tid)
         title = self.titles.get(tid) or t.name
         artist = metadata.effective_artist(tid, title, t.artist, self.overrides, True,
                                            self.lib.artist_registry, stem=t.path.stem)
@@ -8718,59 +8749,53 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             dlg.shutdown()
             choice = deepcopy(dlg.choice)
             dlg.deleteLater()
-        if self._shutting_down or not choice:
+        if self._shutting_down or self._state_maintenance or not choice:
+            return
+        if track_binding(self, tid) != binding:
+            self._flash_status('Artwork target changed; choose the image again', 8)
             return
         if choice["kind"] == "thumb" and self.providers.allows("artwork.search"):
             c = choice["cand"]
             self._run_oneshot(tid, lambda c=c: self.providers.artwork.fetch_thumb(
-                c["thumb"], c["url"], c["title"]))
+                c["thumb"], c["url"], c["title"]), manual=True)
         elif choice["kind"] == "page" and self.providers.allows("artwork.url"):
-            self._run_oneshot(tid, lambda u=choice["url"]: self.providers.artwork.fetch_by_url(u))
+            self._run_oneshot(tid, lambda u=choice["url"]: self.providers.artwork.fetch_by_url(u), manual=True)
         elif choice["kind"] == "file":  # local image remains shared
             p = Path(choice["path"])
-            try:
+            def read():
                 data = p.read_bytes()
-            except OSError as exc:
-                QMessageBox.warning(self, "Couldn't read image", str(exc))
-                return
-            mime = "image/png" if data[:8] == b"\x89PNG\r\n\x1a\n" else "image/jpeg"
-            self.art_cache.store_ok(tid, ArtResult(
-                data=data, mime=mime, confidence=1.0,
-                source_url=p.as_uri(), matched_title=p.name))
-            self._flash_status("Art set ✓", 5)
-            self._refresh_model_art()
-            self._refresh_info_artwork((tid,))
-            self._queue_stock_artwork((tid,))
+                mime = "image/png" if data[:8] == b"\x89PNG\r\n\x1a\n" else "image/jpeg"
+                return ArtResult(data, mime, 1.0, p.as_uri(), p.name)
+            self._run_oneshot(tid, read, local=True)
 
-    def _run_oneshot(self, tid, fn, *, guard=None):
+    def _run_oneshot(self, tid, fn, *, guard=None, local=False, manual=False):
         if self._shutting_down or self._state_maintenance:
             return
         if self._background_status_available():
-            self._set_status_text("Fetching…")
-        w = _OneShotArt(tid, fn, provider=self.providers.artwork)
-        w.result_guard=guard
-        self._oneshots = getattr(self, "_oneshots", [])
-        self._oneshots.append(w)
-        w.done.connect(self._on_oneshot)
-        # Prune the ref only AFTER run() fully returns (built-in `finished`) —
-        # and drop it from the list, or the list leaks dead thread wrappers.
-        w.finished.connect(lambda ww=w: self._finish_oneshot(ww))
-        w.start()
+            self._set_status_text("Saving artwork…" if local else "Fetching…")
+        w = _OneShotArt(tid, fn, provider=None if local else self.providers.artwork)
+        w.requires_save = local or manual
+        w.local = local
+        if not self._art_requests.start(w, guard=guard):
+            w.deleteLater()
 
-    def _finish_oneshot(self, w):
+    def _finish_oneshot(self, w, *, owned=False):
         try:
             self._oneshots.remove(w)
         except ValueError:
             pass
-        w.deleteLater()
+        if not owned:w.deleteLater()
 
     @_art_ui_action
-    def _on_oneshot(self, tid, res):
+    def _on_oneshot(self, tid, res, *, local=False):
         if self._shutting_down or self._state_maintenance:
             return
-        guard=getattr(self.sender(),'result_guard',None)
-        if guard is not None and not guard():return
         if isinstance(res, Exception):
+            if local:
+                QMessageBox.warning(self, "Couldn't read image", str(res))
+                if self._background_status_available():
+                    self._flash_status('Artwork NOT saved — choose the image and retry', 20)
+                return
             # Honest failure: the fetch BROKE (network, block, bug) — that is
             # not "no art found". Log the whole story; keep the flash short
             # (the status label is narrow).
@@ -8826,7 +8851,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             self, "Cover art",
             "SoundCloud URL (track = its cover, artist profile = avatar):")
         if ok and url.strip():
-            self._run_oneshot(tid, lambda u=url.strip(): self.providers.artwork.fetch_by_url(u))
+            self._run_oneshot(tid, lambda u=url.strip(): self.providers.artwork.fetch_by_url(u), manual=True)
 
     @_provider_action("artwork.search")
     def _maybe_autostart_art_fill(self):
@@ -9985,6 +10010,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         """Quit admission only: ordinary editing and source pumps stay open."""
         if getattr(self, '_shutting_down', False):
             return ''
+        if getattr(getattr(self, '_art_requests', None), 'manual_pending', lambda:False)():
+            return 'Finishing artwork saves — SoundBox remains open'
         for name in ('playlist_controller', 'tag_definition_controller'):
             controller = getattr(self, name, None)
             ack=getattr(controller,'ack',None)

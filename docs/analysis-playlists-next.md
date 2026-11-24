@@ -210,6 +210,12 @@ production paths. This reference supplies no broader publication authority.
 
 ## Ordinary source playlists — accepted October30
 
+The later November21 ordering follow-up retains regular playlists' authored
+occurrence order and durable pending drag projection. Its compact replay derives
+the exact final effects of these accepted removal/append operations, preserving
+native counters, survivor clocks and duplicate occurrence identity. It adds no
+direct TrackNo mutation authority; see [playlist ordering](native-playlist-order.md).
+
 Regular local playlist/folder create, rename and delete plus registered-track
 append/remove passed actual-source acceptance on the exact current library,
 schema andrekordbox6.8.7.0303. Eleven frozen native DB/XML/rollback transitions

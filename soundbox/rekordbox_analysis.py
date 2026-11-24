@@ -1,4 +1,4 @@
-"""Read-only access to rekordbox's analyzed beat grid, cues, and RGB waveform.
+"""Read-only access to rekordbox's beat grid, cues and native display streams.
 
 The live database stores an ``AnalysisDataPath`` for each track. SoundBox
 resolves that path beneath rekordbox's ``share/`` directory, then reads:
@@ -6,15 +6,19 @@ resolves that path beneath rekordbox's ``share/`` directory, then reads:
 * ``ANLZ0000.DAT`` → PQTZ beat number, BPM, and exact beat position.
 * ``ANLZ0000.DAT/EXT`` → PCOB/PCO2 memory and hot cues.
 * ``ANLZ0000.EXT`` → PWV3 BLUE and PWV5 RGB detail (~150 samples/second).
+* ``ANLZ0000.EXT`` → optional native 1200-row PWV4 BLUE palette.
 * ``ANLZ0000.2EX`` → PWV7 higher-precision three-band detail at the same rate.
+* ``ANLZ0000.2EX`` → optional native1200-row PWV6 three-band preview.
 
 This module NEVER builds or saves an ANLZ file. It only opens existing files in
-binary read mode through pyrekordbox and returns plain JSON-friendly data.
+binary read mode through pyrekordbox or targeted packed readers.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+import os
+import stat
 import struct
 
 
@@ -179,6 +183,68 @@ def _read_pwv7(dat_path: str | Path) -> bytes:
     """Return exact packed 3BAND rows from the sibling 2EX file."""
     return _read_waveform_tag(
         Path(dat_path).with_suffix(".2EX"), b"PWV7", 3)
+
+
+def _read_native_preview(dat_path: str | Path, suffix: str, wanted_tag: bytes,
+                         expected_header: int, entry_width: int) -> bytes:
+    """Read one current1200-row native preview with bounded stable I/O.
+
+    Skip unrelated tag payloads, including hours of detail. This optional
+    presentation input never changes source/cache bytes or analysis authority.
+    Missing, malformed, ambiguous or changing files use the derived palette.
+    """
+    if not dat_path:return b''
+    def epoch(value):
+        return (value.st_dev, value.st_ino, value.st_mode, value.st_size,
+                value.st_mtime_ns, value.st_ctime_ns)
+    try:
+        dat = Path(dat_path)
+        if dat.suffix.upper() != '.DAT':return b''
+        path = dat.with_suffix(suffix)
+        with path.open('rb', buffering=0) as source:
+            before = os.fstat(source.fileno())
+            if not stat.S_ISREG(before.st_mode):return b''
+            header = source.read(12)
+            if len(header) != 12 or header[:4] != b'PMAI':return b''
+            header_size, total = struct.unpack_from('>II', header, 4)
+            if not 12 <= header_size <= 4096 or not header_size <= total == before.st_size:return b''
+            offset, result = header_size, b''
+            for _ in range(64):
+                if offset == total:break
+                if total - offset < 12:return b''
+                source.seek(offset)
+                tag = source.read(12)
+                if len(tag) != 12:return b''
+                kind = tag[:4]
+                tag_header, tag_size = struct.unpack_from('>II', tag, 4)
+                if (any(value < 32 or value > 126 for value in kind)
+                        or not 12 <= tag_header <= tag_size <= total - offset):return b''
+                if kind == wanted_tag:
+                    if result or tag_header != expected_header:return b''
+                    fields = source.read(expected_header - 12)
+                    if len(fields) != expected_header - 12:return b''
+                    width, count = struct.unpack_from('>II', fields)
+                    if (width != entry_width or count != 1200
+                            or tag_size != expected_header + count * width):return b''
+                    result = source.read(count * width)
+                    if len(result) != count * width:return b''
+                offset += tag_size
+            if offset != total:return b''
+            if epoch(before) != epoch(os.fstat(source.fileno())) or epoch(before) != epoch(path.stat()):return b''
+            return result
+    except (OSError, ValueError, OverflowError, struct.error):
+        return b''
+
+
+def read_blue_preview(dat_path: str | Path) -> bytes:
+    """Return the exact optional1200×6-byte native PWV4 BLUE palette."""
+    return _read_native_preview(dat_path, '.EXT', b'PWV4', 24, 6)
+
+
+def read_three_band_preview(dat_path: str | Path) -> bytes:
+    """Return exact optional1200×3-byte PWV6 rows for the native stacked mini."""
+    rows = _read_native_preview(dat_path, '.2EX', b'PWV6', 20, 3)
+    return b'' if any(value > 127 for value in rows) else rows
 
 
 def _beat_rows(dat_file) -> list[list]:

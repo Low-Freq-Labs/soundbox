@@ -206,11 +206,31 @@ class NativeDeckContract(unittest.TestCase):
         self.app.processEvents()
 
     def _wait_until(self, predicate, timeout_ms=2000):
-        elapsed = 0
-        while not predicate() and elapsed < timeout_ms:
-            QTest.qWait(10)
-            elapsed += 10
+        deadline = time.monotonic() + timeout_ms / 1000
+        while not predicate() and time.monotonic() < deadline:
+            # Retain Qt Test's deferred widget cleanup as well as native event
+            # processing, then yield Python so waveform workers can progress.
+            QTest.qWait(5)
+            time.sleep(.001)
         self.assertTrue(predicate(), f"condition missed after {timeout_ms} ms")
+
+    def _prepared_surface(self, player):
+        """Complete actual generated waveform for transport-only load mocks."""
+        from soundbox import track_analysis as ta
+        cache = Path(self.temp.name) / 'prepared-transport'
+        manifest = ta.load_manifest(cache, 'surface', self.audio)
+        if manifest is None:
+            prepared = ta.analyze_soundfile(self.audio)
+            self.assertIsNotNone(prepared)
+            self.assertIsNotNone(ta.store(cache, 'surface', self.audio, prepared))
+            manifest = ta.load_manifest(cache, 'surface', self.audio)
+        overview = {**manifest, **ta.load_overview(cache, 'surface', self.audio)}
+        detail = ta.load_detail(cache, 'surface', self.audio, include_spectral=False)
+        generation = player._analysis_generation
+        self.assertEqual(player.player.set_complete_analysis(overview, detail, generation), (True, True))
+        path, analysis = str(self.audio), player._analysis_path
+        player._on_analysis_overview(path, analysis, generation, {**overview, **detail, '_native_uploaded': True})
+        player._on_analysis_detail(path, analysis, generation, {**detail, '_native_uploaded': True, '_waveform_complete': True})
 
     def _decoder_waits(self):
         count = self.deck._lib.sb_deck_decode_wait_returns
@@ -740,7 +760,7 @@ class NativeDeckContract(unittest.TestCase):
         pb.audio.setVolume(0.0)
         pb._deck_volume = 0.0
         try:
-            with mock.patch.object(pb, "_start_waveform"):
+            with mock.patch.object(pb, "_start_waveform", side_effect=lambda *_: self._prepared_surface(pb)):
                 pb.play_track("first", self.audio, autoplay=True)
                 self._wait_until(lambda: pb.is_playing() and pb.player.position() > 30)
                 pb.play_track("second", self.audio, autoplay=None)
@@ -768,7 +788,7 @@ class NativeDeckContract(unittest.TestCase):
         pb.audio.setVolume(0.0)
         pb._deck_volume = 0.0
         try:
-            with mock.patch.object(pb, "_start_waveform"):
+            with mock.patch.object(pb, "_start_waveform", side_effect=lambda *_: self._prepared_surface(pb)):
                 pb.play_track("waiting", self.audio, analysis_path="synthetic-grid", autoplay=True)
                 self._wait_until(lambda: pb.player.duration() > 0)
                 self.assertFalse(pb.is_playing())
@@ -795,7 +815,7 @@ class NativeDeckContract(unittest.TestCase):
         pb.audio.setVolume(0.0)
         pb._deck_volume = 0.0
         try:
-            with mock.patch.object(pb, "_start_waveform"):
+            with mock.patch.object(pb, "_start_waveform", side_effect=lambda *_: self._prepared_surface(pb)):
                 pb.play_track("paused", self.audio, autoplay=None)
                 self._wait_until(lambda: pb.player.duration() > 0)
                 self.assertFalse(pb.is_playing())
@@ -1168,6 +1188,91 @@ class NativeDeckContract(unittest.TestCase):
         self._wait_until(lambda: self.deck.diagnostic_frame_trace_status()['presentation_completed_frames'] == 1)
         np.testing.assert_array_equal(first, finish('group-static'))
 
+    def test_first_complete_waveform_draw_has_mini_cues_before_decoder_duration(self):
+        import numpy as np
+
+        self.host.resize(800, 166)
+        self.app.processEvents()
+        self.assertTrue(self.deck.begin_track(401))
+        self.deck.set_waveform_mode('RGB')
+        overview = {'_overview_heights': bytes([200]) * 600,
+                    '_overview_rgb': bytes([0, 7, 0]) * 600,
+                    'sample_rate': 150.0}
+        detail = {'_blue_detail': bytes([31]) * 600,
+                  '_rgb_detail': bytes.fromhex('0384') * 600,
+                  '_detail_bands': bytes([30, 40, 50]) * 600,
+                  '_audio_detail': {'rate': 1000.0, 'base_count': 4000,
+                      'mip_divisors': [1], 'mip_counts': [4000],
+                      'range_min_mips': [struct.pack('<4000h', *([-8000] * 4000))],
+                      'range_max_mips': [struct.pack('<4000h', *([8000] * 4000))],
+                      'encoding': 'song-anchored-extrema-i16le-v1'}}
+        cues = [dict(kind='hot', slot=1, position_ms=1000),
+                dict(kind='memory', slot=0, position_ms=3000)]
+
+        def first_frame(generation, name):
+            self.deck._lib.sb_deck_begin_waveform_update(self.deck._handle)
+            try:
+                # Retire any draw snapshotted before this presentation group.
+                QTest.qWait(50)
+                self.assertEqual(self.deck.set_complete_analysis(
+                    overview, detail, generation), (True, True))
+                self.deck.diagnostic_begin_frame_trace(
+                    1, 16384, include_overview=True)
+                self.assertEqual(self.deck.diagnostic_frame_trace_status()[
+                    'submitted_frames'], 0)
+            finally:
+                self.deck._lib.sb_deck_end_waveform_update(self.deck._handle)
+            self._wait_until(lambda: self.deck.diagnostic_frame_trace_status()[
+                'presentation_completed_frames'] == 1)
+            output = Path(self.temp.name) / name
+            self.deck.diagnostic_finish_frame_trace(output)
+            info = json.loads((output / 'manifest.json').read_text())
+            with (output / 'frames.csv').open() as stream:
+                records = list(csv.DictReader(stream))
+            self.assertEqual(len(records), 1)
+            record = records[0]
+            self.assertEqual(int(record['sequence']), 0)
+            self.assertEqual(int(record['generation']), generation)
+            self.assertEqual(int(record['crop_origin_y']), 0)
+            pixels = np.frombuffer((output / 'frames.bgra').read_bytes(), dtype='u1')
+            return pixels.reshape(info['crop_height_pixels'],
+                                  info['crop_width_pixels'], 4), record
+
+        # Cue data arrives before any audio source has been opened. The paused
+        # first complete waveform must already place both markers in its mini,
+        # without inventing an audio duration or starting playback.
+        self.deck.set_cues(cues)
+        first, record = first_frame(401, 'mini-cues-first-complete')
+        scale = float(record['drawable_scale'])
+        width = int(record['texture_width'])
+        crop_x = int(record['crop_origin_x'])
+        hot_x = round(width / 4 + 5 * scale) - crop_x
+        memory_x = round(width * 3 / 4) - crop_x
+        hot = first[round(5 * scale), hot_x, :3].astype(int)
+        memory = first[round(24 * scale), memory_x, :3].astype(int)
+        self.assertGreater(hot[0], 150, hot)  # B identity: blue/cyan box interior
+        self.assertGreater(hot[0] - hot[2], 40, hot)
+        self.assertGreater(hot[1] - hot[2], 30, hot)
+        self.assertGreater(memory[2], 210, memory)  # red Memory triangle interior
+        self.assertGreater(memory[2] - memory[0], 60, memory)
+        self.assertGreater(memory[2] - memory[1], 60, memory)
+        self.deck.synchronize()
+        self.assertEqual(self.deck._snapshot.duration_frames, 0)
+        self.assertEqual(self.deck.duration(), 0)
+        self.assertEqual(self.deck.position(), 0)
+        self.assertNotEqual(self.deck.playbackState(), PlaybackState.PLAYING)
+
+        # A new generation cannot inherit either old marker, even if its own
+        # complete waveform arrives while the decoder is still unopened.
+        self.assertTrue(self.deck.begin_track(402))
+        cleared, _ = first_frame(402, 'mini-cues-next-generation')
+        self.assertEqual(self.deck.diagnostic_cue_marker_count(), 0)
+        for x, y in ((hot_x, round(5 * scale)), (memory_x, round(24 * scale))):
+            self.assertFalse(np.array_equal(first[y, x, :3], cleared[y, x, :3]))
+        self.deck.synchronize()
+        self.assertEqual(self.deck._snapshot.duration_frames, 0)
+        self.assertNotEqual(self.deck.playbackState(), PlaybackState.PLAYING)
+
     def test_progressive_overview_draws_both_halves_before_detail_arrives(self):
         import numpy as np
 
@@ -1438,6 +1543,57 @@ class NativeDeckContract(unittest.TestCase):
                 presentations, round(expected * 0.7 * 0.85))
             self.assertGreaterEqual(fps, expected * 0.9)
             self.assertLessEqual(max_gap_ms, 2.2 * 1000 / expected)
+
+    def test_blue_spectral_palette_keeps_the_full_width_retina_display_budget(self):
+        self._assert_spectral_palette_display_budget("BLUE")
+
+    def test_three_band_joint_palette_keeps_the_full_width_retina_display_budget(self):
+        self._assert_spectral_palette_display_budget("3BAND")
+
+    def _assert_spectral_palette_display_budget(self, mode):
+        import numpy as np
+        from soundbox import track_analysis as ta
+
+        self.host.resize(1800, 190)
+        self.app.processEvents()
+        count = 30 * 150
+        self.deck.set_analysis({"heights": [.7] * count,
+            "colors": [[255, 0, 0]] * count, "sample_rate": 150.0})
+        words = np.array([0xe07c, 0x1c7c, 0x03fc, 0xfffc], dtype=">u2")
+        phase=np.arange(count,dtype=float)
+        bands=np.rint(np.column_stack([48+39*np.sin(phase*.29+k)
+            +6*np.sin(phase*.013) for k in (0.,1.7,3.4)])).astype('u1').tobytes()
+        self.assertTrue(self.deck._set_waveform_streams({
+            "_blue_detail": bytes([255]) * count,
+            "_rgb_detail": words[(np.arange(count)//13)%4].tobytes(),
+            "_detail_bands": bands}, 150.0))
+        cells = np.arange(30_000)
+        center = .23*np.sin(cells*.17)
+        width = .35+.18*np.cos(cells*.013)
+        sections, _ = ta._range_mip_sections(
+            np.rint((center-width)*32767).astype("<i2").tobytes(),
+            np.rint((center+width)*32767).astype("<i2").tobytes(), ta.DETAIL_DIVISORS)
+        self.deck.set_audio_detail({"rate": 1000.0, "base_count": 30_000,
+            "mip_divisors": list(ta.DETAIL_DIVISORS),
+            "mip_counts": [len(sections[f"detail_minimum_d{x}"])//2 for x in ta.DETAIL_DIVISORS],
+            "range_min_mips": [sections[f"detail_minimum_d{x}"] for x in ta.DETAIL_DIVISORS],
+            "range_max_mips": [sections[f"detail_maximum_d{x}"] for x in ta.DETAIL_DIVISORS],
+            "encoding": ta.RANGE_MIP_ENCODING})
+        self.assertTrue(self.deck._set_blue_preview(bytes([127,128,80,100,90,50])*1200))
+        self.assertTrue(self.deck._set_three_band_preview(bytes([40,30,20])*1200))
+        self.deck.set_waveform_mode(mode)
+        self.deck.set_visual_position(15_000, True)
+        expected = min(120.0, max(60.0, float(self.host.screen().refreshRate() or 60.0)))
+        for zoom in (24, 92, 1500):
+            with self.subTest(mode=mode, zoom=zoom):
+                self.deck.set_zoom(zoom)
+                QTest.qWait(150)
+                self.deck.diagnostic_reset_display_stats()
+                QTest.qWait(700)
+                presentations, fps, gap = self.deck.diagnostic_display_stats()
+                self.assertGreaterEqual(presentations, round(expected*.7*.85))
+                self.assertGreaterEqual(fps, expected*.9)
+                self.assertLessEqual(gap, 2.2*1000/expected)
 
     def test_hidden_audition_plays_with_native_waveform_and_no_canonical_record(self):
         from desktop.player import PlayerBar
@@ -1814,10 +1970,18 @@ class NativeDeckContract(unittest.TestCase):
                                 "colors": [[255, 0, 0]] * count,
                                 "sample_rate": 150.0})
         rgb = (np.arange(count) // 11) % 3
+        # PWV7 owns 3BAND motion. A constant band fixture is correctly
+        # translation-invariant even when signed audio detail oscillates.
+        band_phase = np.arange(count, dtype=float)
+        bands = np.rint(np.column_stack([
+            53 + 31*np.sin(band_phase*.23 + phase)
+            + 17*np.sin(band_phase*.019 + phase)
+            for phase in (0., 1.7, 3.4)
+        ])).astype("u1").tobytes()
         self.assertTrue(self.deck._set_waveform_streams({
             "_blue_detail": bytes([24]) * count,
             "_rgb_detail": np.array([0xe07c, 0x03fc, 0x1c7c], dtype="<u2")[rgb].tobytes(),
-            "_detail_bands": bytes([24, 42, 58]) * count,
+            "_detail_bands": bands,
         }, 150.0))
         centers = .55 * np.sin(np.arange(96000) * .17)
         self.deck.set_audio_detail({
@@ -1833,6 +1997,7 @@ class NativeDeckContract(unittest.TestCase):
         scale = drawable_width / parent_width
 
         last_record = {}
+        rgb_frames = {}
 
         def capture(position):
             self.deck.set_visual_position(position, True)
@@ -1865,7 +2030,7 @@ class NativeDeckContract(unittest.TestCase):
                     for base in ((50000, 42704) if zoom == 864 else (50000,)):
                         first = capture(base)
                         first_record = dict(last_record)
-                        continuous_rgb = mode == "RGB" and zoom not in (64, 128, 184, 576, 864)
+                        continuous_geometry = mode == "3BAND" or zoom not in (64, 128, 184, 576, 864)
                         point_rate = round(zoom)
                         common = math.gcd(44100, point_rate)
                         shift = round(point_rate / common * scale)
@@ -1879,12 +2044,12 @@ class NativeDeckContract(unittest.TestCase):
                         b = moved[30:-30, 5:105, :3].astype(int)
                         self.assertLessEqual(int(np.abs(a-b).max()), 2)
                         self.assertGreater(int(a.max()), 40, "blank renders must not pass")
-                        if mode in ("RGB", "BLUE") and base == 50000:
+                        if base == 50000:
                             # Stay inside both the physical-pixel wide quantum
                             # and the logical-point close quantum on this screen.
                             # Opaque fill AND fine contour retain their pixels.
                             phase = capture(base + 200.0 / zoom)
-                            if continuous_rgb:
+                            if continuous_geometry:
                                 # Read the rendered frame's own clock ledger:
                                 # subpixel travel must follow source samples,
                                 # without quantizing back onto physical pixels.
@@ -1901,8 +2066,8 @@ class NativeDeckContract(unittest.TestCase):
                                 np.testing.assert_array_equal(
                                     first[30:-30, 5:105, :3],
                                     phase[30:-30, 5:105, :3])
-                        if (mode in ("RGB", "BLUE") and zoom <= 384
-                                and base == 50000 and not continuous_rgb):
+                        if (zoom <= 384
+                                and base == 50000 and not continuous_geometry):
                             # A 0.75-physical-pixel move must advance exactly one
                             # pixel, not remain frozen at the old two-pixel Retina
                             # quantum. The aligned contour must retain its pixels.
@@ -1911,7 +2076,7 @@ class NativeDeckContract(unittest.TestCase):
                                 first[30:-30, 6:106, :3].astype(int)
                                 - one_pixel[30:-30, 5:105, :3].astype(int))
                             self.assertLessEqual(int(delta.max()), 2)
-                        if mode == "RGB" and zoom in (576, 864) and base == 50000:
+                        if mode != "3BAND" and zoom in (576, 864) and base == 50000:
                             # The native reference moves in LOGICAL pixels.
                             # A physical-pixel-only fix still shimmered on Retina;
                             # protect both the hold and one-point boundary.
@@ -1942,6 +2107,14 @@ class NativeDeckContract(unittest.TestCase):
                             delta = np.abs(first.astype(int) - overlap.astype(int))
                             self.assertLessEqual(int(delta.max()), 2,
                                 f"overlapping tile changed: {mode} {zoom} {origin_offset}")
+                        if mode == "RGB":
+                            rgb_frames[zoom, base] = first
+                        else:
+                            self.deck.set_waveform_mode("RGB")
+                            np.testing.assert_array_equal(
+                                capture(base), rgb_frames[zoom, base],
+                                err_msg=f"RGB changed after {mode} at {zoom}")
+                            self.deck.set_waveform_mode(mode)
         self.assertEqual(_sha256(audio), before)
 
     def test_frame_trace_refuses_file_io_until_playback_stops(self):

@@ -1,5 +1,7 @@
 """Archive checks prove capabilities and code, including hidden PYZ contents."""
+import json
 from pathlib import Path
+import plistlib
 import subprocess
 import sys
 import tempfile
@@ -8,7 +10,8 @@ import unittest
 from unittest import mock
 
 from scripts.build_composition import (REQUIRED_RUNTIME_MODULES, verify_runtime_code,
-    verify_startup_scripts, composition, runtime_submodule, source_fingerprint)
+    verify_startup_scripts, composition, collection_options, runtime_submodule,
+    source_fingerprint, inspect_artifact)
 
 
 class PackagedRuntimeCode(unittest.TestCase):
@@ -73,9 +76,68 @@ class PackagedRuntimeCode(unittest.TestCase):
     def test_build_filter_retains_runtime_orm_and_typing_dependencies(self):
         for name in ('sqlalchemy', 'sqlalchemy.orm', 'sqlalchemy.ext.asyncio',
                      'sqlalchemy.sql', 'mypy_extensions', 'pyrekordbox.db6',
+                     'sqlalchemy.dialects', 'sqlalchemy.dialects.sqlite',
+                     'sqlalchemy.dialects.sqlite.pysqlite', 'sqlalchemy.dialects.sqlite.pysqlcipher',
                      'sqlcipher3', 'PIL.Image', 'numpy', 'scipy', 'Crypto.Cipher.AES'):
             with self.subTest(module=name):
                 self.assertTrue(runtime_submodule(name))
+
+    def test_unused_installer_and_other_database_backends_are_excluded_and_rejected(self):
+        for name in ('pyrekordbox.__main__', 'sqlalchemy.dialects.mssql',
+                     'sqlalchemy.dialects.mysql.pymysql', 'sqlalchemy.dialects.oracle.base',
+                     'sqlalchemy.dialects.postgresql.psycopg'):
+            with self.subTest(module=name):
+                self.assertFalse(runtime_submodule(name))
+                for profile in ('public', 'personal'):
+                    self.assertTrue(any(name == prefix or name.startswith(prefix + '.')
+                                        for prefix in composition(profile)['excludes']))
+                self.code[name] = compile('', name, 'exec')
+                with self.assertRaisesRegex(ValueError, 'Unused dependency Python modules leaked'):
+                    self.verify()
+                del self.code[name]
+
+    def test_real_dependency_data_collection_omits_installer_but_keeps_reader_data(self):
+        from PyInstaller.utils.hooks import collect_data_files
+        options = collection_options('pyrekordbox')
+        data = collect_data_files('pyrekordbox', include_py_files=True,
+                                  excludes=options['exclude_datas'])
+        files = [Path(source) for source, _destination in data]
+        self.assertNotIn('__main__.py', [path.name for path in files])
+        self.assertTrue(any(path.parts[-3:] == ('pyrekordbox', 'db6', 'database.py') for path in files))
+        self.assertTrue(options['filter_submodules']('pyrekordbox.db6'))
+        self.assertFalse(options['filter_submodules']('pyrekordbox.__main__'))
+        self.assertEqual(collection_options('PIL'), {})
+
+    def test_raw_unused_dependency_files_are_rejected_without_pyz_entries(self):
+        app = self.root / 'Soundbox.app'
+        resources = app / 'Contents/Resources'
+        for relative in ('Resources/assets/soundbox-wordmark.svg',
+                         'Frameworks/native/libsoundbox_process_guard.dylib',
+                         'Frameworks/native/soundbox-ipod-identity'):
+            target = app / 'Contents' / relative
+            target.parent.mkdir(parents=True, exist_ok=True);target.write_bytes(b'fixture')
+        manifest = {**composition('personal')['manifest'], 'source_sha256': 'a'*64}
+        (resources / 'soundbox-build.json').write_text(json.dumps(manifest))
+        (app / 'Contents/Info.plist').write_bytes(plistlib.dumps(dict(
+            SoundboxBuildProfile='personal', SoundboxSourceFingerprint='a'*64,
+            SoundboxModules=[entry['id'] for entry in manifest['modules']])))
+        pyz = SimpleNamespace(toc={'soundbox.providers': None, 'soundbox.artwork': None,
+                                  'soundbox_personal': None, 'yt_dlp': None})
+        archive = SimpleNamespace(open_embedded_archive=lambda _name: pyz)
+        with mock.patch('PyInstaller.archive.readers.CArchiveReader', return_value=archive), \
+                mock.patch('scripts.build_composition.verify_startup_scripts', return_value={}), \
+                mock.patch('scripts.build_composition.verify_runtime_code', return_value=[]):
+            for relative in ('Resources/pyrekordbox/__main__.py',
+                             'Frameworks/pyrekordbox/__main__.py',
+                             *(f'Resources/sqlalchemy/dialects/{name}/__init__.py'
+                               for name in ('mssql', 'mysql', 'oracle', 'postgresql'))):
+                with self.subTest(artifact=relative):
+                    self.assertEqual(inspect_artifact(app, 'personal')['profile'], 'personal')
+                    path = app / 'Contents' / relative
+                    path.parent.mkdir(parents=True, exist_ok=True);path.write_bytes(b'fixture')
+                    with self.assertRaisesRegex(ValueError, 'Unused dependency artifact leaked'):
+                        inspect_artifact(app, 'personal')
+                    path.unlink();path.parent.rmdir()
 
     def test_native_orm_and_encrypted_sql_run_with_development_modules_denied(self):
         # Exercise the actual native ORM schema and SQLCipher together on a
@@ -86,9 +148,12 @@ class PackagedRuntimeCode(unittest.TestCase):
         script = '''
 import importlib.abc, sys
 from pathlib import Path
+excluded=('sqlalchemy.testing','sqlalchemy.ext.mypy','mypy','ast_serialize',
+          'pyrekordbox.__main__','sqlalchemy.dialects.mssql','sqlalchemy.dialects.mysql',
+          'sqlalchemy.dialects.oracle','sqlalchemy.dialects.postgresql')
 class NoDevelopment(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
-        for prefix in ('sqlalchemy.testing','sqlalchemy.ext.mypy','mypy','ast_serialize'):
+        for prefix in excluded:
             if fullname==prefix or fullname.startswith(prefix+'.'):
                 raise ModuleNotFoundError(fullname)
 sys.meta_path.insert(0,NoDevelopment())
@@ -101,7 +166,16 @@ with Session(engine) as session:
     ids=session.execute(select(tables.DjmdPlaylist.ID)).scalars().all()
     assert ids==['1000'],ids
 engine.dispose()
-assert not any(name.startswith(('sqlalchemy.testing','sqlalchemy.ext.mypy','mypy.','ast_serialize')) for name in sys.modules)
+from sqlcipher3 import dbapi2 as sqlcipher
+engine=create_engine('sqlite+pysqlcipher://:soundbox-private-probe@/:memory:',module=sqlcipher)
+assert engine.dialect.name=='sqlite' and engine.dialect.driver=='pysqlcipher'
+with engine.begin() as connection:
+    connection.exec_driver_sql('CREATE TABLE djmdPlaylist (ID TEXT)')
+    connection.exec_driver_sql("INSERT INTO djmdPlaylist VALUES ('1000')")
+with Session(engine) as session:
+    assert session.execute(select(tables.DjmdPlaylist.ID)).scalars().all()==['1000']
+engine.dispose()
+assert not any(name==prefix or name.startswith(prefix+'.') for name in sys.modules for prefix in excluded)
 '''
         result = subprocess.run([sys.executable, '-c', script, str(native / 'master.db')],
                                 capture_output=True, text=True, timeout=30)

@@ -35,7 +35,9 @@ class ProviderComposition(unittest.TestCase):
         self.assertEqual(public.actions, ())
         self.assertEqual(set(composition("public")["excludes"]),
                          {"yt_dlp", "soundbox_personal", "research", "tests",
-                          "sqlalchemy.testing", "sqlalchemy.ext.mypy", "mypy", "ast_serialize", "Crypto.SelfTest"})
+                          "sqlalchemy.testing", "sqlalchemy.ext.mypy", "mypy", "ast_serialize", "Crypto.SelfTest",
+                          "pyrekordbox.__main__", "sqlalchemy.dialects.mssql", "sqlalchemy.dialects.mysql",
+                          "sqlalchemy.dialects.oracle", "sqlalchemy.dialects.postgresql"})
 
     def test_missing_or_broken_provider_preserves_core(self):
         manifest = composition("personal")["manifest"]

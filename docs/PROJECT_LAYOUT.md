@@ -18,6 +18,13 @@ Older delivery/storage inventories are [historical evidence](archive/project-lay
 
 Every authored folder has a short README. Vendor trees stay pinned; generated/private roots are described here rather than edited for guide coverage.
 
+The pinned rbxport subset retains upstream links to intentionally omitted material:
+its top-level documentation index, development architecture/conventions/testing,
+waveform/USB database references, analysis-settings guide, `CONTRIBUTING.md`, and
+the deck/backup/link/prolink/dbserver/nfs/fakecdj/difftool crate READMEs. These are
+upstream navigation omissions, not missing first-party instructions. Preserve the
+243-file vendor manifest; do not rewrite upstream files merely to repair links.
+
 ## Generated output and local dependencies
 
 - `.venv/`: active pinned development environment; the installed app is independent of it.
@@ -53,12 +60,14 @@ be treated as replay/recovery inputs. Newer curation was never restored over.
 The final November18 wrap followed accepted installed iTunes export/reconnect/Sync.
 It retired the sole old application fallback and regenerated personal distributions,
 personal packaging and Cargo debug output:1,612,310,155distinct regular-file bytes.
-The current installed app, `.venv`, active native/check/CDJ release outputs,
+That wrap preserved its installed app, `.venv`, active native/check/CDJ release outputs,
 curation/originals/recovery and private fixtures remain. Exact guarded manifests
 are in the current handoff's private `wrap-up/connected-wrap-cleanup-*` receipts.
 This byte count is not a measured physical APFS space gain. No app control or
 source/device write was used, and no duplicate candidate/previous app remains
-from this delivery.
+from that delivery. Later November21 installations have their own identities and
+single-slot retention receipts in HANDOFF; this historical cleanup is not their
+current rollback inventory.
 
 ## Evidence and navigation
 

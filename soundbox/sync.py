@@ -1503,33 +1503,6 @@ def run(
     return report
 
 
-def _prune_music(music_root: Path, keep_dirs: set[Path]) -> int:
-    """Delete track folders under Music that no remaining playlist references. Only
-    ever removes whole <Artist>/<Track>/ dirs strictly inside music_root (never
-    outside it), taking each track's external art with it. Returns folders removed."""
-    if not music_root.is_dir():
-        return 0
-    removed = 0
-    for artist_dir in list(music_root.iterdir()):
-        if not artist_dir.is_dir() or artist_dir.name.startswith("."):
-            continue
-        for track_dir in list(artist_dir.iterdir()):
-            if not track_dir.is_dir():
-                continue
-            if track_dir.resolve() in keep_dirs:
-                continue
-            if not is_within(track_dir, music_root):  # paranoia guard before rmtree
-                continue
-            shutil.rmtree(track_dir, ignore_errors=True)
-            removed += 1
-        try:  # drop the artist folder if it's now empty
-            if not any(artist_dir.iterdir()):
-                artist_dir.rmdir()
-        except OSError:
-            pass
-    return removed
-
-
 def _prune_manifest_owned(
         session: DeviceSession, rows: dict[str, dict], *,
         media: bool) -> int:
@@ -1576,18 +1549,6 @@ def _prune_manifest_owned(
             except OSError:
                 pass
     return removed
-
-
-def _prune_empty_dirs(root: Path) -> None:
-    if not root.is_dir():
-        return
-    for d in sorted((p for p in root.rglob("*") if p.is_dir()),
-                    key=lambda p: len(p.parts), reverse=True):
-        try:
-            if not any(d.iterdir()):
-                d.rmdir()
-        except OSError:
-            pass
 
 
 def _dropped_tracks(prev: dict, by_key: dict, changed: list,

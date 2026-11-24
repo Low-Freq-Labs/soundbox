@@ -81,6 +81,38 @@ class MetadataPhases(unittest.TestCase):
         self.begin();self.deliver()
         self.assertIsNotNone(self.controller.pending[0]['request']);self.assertFalse(self.writes)
 
+    def test_lane_release_promotes_contention_poll_and_admits_metadata_next_event_turn(self):
+        self.assertTrue(self.controller.enqueue('local-song',{'title':'Desired Title'}))
+        self.w.tag_controller.busy=True
+        self.pump()
+        # CoarseTimer may fire up to 5% early; its configured contention
+        # interval, rather than a wall-clock sample, proves this is the poll.
+        self.assertTrue(self.controller.timer.isActive())
+        self.assertEqual(self.controller.timer.interval(),2000)
+        self.assertFalse(self.w.tag_controller.admitted)
+        self.w.tag_controller.busy=False
+        self.w.tag_controller.idle.emit()
+        self.assertEqual(self.controller.timer.remainingTime(),0)
+        self.app.processEvents()
+        self.assertEqual(len(self.w.tag_controller.admitted),1)
+        self.assertFalse(self.writes)
+
+    def test_lane_wakes_preserve_native_owner_backoff_and_captured_intention(self):
+        self.begin();before=deepcopy(self.controller.pending)
+        with mock.patch('desktop.metadata_controller.assert_rekordbox_closed',side_effect=
+                native.WriteProofError('Close rekordbox and its background agent before editing')):
+            self.w.tag_controller.deliver()
+        deadline=self.controller.not_before
+        self.assertGreater(deadline,time.monotonic()+1.9)
+        for _ in range(5):
+            self.w.tag_controller.idle.emit();self.w.tag_controller.changed.emit()
+            self.assertGreater(self.controller.timer.remainingTime(),1800)
+            self.pump()
+        self.assertEqual(self.controller.not_before,deadline)
+        self.assertEqual(len(self.w.tag_controller.admitted),1)
+        self.assertEqual(self.controller.pending,before)
+        self.assertFalse(self.writes)
+
     def test_quit_preserves_only_idle_unadmitted_metadata_without_authority_or_captured_native_requests(self):
         self.assertTrue(self.controller.enqueue('local-song',{'title':'Desired Title'}))
         self.controller.timer.stop();before=deepcopy(self.w.settings)

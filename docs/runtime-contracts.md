@@ -3,6 +3,88 @@
 Detailed first-party safety and lifecycle requirements. Read with [AGENTS.md](../AGENTS.md)
 and the [current handoff](HANDOFF.md). Dated examples never grant new actions.
 
+## Whole-app responsiveness without QOL tradeoffs — November20
+
+Performance work preserves complete, usable first frames and the current visuals.
+Track Info opens with the latest accepted selected artwork and both tabs ready;
+an empty/stale image that catches up after opening is a regression. A loaded deck
+must not release audible Play/autoplay or advertise complete readiness while its
+complete waveform is still preparing. Decoder, metadata and waveform preparation
+may overlap internally; measure time to the complete usable deck as well as input
+responsiveness, never an earlier partial callback as the speedup. Unsupported or
+failed work retains truthful error/retry ownership rather than silent success.
+
+Preserve selection, multi-selection, scroll, focus and typed drafts through
+refresh; the latest load/transport/artwork choice wins over older callbacks.
+Captured cues remain immediately usable and durable admissions/ACKs retain order,
+restart, Quit and backup ownership. Ordinary pages/services stay prepared before
+their first interaction; device surfaces stay on demand. Moving work to a thread
+must actually improve GUI responsiveness, not introduce GIL stalls, missing first
+frames, new confirmation flows or canceled accepted work. Caches reuse only valid
+inputs and never replace source freshness/authority or recovery checks.
+
+## Main-lane waveform modes — explicit November21 user requirement
+
+RGB is the accepted exact visual reference. At the same song, zoom and position,
+BLUE must use its main-lane outline, height, thickness, footprint/LOD,
+phase, motion and faint-coverage shoulder without changing any RGB pixel.
+Geometry uses signed audio detail when present and the resident RGB display
+stream otherwise. BLUE palette membership cannot supply a separate outer mask.
+The latest user clarification preserves3BAND's original PWV7 shape/detail, own
+layer shapes and continuous motion. Main display gain changes1.20→1.35 with its
+existing ceiling; its seven-color edges use exact joint encoded region areas,
+not products of averaged masks/linear-light blends. Zero-height main bands are
+absent. Do not substitute RGB/audio
+geometry for3BAND. This supersedes the earlier all-mode common-contour proposal.
+Mode switches
+reuse complete resident buffers, without new analysis, source reads or cache
+changes. BLUE/RGB geometry stays protected;3BAND mini now follows dedicated PWV6.
+This targeted reopening supersedes BLUE's historical independent height/motion
+policies; it preserves coordinated waveform/audio readiness and all
+source-format, transport and device gates. See [PLAYER](PLAYER.md) for details.
+
+November21 BLUE palette follow-up uses four native LUT families and three
+encoded-gradient layers over the resident raw PWV5 song-color field, sampled at
+the fixed92pt/s reference without RGB's25% occupancy correction. PWV5 is a
+spectral proxy, not the native physical filter amplitudes; PWV7 is not its source
+and exact native BLUE pixel parity is not claimed. Keep RGB output and BLUE's shared
+outline/LOD/motion/coverage unchanged. The native base blue for unclassified
+audible data adds no opacity floor; zero geometry remains empty. The mini BLUE
+palette uses optional PWV4's signed eight-class selector, white underlay and alpha
+shading, preloaded by the selected worker before the first complete surface.
+ABI9 sets/clears it within grouped generation fences. No new DSP, cache format,
+migration, reanalysis or source-write authority belongs to this presentation work.
+
+The November21 mini correction reads all1200×3 seven-bit PWV6 rows before the
+first grouped frame, alongside PWV4. Native global normalization/cosine transfer
+produces bottom-stacked opaque blue/orange/white paints in a CPU-prepared1200×25
+premultiplied encoded image. Source baseline24 leaves row23 blue and row24
+transparent, a mini-only one-source-pixel floor. Missing/invalid optional preview
+data uses a complete resident derived fallback before grouped readiness; there
+is no late preview promotion. It has no seven-overlap palette;
+main PWV7 attributes/gain1.35/motion remain separate. Whole-frame and final mini
+resampling quality parity require captures and are not established by formulas.
+
+## Prompt native saves — November20 follow-up
+
+Eligible source edits dispatch on the next event turn when the shared writer
+becomes available; stale contention timers must not add a fixed wait. Actual
+native-owner/failure deadlines retain their retry backoff. Successful saves reuse
+only pure work already proved from identical inputs: bounded in-memory SQLCipher
+passphrase derivation by exact salt/KDF settings, and the current playlist call's
+verified plan after every archived transfer matches its proved bytes. No pages,
+source identities, process absence, authority, recovery or SQL/readback checks are
+cached. Cold recovery independently reconstructs the playlist plan. Journals and
+durable intentions remain in place before source mutation so interrupted writes
+retain their exact recovery and retry behavior. Installed status stays in HANDOFF.
+
+GridStore may retain one successful pure-transformation key, bound to complete
+authority and journal inputs apart from the independently checked decision.
+Every use still freshly verifies source identity, encrypted backup, payload
+generation/destinations and all archived bytes. Exact audio-end acquisition stays
+fresh; cold owners and changed inputs reconstruct independently. This reuse never
+supplies authority or a live-source observation.
+
 ## Fast local loading — explicit November17 user requirement
 
 Preserve the currently accepted fast local-song load and first complete waveform
@@ -28,6 +110,11 @@ publication as owned Python payloads, without retaining a live QThread. They
 keep source/track/job and repository-generation checks; a busy save cannot erase
 markers, lose a valid result or trigger duplicate detection. Queued gestures
 preserve independently renewed SHA/epoch proof and cleared identity holds.
+
+November23 loaded Hot/Memory cues must also appear on the first complete mini
+waveform frame. Decoder timeline publication wakes the paused renderer; until
+then resident waveform count/rate may project the mini only. That presentation
+fallback never supplies audio duration/readiness or delays other preparation.
 
 ## Capture/reuse boundaries after correctness review
 
@@ -330,8 +417,11 @@ repository can answer the question.
   chains and initial/final revisions reproduce sequential DB/XML effects. Every
   guard still hashes recovery payloads and checks source/authority/apps freshly;
   only exact immutable XML parsing and previously verified semantic reconstruction
-  may be reused within their bounded lifetimes. No registration/reorder enters
-  these envelopes. Reorder has an independent default-false capability and native
+  may be reused within their bounded lifetimes. Registration and sidebar node-
+  reorder opcodes do not enter these envelopes. Song reposition composes only
+  accepted remove/append children; `membership-replay-v1` derives their identical
+  final rows/counter/history/XML with a compact plan. Actual unmarked saved
+  requests retain their exact original reconstruction. Sidebar reorder has an independent default-false capability and native
   reference proof; its source-to-native reopen pilot passed November2 and the
   exact-library general capability is provisioned.
   Existing intelligent/cloud mutations remain separate gates; new-track registration uses
@@ -960,10 +1050,13 @@ audit time). Explicit detection defaults to its adaptive/high-precision pipeline
 with a bounded thirty-minute/96M-sample head and a full streamed tail check.
 Legacy constant-v1 results remain valid; component provenance survives partial or
 inconclusive reanalysis. Native/manual grids and existing cues stay authoritative;
-this grants no new source analysis-write permission. The 3BAND overview now keeps
-all seven layer-overlap colors. Accepted main-lane RGB/BLUE/3BAND geometry and
-color remain protected by before/after native drawables. See the dated reference
-audit for exact upstream values, observed differences and validation limits.
+this grants no new source analysis-write permission. At the October30 checkpoint,
+the3BAND overview kept seven PWV7 layer-overlap colors. The November21 dedicated
+PWV6 stacked mini supersedes that policy. Current main3BAND retains its own PWV7
+contours at gain1.35 with joint encoded-region coverage; BLUE shares RGB geometry
+while keeping its own palette. Protect RGB output and unrelated mode behavior
+with before/after native drawables. See PLAYER for current preview/readiness rules
+and the dated reference audit for historical values and validation limits.
 
 The sidebar uses one Playlists tree and one scrollbar, plus Devices. Its shared
 left column resizes horizontally without hiding either pane; section heights
@@ -987,8 +1080,14 @@ belongs in the UI. Fresh native libraries create no migration state or artist
 organization job; source selection alone never activates old-import/custom
 backfill. New playlists/folders use the existing accepted native writer. Legacy local-only
 sources retain local folder handling. Folder clicks expand/collapse without changing
-the active track view. Up/Down after playlist selection browse its songs; native
-and export membership order stays exact while browser rows default newest first.
+the active track view. Up/Down after playlist selection browse its songs.
+November21 ordering requirement: only Collection and smart playlists default
+newest first; ordinary native/XML/local playlists retain authored occurrence
+order, including repeated songs. Explicit header sorts remain view-only, and
+clearing the sort restores authored order. Manual native song movement must
+persist through the shared accepted membership writer, not a local display sort
+or sidebar node-order authority. Preserve hidden occurrences, duplicate selection,
+inline drafts, removal masks and complete queue/recovery ownership.
 New verified My Tag assignments promote matching smart-playlist browser members
 by locally persisted recency, bound to exact source/library, track/native UUID,
 playlist UUID and rule hash. This is display-only, never native rule/membership or
@@ -1234,12 +1333,14 @@ reconstruction; every mode/zoom integrates every lattice corner. November2 now
 supersedes the historical zoom-dependent RGB color/occupancy corrections: evaluate
 the supplied92pt/s palette on the song clock at every zoom. Geometry, footprints
 and motion remain independent; do not reinstate per-zoom palette gains. Current release/install state and
-fresh frozen phase comparisons are in HANDOFF. Sonny accepted the current visuals
-on November9,2026 and will reopen visual work if needed; do not resume tuning
-without that request. Device/firmware and source-format acceptance stays separate.
+fresh frozen phase comparisons are in HANDOFF. Sonny accepted the visuals on
+November9,2026, then explicitly reopened main-lane mode geometry on November21
+under the requirement above. Other appearance tuning still requires his request.
+Device/firmware and source-format acceptance stays separate.
 Mini RGB brightness matching retains the main RGB faint-only shoulder and
-encoded-space blend; BLUE retains its existing resolve, and the October30 3BAND
-overview retains independent layers with the seven native palette colors. Preserve the new references,
+encoded-space blend. The November21 BLUE policy above supersedes its older
+PWV3/linear-light palette. The later PWV6 stacked mini supersedes October30's
+seven-overlap3BAND overview. Preserve the new references,
 acceptance receipts and main-lane parity evidence. Active
 `build/native`, `build/check`, required reference roots and native recovery stay
 in place. Closure does not claim perfect native appearance or presentation cadence.
@@ -1402,7 +1503,7 @@ allow supported direct edits, and report the pause honestly. An idle paused
 backlog can survive normal Quit. Generic USB export retains its source-save gate;
 iPod export captures saved selected values without requiring that backlog to resume.
 Use `state_repository` for library schema/recovery/saves and `soundbox.artwork`
-for local art/results/defaults (`artfetch` compatibility aliases remain). Backup
+for local art/results/defaults. Backup
 snapshots and restore publication share the same lock. Restore closes UI admission,
 drains existing writers/results before final save, publishes staged validated
 state, and reloads only after worker finished/join. Old area generations cannot

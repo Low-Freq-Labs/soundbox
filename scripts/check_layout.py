@@ -73,16 +73,19 @@ def anchors(text: str) -> set[str]:
     return result
 
 
+def _link_targets(text: str) -> list[str]:
+    text = _prose(text)
+    return (re.findall(r'!?\[[^\]\n]*\]\((<[^>]+>|[^\s)]+)(?:\s+[^)]*)?\)', text)
+            + re.findall(r'^\s{0,3}\[[^\]]+\]:\s*(<[^>]+>|\S+)', text, re.MULTILINE))
+
+
 def link_errors(root: Path, files: list[Path]) -> list[str]:
     errors = []
     headings: dict[Path, set[str]] = {}
     for path in files:
         if path.suffix != '.md':
             continue
-        text = _prose((root / path).read_text())
-        targets = re.findall(r'!?\[[^\]\n]*\]\((<[^>]+>|[^\s)]+)(?:\s+[^)]*)?\)', text)
-        targets += re.findall(r'^\s{0,3}\[[^\]]+\]:\s*(<[^>]+>|\S+)', text, re.MULTILINE)
-        for raw in targets:
+        for raw in _link_targets((root / path).read_text()):
             target = raw.strip('<>')
             url = urlsplit(target)
             if url.scheme or url.netloc or not target:
@@ -103,6 +106,30 @@ def link_errors(root: Path, files: list[Path]) -> list[str]:
     return errors
 
 
+def navigation_errors(root: Path, files: list[Path]) -> list[str]:
+    """A guide must be reachable by following notes from the project entrance."""
+    markdown = {(root / path).resolve() for path in files if path.suffix == '.md'}
+    pending = [(root / 'README.md').resolve()]
+    seen: set[Path] = set()
+    while pending:
+        path = pending.pop()
+        if path in seen or path not in markdown:
+            continue
+        seen.add(path)
+        for raw in _link_targets(path.read_text()):
+            url = urlsplit(raw.strip('<>'))
+            if url.scheme or url.netloc or not url.path:
+                continue
+            target = (path.parent / unquote(url.path)).resolve()
+            if target.is_dir():
+                target /= 'README.md'
+            if target in markdown and target not in seen:
+                pending.append(target)
+    return [f'{folder}/README.md: guide is not reachable from root README.md'
+            for folder in sorted(folders(files))
+            if (guide := (root / folder / 'README.md').resolve()).is_file() and guide not in seen]
+
+
 def check(root: Path) -> list[str]:
     files = authored_files(root)
     errors = []
@@ -114,7 +141,7 @@ def check(root: Path) -> list[str]:
             errors.append(f'{folder}/README.md: keep the folder guide within {GUIDE_LINES} lines')
     if (root / 'AGENTS.md').read_bytes() != (root / 'CLAUDE.md').read_bytes():
         errors.append('AGENTS.md and CLAUDE.md differ')
-    return errors + dependency_errors(root, files) + link_errors(root, files)
+    return errors + dependency_errors(root, files) + link_errors(root, files) + navigation_errors(root, files)
 
 
 def main() -> int:

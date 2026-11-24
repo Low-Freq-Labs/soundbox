@@ -112,10 +112,11 @@ class GridEditController(QObject):
     def _local_record(self, tid):
         return self.local_result(self._track(tid)) if self.is_local(tid) else None
 
-    def _source_reason(self, tid):
+    def _source_reason(self, tid, *, presentation=False):
         if self.is_local(tid):
             prep=getattr(self.parent(),'prep_controller',None)
-            if prep is not None:return prep.reason(tid,grid=True)
+            if prep is not None:
+                return prep.presentation_reason(tid) if presentation else prep.reason(tid,grid=True)
             record=self._local_record(tid)
             return '' if record and record.get('beats') else 'Analyze BPM / Grid before editing this track'
         if self.shared.prep_priority or self.shared.busy and self.shared._busy_kind == 'prep':
@@ -137,7 +138,10 @@ class GridEditController(QObject):
         return ''
 
     def reason(self, tid, *, allow_checking=False):
-        reason = self._source_reason(tid)
+        return self._reason(tid,allow_checking=allow_checking)
+
+    def _reason(self, tid, *, allow_checking=False, presentation=False):
+        reason = self._source_reason(tid,presentation=presentation)
         if reason:
             return reason
         if self.is_local(tid):
@@ -153,8 +157,14 @@ class GridEditController(QObject):
 
     def bpm_reason(self, tid):
         reason = self.reason(tid, allow_checking=True)
-        if reason:
-            return reason
+        return reason or self._bpm_reason(tid)
+
+    def presentation_reasons(self, tid, *, include_bpm=True):
+        """Compute this UI refresh's grid/BPM eligibility together, without caching."""
+        reason = self._reason(tid,allow_checking=True,presentation=True)
+        return reason, reason or (self._bpm_reason(tid) if include_bpm else '')
+
+    def _bpm_reason(self, tid):
         if self.is_local(tid):
             track = self._track(tid)
             if (track and track.source_analysis_path and self._requires_authority

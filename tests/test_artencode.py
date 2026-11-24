@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 
 from soundbox import artencode
-from soundbox.artfetch import ArtCache, ArtResult
+from soundbox.artwork import ArtCache, ArtResult
 
 
 def _img_bytes(fmt: str, size=(64, 64), mode="RGB", **save_kw) -> bytes:

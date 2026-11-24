@@ -208,6 +208,16 @@ class ReviewSafety(unittest.TestCase):
 
 
 class ReviewUI(unittest.TestCase):
+    def wait_cover(self, dialog=None):
+        dialog = dialog or self.dialog
+        deadline = time.monotonic() + 3
+        while (dialog._cover_worker is not None or dialog._cover_pending is not None) and time.monotonic() < deadline:
+            _app.processEvents()
+            time.sleep(.001)
+        self.assertIsNone(dialog._cover_worker)
+        self.assertIsNone(dialog._cover_pending)
+        self.assertIsNotNone(dialog._snapshot)
+
     def test_blocking_one_uploader_preserves_other_ready_comparisons(self):
         from desktop.artreview import ArtReviewDialog
         self.dialog.shutdown()
@@ -383,6 +393,7 @@ class ReviewUI(unittest.TestCase):
             self.addCleanup(dialog.deleteLater)
             self.addCleanup(dialog.shutdown)
             dialog.tabs.setCurrentIndex(1)
+            self.wait_idle(dialog)
             dialog._search()
             self.assertTrue(dialog._worker.wait(2000))
             self.assertTrue(dialog.tracks.isEnabled())
@@ -433,13 +444,14 @@ class ReviewUI(unittest.TestCase):
         self.addCleanup(self.dialog.deleteLater)
         self.addCleanup(self.dialog.shutdown)
 
-    def wait_idle(self):
+    def wait_idle(self, dialog=None):
+        dialog = dialog or self.dialog
         _app.processEvents()  # dispatch an automatic selection search first
         deadline = time.monotonic() + 3
-        while self.dialog._tasks.pending and time.monotonic() < deadline:
+        while dialog._tasks.pending and time.monotonic() < deadline:
             _app.processEvents()
             time.sleep(.001)
-        self.assertEqual(self.dialog._tasks.pending, 0)
+        self.assertEqual(dialog._tasks.pending, 0)
 
     def test_open_search_compare_keep_and_close_never_change_art(self):
         self.assertEqual(self.calls, [])
@@ -547,6 +559,7 @@ class ReviewUI(unittest.TestCase):
             release.wait(2)
             return []
         with patch.object(self.provider, "search_candidates", search):
+            self.wait_cover()
             self.dialog._search()
             self.assertTrue(entered.wait(1))
             self.dialog.reject()
@@ -574,6 +587,7 @@ class ReviewUI(unittest.TestCase):
         self.assertFalse(dialog.tracks.item(0).isHidden())  # manual covers are included too
         self.assertFalse(dialog.tracks.item(1).isHidden())
         dialog.tracks.setCurrentRow(1)
+        self.wait_cover(dialog)
         self.assertEqual(dialog.tracks.item(1).text(), "AD & AKIRA - U MELT! PT.2")
         self.assertEqual(dialog.title.text(), "AD & AKIRA - U MELT! PT.2")
         self.assertIn("Automatic", dialog.source.text())

@@ -24,12 +24,20 @@ DEVELOPER_PACKAGES = (
     "mypy", "ast_serialize",
     "Crypto.SelfTest",
 )
+UNUSED_DEPENDENCY_MODULES = (
+    "pyrekordbox.__main__",  # Dependency installation/build CLI, never the desktop reader.
+    "sqlalchemy.dialects.mssql", "sqlalchemy.dialects.mysql",
+    "sqlalchemy.dialects.oracle", "sqlalchemy.dialects.postgresql",
+)
 REQUIRED_RUNTIME_MODULES = (
     "soundbox.providers", "soundbox.artwork", "soundbox.mp3_scan",
     "soundbox.native_mp3_analysis_plan", "soundbox.rekordbox_cbr_analysis_store",
     "soundbox.immutable_plan_proof",
     "desktop.native_timing",
+    "desktop.artwork_requests",
     "soundbox.mac_process",
+    "soundbox.native_cipher",
+    "soundbox.native_snapshot",
     "soundbox.ipod_usb_identity", "soundbox.stock_ipod_identity",
     "desktop.native_analysis", "desktop.tag_controller",
     "desktop.source_intent_admission", "desktop.tag_state", "desktop.tag_order",
@@ -42,7 +50,7 @@ REQUIRED_RUNTIME_MODULES = (
 
 
 def source_fingerprint(root: Path = ROOT) -> str:
-    files = []
+    files: list[Path] = []
     for directory in ("soundbox", "desktop", "soundbox_personal", "native", "profiles", "assets"):
         files.extend(p for p in (root / directory).rglob("*")
                      if p.is_file() and p.suffix in (".py", ".c", ".cpp", ".mm", ".h", ".metal", ".json", ".svg", ".icns", ".rs", ".toml", ".lock", ".sql"))
@@ -65,14 +73,25 @@ def composition(profile: str) -> dict:
         "manifest": manifest,
         "collections": (*COMMON_COLLECTIONS, *(("yt_dlp",) if personal else ())),
         "submodules": (*COMMON_SUBMODULES, *(("soundbox_personal",) if personal else ())),
-        "excludes": [*DEVELOPER_PACKAGES, *(() if personal else PERSONAL_PACKAGES)],
+        "excludes": [*DEVELOPER_PACKAGES, *UNUSED_DEPENDENCY_MODULES,
+                     *(() if personal else PERSONAL_PACKAGES)],
     }
 
 
 def runtime_submodule(name: str) -> bool:
-    """Keep dependency development/test integrations out of runtime bundles."""
+    """Keep development tools and unused dependency backends out of bundles."""
     return not any(name == package or name.startswith(package + ".")
-                   for package in DEVELOPER_PACKAGES)
+                   for package in (*DEVELOPER_PACKAGES, *UNUSED_DEPENDENCY_MODULES))
+
+
+def collection_options(package: str) -> dict:
+    """Keep raw dependency data aligned with the compiled module policy."""
+    if package == "Crypto":
+        return dict(include_py_files=False, filter_submodules=runtime_submodule,
+                    exclude_datas=["**/SelfTest/**"])
+    if package == "pyrekordbox":
+        return dict(filter_submodules=runtime_submodule, exclude_datas=["**/__main__.py"])
+    return {}
 
 
 def write_manifest(profile: str, directory: Path) -> Path:
@@ -109,6 +128,10 @@ def verify_runtime_code(pyz, *, root: Path = ROOT) -> list[str]:
         name == package or name.startswith(package + ".") for package in DEVELOPER_PACKAGES))
     if leaked:
         raise ValueError("Developer Python modules leaked into PYZ: " + ", ".join(leaked))
+    unused = sorted(name for name in names if any(
+        name == package or name.startswith(package + ".") for package in UNUSED_DEPENDENCY_MODULES))
+    if unused:
+        raise ValueError("Unused dependency Python modules leaked into PYZ: " + ", ".join(unused))
     missing = sorted(set(REQUIRED_RUNTIME_MODULES) - names)
     if missing:
         raise ValueError("Shared runtime modules missing: " + ", ".join(missing))
@@ -189,8 +212,14 @@ def inspect_artifact(app: Path, profile: str) -> dict:
     forbidden = {"tests", "research", "mypy", "ast_serialize", "soundbox-ipod-ref", "soundbox-cdj-ref",
                  "library.json", ".sc_creds.json"}
     for path in app.rglob("*"):
-        if forbidden.intersection(path.relative_to(app).parts):
+        parts = path.relative_to(app).parts
+        if forbidden.intersection(parts):
             raise ValueError(f"Developer/personal artifact leaked: {path}")
+        if (path.name == '__main__.py' and path.parent.name == 'pyrekordbox'
+                or any(parts[index:index + 3] == ('sqlalchemy', 'dialects', backend)
+                       for backend in ('mssql', 'mysql', 'oracle', 'postgresql')
+                       for index in range(len(parts) - 2))):
+            raise ValueError(f"Unused dependency artifact leaked: {path}")
         if profile == "public" and any(
                 part in PERSONAL_PACKAGES or part.startswith("yt_dlp-")
                 for part in path.relative_to(app).parts):

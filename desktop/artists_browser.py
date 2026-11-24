@@ -175,15 +175,14 @@ class ArtistsBrowser:
         return changed
 
     def filter(self, terms: list[str]) -> None:
-        for at in range(self.view.topLevelItemCount()):
-            item = self.view.topLevelItem(at)
-            rows = self.children.get(item.data(0, ARTIST_ROLE), [])
-            item.setHidden(bool(terms) and not any(row_matches(row, terms) for row in rows))
-            self.filter_children(item, terms)
+        for name, item in self._headers.items():
+            visible=False
+            for row in self.children.get(name, ()):
+                matches=not terms or row_matches(row,terms)
+                self._tracks[row['id']].setHidden(not matches)
+                visible=visible or matches
+            item.setHidden(bool(terms) and not visible)
 
     def filter_children(self, item: QTreeWidgetItem, terms: list[str]) -> None:
-        rows = {row['id']: row for row in self.children.get(item.data(0, ARTIST_ROLE), [])}
-        for at in range(item.childCount()):
-            child = item.child(at)
-            row = rows.get(child.data(0, ARTIST_TRACK_ROLE))
-            child.setHidden(bool(terms) and row is not None and not row_matches(row, terms))
+        for row in self.children.get(item.data(0, ARTIST_ROLE), ()):
+            self._tracks[row['id']].setHidden(bool(terms) and not row_matches(row,terms))

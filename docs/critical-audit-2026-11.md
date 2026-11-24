@@ -7,24 +7,258 @@ Record the trigger, code location, consequence, evidence, fix scope and status.
 Keep uncertain leads distinct from confirmed findings. Focused releases need not
 wait for unrelated audits to finish; only validated changes join an update.
 
-## Current delivery boundary — reviewed November20
+## Delivery checkpoints — reviewed November23
 
-The installed88b6 runtime includes the later selected iPod capture/quiet actions,
-source-edit coexistence, immediate tag intentions, normalized creation and generic
-node/folder placement documented in [HANDOFF](HANDOFF.md). Dated source/frozen/
+The broader fixes below shipped in personal 174,
+`7a5cf06d3e00c8e332abd5b6d1d0d6463de4093afad003f475b60c570f797eba`,
+installed November21. It includes the cleanup/approved sparkle B, wider
+responsiveness work, selected iPod capture/quiet actions, source-edit coexistence,
+immediate tag intentions, normalized creation and generic node/folder placement.
+It also preserves authored regular-playlist order, persists song reposition
+through the accepted membership composition, and includes the final BLUE/PWV6
+3BAND presentation changes. The later mini-cue readiness delivery retains these
+fixes. [HANDOFF](HANDOFF.md) records the current package/process identity,
+fresh-state preservation and protected-retention evidence.
+
+The 539-case cleanup integration scope and c53c's reconciled 5202-case checkpoint
+are historical. The final waveform/pipeline proofs are focused November21 scopes;
+the November23 wrap-up gate is recorded separately in HANDOFF. No historical
+count here claims a fresh full-suite result for that wrap-up.
+Dated source/frozen/
 pending-install statements below retain their checkpoint meaning; they are not
 current permission or a claim that those delivered fixes remain uninstalled.
 The confirmed queued findings remain separate future work unless explicitly
-marked implemented. This wrap reviews documentation/code and validates the final
-tree; it does not claim all listed P1/P2s fixed, perform live reproductions or
-broaden source/device authority.
+marked implemented or delivered. This November23 document review reconciles
+current source with dated evidence; it does not claim all listed P1/P2s fixed,
+perform live reproductions or broaden source/device authority.
+
+## Independent cleanliness review — November21 source follow-up
+
+Three independent reviews rated pre-cleanup source cleanliness6.5/10 and7/10,
+and build/runtime hygiene8/10. Installedc53c matched its source; no older bundle
+was mapped by its running process. Dormant sync/media helpers nevertheless
+remained inside its Python archive. Source now removes those four private
+helpers, the unused artwork alias and dependency installer/non-SQLite packaging.
+All23maintained directories have short notes reachable from the root README;
+layout checks now enforce that navigation as well as guide length and presence.
+Runtime V4 retirement used the verified one-time own-install scheduling receipt
+conversion, preserving current V5 records and warm preparation reuse. That
+completed conversion is not an ordinary startup/maintenance action to rerun.
+These changes first shipped in d82c and remain in `7a5c`. At the d82c checkpoint,
+the completed conversion preserved3278eligible warm hits at installation's retry
+epoch and startup prepared0tasks. Canonical state and all6433records/217protected
+JSONs matched that fresh snapshot. Current counts, installed identity and
+retention remain in HANDOFF.
+
+The major remaining organization debt is MainWindow's roughly10000-line shared
+state/controller surface and the large iPod planners. Reducing a file by moving
+methods alone would not resolve their coupling. Future extraction should assign
+real responsibilities and preserve selection/drafts, complete readiness and
+worker/state ownership. This pass does not justify a9/10 source rating or a
+zero-dead-code guarantee. Exact findings and bounded proofs are under
+`~/Library/Logs/Soundbox/cleanliness-review-20261121/`.
+
+## Immediate source-write follow-up — November20
+
+The candidate passed focused checks and was installed as personal174 after
+Sonny quit the old app himself. Fresh guarded install/reopen, complete curation
+preservation and package/native checks pass; exact evidence is in [HANDOFF](HANDOFF.md).
+
+- `desktop.metadata_controller.MetadataController.schedule` retained an active
+  two-second contention timer after source ownership released. The scheduler now
+  promotes that timer on a fresh wake while preserving the measured native-owner
+  and verification-retry deadlines. Two regressions in
+  `tests/test_metadata_controller.py` drive actual idle/changed signals, next-turn
+  admission and repeated wakes during native-owner refusal. The controller,
+  background-pause and async-state modules passed50focused cases, including
+  failed storage, exact ACK/retry, shutdown and saved paired intentions.
+- `soundbox.rekordbox_playlist_store.PlaylistStore._apply` reconstructed its own
+  freshly proved plan again when the journal first became visible. Preparation
+  now seeds the existing one-entry semantic proof only after matching the exact
+  proved before/after DB bytes and both XML payloads to their archived transfers.
+  The private before-to-after DB transfer is checked too; after DB integrity is
+  bracketed against the exact closed-writer standalone bytes. Every later guard still
+  hashes all payloads and checks source identity, authority, apps and SQL. Cold
+  instances reconstruct normally; changed records cannot borrow the seed.
+  `tests/test_playlist_fresh_transition.py` faults all five transfers plus the
+  post-integrity capture boundary before any source connection and requires
+  one plan build on success;
+  `tests/test_playlist_batches.py` retains cold-recovery, changed-payload,
+  changed-journal, scope and closed-app controls. The15selected cases pass together;
+  a further passing WAL-stage regression verifies checkpointed standalone bytes
+  and retained WAL mode without another plan reconstruction.
+- Generated encrypted TEMP rename measurements were0.4291–0.4318s with two plan
+  builds,0.4322–0.4336s with bracketed proof seeding alone and0.0154–0.0164s with
+  seeding plus the separate in-memory SQLCipher derivation reuse. The latter is about96% lower
+  for this tiny generated DB; it is not a live-library or UI latency measurement.
+  Isolate seeding with `native_cipher.key_connection(..., reuse=False)` and run
+  `PlaylistStore.apply_with_transition` on the encrypted `SourcePlaylists` fixture.
+- Complete tag/cue/metadata/smart readback remains a separate cost. A generated
+  3298-track warm reader profile measured0.632s under cProfile, including0.286s in
+  track normalization and0.236s in cue edit-state reconstruction. A scalar ORM
+  projection experiment saved only20–60ms and was not integrated. Full fresh
+  readback, source-writer serialization and durable ACK/recovery remain required.
+
+## Native reader and prep handoff audit — November20 candidate
+
+This section preserves the November20 candidate comparison. The reader changes
+subsequently shipped and remain included in `7a5c`; current identity is in HANDOFF.
+`soundbox.native_snapshot` shares only the accepted salt/KDF derivation with each
+new private ORM engine, then closes its session, compiled statements and pool.
+Reader failures retain their original exception even if cleanup also fails.
+`rekordbox_db`, selected analysis context and CDJ capture use that owner. My Tag
+links now read bounded raw scalar rows from the same fresh snapshot, retaining
+offset-preserving timestamps, duplicate definitions, deleted endpoints and exact
+selected IDs. No source data, cue revision, smart membership or freshness is cached.
+
+Paired complete generated metadata reads used3298tracks,85smart plus one ordinary
+playlist and9892tag links. Every round preserved exact complete Library values and
+source DB bytes. Baseline median612.0ms versus candidate516.9ms is about15.5% lower;
+the actual candidate helper measured531–551ms after warming. This is synthetic
+fixture evidence, not live gesture latency. Eighty-three focused reader, helper,
+selected CDJ/analysis, failure/retry and full prep-freezing cases pass. Private
+receipts and self-contained benchmark inputs/scripts are under
+`~/Library/Logs/Soundbox/code-speed-audit-20261120/`.
+
+The prep-list GUI transfer cost remains unresolved. A fresh generated MainWindow control
+with eight two-hour grids still encoded4,118,955bytes in49.7ms, decoded its GUI ACK
+in53.9ms and reached a309.4ms heartbeat gap; immediate cue admission stayed0.64ms.
+An ordered-record candidate reduced transfer work but omitted an exact GUI versus
+canonical grid witness and an intervening mutable-grid fence. Its production
+changes were removed completely. Private validation of canonical grids alone
+cannot prove that a detached GUI grid is equal. A later bounded design needs
+accepted immutable/revision-observed GUI witnesses, retaining all source, state,
+record, operation, recovery and lifecycle fences. The ordinary full frozen patch
+remains authoritative; two `test_state_prep_patch` regressions retain changed-grid
+intentions and show that later caller mutation cannot alter frozen durable bytes.
+Rejected timings are labeled unaccepted and are not a shipped speedup claim.
+
+### Selected-grid control availability — November20 source follow-up
+
+Attribution of the generated long-grid control found seven full230,400-row prep
+validations on the GUI for one cue: one source-pump check and six availability
+checks from three `_sync_grid` refreshes. Each walk cost53–55ms. The source candidate
+now computes grid/BPM presentation reasons together once per refresh. Its prep
+availability check validates every queue identity, header, cue, operation and
+prepared request, plus every grid's outer list type/length and the complete
+selected grid. Unselected grid row walks remain in ordinary edit admission and
+the source pump. Source binding, errors, Analysis Lock and manual-BPM acceptance
+still gate the controls. There is no persistent validation cache, immutable-grid
+carrier, canonical format or persistence change.
+
+The actual production route over the same generated isolated MainWindow workload
+reduced maximum heartbeat gap313.7→100.4ms on the final source (an earlier source
+round measured86.9ms); immediate cue placement measured0.65ms.
+The complete4,118,955-byte ordinary patch still encoded in49.84ms and GUI-applied
+in53.75ms; durable acknowledgement took3.185s. The earlier selected-projection
+prototype's67.6ms gap and2.99s ACK are feasibility evidence only. Full-value frozen
+carrier proof reduced handoff work but retained a326ms GUI gap and added261ms cold
+grid freezing; it was not integrated. These are generated offscreen observations,
+not real-library latency or a claim that remaining transfer/storage costs are fixed.
+
+Six `tests/test_cue_gesture_hotpath.py` regressions exercise the actual MainWindow
+refresh, selected in-place grid corruption, unrelated malformed headers/cues/
+operations/requests, full admission/pump rejection and lock/binding/BPM/error
+eligibility. Blocked load/shutdown/manual-grid controls skip BPM-specific reads
+while retaining source-error precedence. `tests/test_prep_grid.py` compares native
+snapshot eligibility and requires one shared general check. The affected49 focused
+tests pass with no skips,
+including authority separation, queued state and both full-patch grid-freezing
+regressions. A separate128-case adjacent player/prep lifecycle run also passes.
+Production measurements and reproducible generated script:
+`~/Library/Logs/Soundbox/code-speed-audit-20261120/prep-availability-production.{py,json}`.
+This is source evidence; installed identity remains in HANDOFF.
+
+## Wide state/native pass — November20–21 source candidate
+
+The separate per-file receipt `state-native-depth.json` under
+`~/Library/Logs/Soundbox/wide-speed-audit-20261121/` now inventories103 state/native/
+controller files and33,372lines, including15helpers absent from the first scoped
+census. Explicit semantic-reviewed ranges cover11,707lines across all103files;
+unlisted portions of larger files remain structural census only. This is not a
+claim of full semantic coverage of every module. Hashes bind that scope to the
+inspected source and distinguish later edits from installed6f.
+
+`PilotGridStore._record` rebuilt the same pure grid recovery transformation on
+every guard. One generated encrypted28,800-beat save constructed eight plans.
+The source candidate retains one per-store proof only after a complete first
+reconstruction and comparison of both output images, SQL rows and optional
+contentFile metadata. Its key binds exact serialized authority and the complete
+semantic journal; only the separately validated prepared/committed decision is
+excluded. Every call still validates paths, marker, backup and all four payload
+hashes and freshly reacquires any exact PCM endpoint. Cold owners reconstruct
+independently. Before images are captured once for both hashing and reconstruction;
+there is no unchecked second read, fresh-plan seed, retained plan or DB owner.
+
+Three paired complete saves against the exact installed baseline measured
+1136–1148ms versus303–306ms for28,800beats, medians1142.30→304.02ms (about73% lower).
+The252-beat control measured22.47–23.36→14.43–16.58ms. Every SQL table remained
+exactly unchanged for the file-only shift; every beat shifted exactly1ms and full
+DAT/EXT/2EX hashes matched baseline/candidate. These are generated TEMP timings,
+not live-library or physical-player acceptance. Reproducible baseline/current
+script, code hashes and complete observations: `grid-plan-production-paired.{py,json}`.
+Twenty-six grid-store cases pass, including process-loss/WAL recovery and seven
+new warm/cold/payload/request/authority/decision/marker/endpoint/contentFile tests.
+The full named prep recovery selection also passes252 cases in119.721s, with zero
+skips; its scope includes actual cue/grid stores, shutdown, durable state commits,
+pending cue overlays and domain-authority separation. Lint, affected engine types,
+layout/links/instruction parity and diff checks pass. This is focused source proof,
+not a new full release gate or installed runtime identity.
+
+`playlist_retirement.legacy_flat_playlists` scanned every manifest file once per
+selected playlist to locate optional pending-retirement rows. The source now
+captures those candidate rows once per call, preserving their exact order,
+every proof/ownership/path/size/hash condition and complete legacy fallback.
+Empty selections retain zero traversal. Four lookup regressions and74 migration/
+sync/name tests pass, including changed/foreign files, first-valid ordering,
+failed/cancelled publication and repeated retry. Three exact installed6f versus
+final-production pairs measured38.19–38.88→2.65–2.77ms for6433files/86playlists;
+the25,000file/500playlist stress measured875.88–887.14→49.78–50.29ms. All returned
+paths/rows match exactly. This is generated lookup evidence, not physical export
+timing. Final production proof: `playlist-retirement-production-paired.{py,json}`;
+the original `playlist-retirement-scan-proof.json` remains a private prototype.
+
+Prep handoff and own-backup renderers remain private proposals. Worker-prepared
+fresh publication leaves shrink the GUI merge54ms→0.03ms, but actual traced
+heartbeat still reached114ms: caller encoding and worker JSON decoding can hold
+the GIL consecutively. Per-record standard decoding did not establish an
+additional robust benefit. Full actual intended grids and ordinary persistence
+remain unchanged. A byte-identical own-record portable-backup renderer retained
+fresh manifest and record captures/hashes and measured339–353→76–82ms for18.18MB;
+the combined MainWindow prototype shortened first durable completion3.37→2.37s
+but did not improve its worst GUI gap (102→109ms). Neither proposal is integrated,
+and no responsiveness claim rests on moving work to a thread alone.
+
+A separate remaining GUI cost is confirmed in `wave_conversion.acknowledge`,
+called by `desktop.shared_imports`: the complete pending prep queue is validated
+twice per conversion receipt. With eight unrelated two-hour grids, generated
+one-receipt ACK cost102.7ms;16receipts cost1.643s and performed32full scans.
+Original caller values remained unchanged. A later batch-wide pre/post validation
+needs receipt/error-order, empty-input, selected identity, replay and lifecycle
+regressions; it is a proposal only. No audio conversion, persistence or ACK policy
+changed. Receipt: `wave-ack-queue-scans-proof.{py,json}`. The process/Trash/media/
+worker helpers retain fresh authority and joined lifecycle rules; no audit invokes
+real-app controls, source edits or physical devices.
+
+An additional unmeasured read-only lead remains in `plan_grid_edit`: it decodes
+before/after beats after transformation even for shift/downbeat, while only the
+BPM SQL branch uses those variables. No further decoder change is implemented;
+this observation is neither a measured speedup nor part of the frozen release.
 
 ## Active tracks
+
+Approved sparkle B adds an8.2×9.6pt bright upper-right modifier with a1.8pt
+row-background halo. A separate rendering check caught Base leaking through the
+antialiased clip under opaque selected/custom panels; those panels now supply
+their own background. Ordinary transparent panels retain Base. Focused Cocoa
+pixel checks preserve icon body, complete label and actual selected/custom/
+alternate row backgrounds. This presentation change adds no native write scope;
+installed identity and user acceptance are recorded in HANDOFF.
 
 | Track | Scope | Current status |
 | --- | --- | --- |
 | Writes/persistence | All native completion saves, curation pins, exact preference leaves, failure/retry and source ownership | Metadata/preferences, tag and playlist sparse admission/ACK work is implemented; remaining per-path costs and protocol limits stay explicit |
-| Playback/artwork | Transport/load/gesture lifetimes, duplicate occurrences, image choices, modal dialogs and GUI I/O | Waveform gesture/EOF correction passes90focused cases; broader load/navigation findings queued |
+| Playback/artwork | Transport/load/gesture lifetimes, duplicate occurrences, image choices, modal dialogs and GUI I/O | Complete waveform/audio readiness, latest pending-load positioning and artwork-choice ownership are delivered; unrelated navigation/refill findings retain their individual disposition below |
 | Devices/export/recovery | CDJ/stock/Rockbox admission, cancellation/eject, stale results and file/recovery ownership | Indexed Delete/cancellation passed de410 delivery; later identity/sidebar and selected export capture have separate HANDOFF status. Physical acceptance stays separate; copied-media rollback ownership remains queued |
 | Browsing/editing | Selection/filter/sort, model resets, inline edits, menus and hidden preparation | Inline drafts/context targets, bulk tag selection and accepted nested folder placement are delivered; separate relink/adoption/artwork findings below remain queued |
 
@@ -47,9 +281,10 @@ then renews proven surviving fast baselines after actual native readback.
 The cheap Export/Sync header now consumes background metadata-only pending
 detection. Cold witness and changed DB/art catalog observations converge through
 one existing serialized view read; unchanged observations update only scalars.
-Source and presenter integration is frozen for the fresh full gate. Independent
-generated controls and old-path failures are retained privately; final full gate,
-installation and actual connected Export/Delete/Sync sequence remain open.
+At this checkpoint source and presenter integration was frozen for a fresh full
+gate. Independent generated controls and old-path failures remain private; that
+checkpoint's pending gate/install statement is historical. Actual connected
+Export/Delete/Sync acceptance is separate from generated coverage.
 See [current handoff](HANDOFF.md) for exact status and evidence. Sonny explicitly
 requested those ordinary device writes/deletions; that does not authorize source
 music changes, device erase, raw replay, restoration or live fault injection.
@@ -495,6 +730,8 @@ truth remains explicit when a final refresh fails. Full gate/install are next.
 | Fresh native readback rebuilds the complete ORM graph in the GUI process | Worker still blocks Python paint callbacks during cue/ref parsing | Prewarmed read-only helper implemented with complete dataclass/source parity, joined retry and large-record compatibility; native writer/SQL/authority unchanged |
 | Compatible refresh destroys/reseeds an active inline draft | Unrelated reorder loses typed text; same-order own ACK replaces text without a model reset | Exact source/song/field/occurrence preservation and copy recovery implemented;17 actual-typing/lifetime regressions plus complete3,753-case release pass; installed and accepted |
 
+| Finding and trigger | Consequence | Fix/validation status |
+| --- | --- | --- |
 | Context-menu Edit can open another song after a model reset | Real offscreen menu/model/delegate reproduction: right-click A at row0, reset/sort puts B at row0 during the nested menu loop, then actual Edit action emits a title edit for B. `app.py` captures an ordinary QModelIndex and later trusts its row. | Installed35f52167 (or prior accepted ca549), complete3,830-case gate and user acceptance; Capture source/track UUID/path/field/occurrence and revalidate/relocate on activation, or reject an obsolete target. A persistent index alone is insufficient across reset. |
 | Manual seek/drag does not cancel queued auto-advance | Actual offscreen PlayerBar/fake deck: queue terminal callback, then seek700 or begin waveform drag; processing Qt still emits track_ended for the current song. Those gestures do not advance the guarded transport epoch. | Installed35f52167 (or prior accepted ca549), complete3,830-case gate and user acceptance; Invalidate earlier terminal continuations on seek/drag while retaining ordinary end-of-track behavior and loaded-track identity. |
 | Collection confirmation can hide a refreshed replacement | Actual source admission/hide methods: while confirming A's Collection removal, a same-source refresh replaces its numeric ID with a new UUID/path. Yes hides the replacement and cleans its disposable analysis. | Installed35f52167 (or prior accepted ca549), complete3,830-case gate and user acceptance; Capture exact track/source identity before confirmation and reject changed scope before hide/cache mutation. Share the stable action binding with context-menu Edit. |
@@ -503,12 +740,12 @@ truth remains explicit when a final refresh fails. Full gate/install are next.
 | Committed CDJ export is reported as uncommitted when cleanup fails | Actual second-generation TEMP export commits manifest/journal, then injected unlink denial in post-commit cleanup becomes a plain failure. Adapter reports committedFalse/recovery not needed, and desktop retains its old USB snapshot; exact recovery subsequently finishes cleanup. | Installed35f52167 (or prior accepted ca549), complete3,830-case gate and user acceptance; Propagate committed-with-cleanup-attention through the existing committed-error contract, invalidate stale view and retain journal/recovery. |
 | Artists context menu acts on an older selection | Real offscreen Artists tree: select A, right-click unselected B, trigger actual Open in Finder action; handler receives A. Add to Playlist uses the same wrongly captured IDs. | Installed35f52167 (or prior accepted ca549), complete3,830-case gate and user acceptance; Use the clicked row/group when it is outside the existing selection; capture exact action identity before the nested menu loop. |
 | Discard removes durable proof after a worker starts during confirmation | Actual playlist and tag-definition controllers plus TEMP StateRepository: the confirmation admits the head, Yes clears its queue while owned, fake native commit follows, and late completion publishes no ACK. Playlist exclusion remains; actual Library.resolve then hides a fresh native re-add, while the normal saved-proof ACK would retire that exclusion. | Installed35f52167 (or prior accepted ca549), complete3,830-case gate and user acceptance; Capture reviewed source/queue before the modal; afterward recheck unchanged queue, source, closing/maintenance and physical/state ownership before durable discard. Refuse/reconfirm changed scope; hold no native lock during human confirmation. |
-| XML source selection strands an accepted grid shift during debounce | Actual `GridEditController.request` accepts a shift with `grid_waiting=True` and no physical worker. `MainWindow._source_selection_reason` checks busy/checking but omits that logical ownership; direct `open_library` publishes another XML through the normal curation staging. After debounce, the missing original track makes `_start_probe` return, leaving one ready group, no worker/error and Quit indefinitely reporting Finishing saves. Native database selection already checks complete ownership. Private `xml-grid-source-switch` receipt/script uses no window/source/audio/device access. | Installed35f52167 (or prior accepted ca549), complete3,830-case gate and user acceptance; Candidate correction adds complete tag-controller ownership to source selection, including queued cues/grid debounce, and retains the post-chooser guard. Actual grid/cue admission during the chooser now blocks parsing without queue loss; normal fake source acknowledgement releases admission. Source-selection16 and background-pause/refresh20 focused cases pass; full gate/install pending. |
-| Backup/restore disables the UI before an invalid cancellation or cue/grid drain | Actual AnalysisWorker exposes a noncallable stop Event plus callable cancel; maintenance called the Event after closing admission, raising before its drain/save boundary. A separate bounded actual-method reproduction cancels the last analysis, retains its durable queued job and leaves an accepted cue waiting for analysis priority while maintenance waits for the cue. | Installed35f52167 (or prior accepted ca549), complete3,830-case gate and user acceptance; Candidate uses callable cancel before callable stop/interruption and refuses cue/grid logical holds before touching flags, UI, timers, source actors or canonical state. Actual cue/grid controls preserve FIFO and durable analysis intentions, drain through the ordinary fair source turn, then permit retry. Thirty focused admission/cancellation/source/pause cases pass; full gate/install pending. General arbitrary cancellation exceptions retain their prior policy. |
+| XML source selection strands an accepted grid shift during debounce | Actual `GridEditController.request` accepts a shift with `grid_waiting=True` and no physical worker. `MainWindow._source_selection_reason` checks busy/checking but omits that logical ownership; direct `open_library` publishes another XML through the normal curation staging. After debounce, the missing original track makes `_start_probe` return, leaving one ready group, no worker/error and Quit indefinitely reporting Finishing saves. Native database selection already checks complete ownership. Private `xml-grid-source-switch` receipt/script uses no window/source/audio/device access. | Installed35f52167 (or prior accepted ca549), complete3,830-case gate and user acceptance; Candidate correction adds complete tag-controller ownership to source selection, including queued cues/grid debounce, and retains the post-chooser guard. Actual grid/cue admission during the chooser now blocks parsing without queue loss; normal fake source acknowledgement releases admission. Source-selection16 and background-pause/refresh20 focused cases passed before the subsequently accepted delivery named at the start of this cell. |
+| Backup/restore disables the UI before an invalid cancellation or cue/grid drain | Actual AnalysisWorker exposes a noncallable stop Event plus callable cancel; maintenance called the Event after closing admission, raising before its drain/save boundary. A separate bounded actual-method reproduction cancels the last analysis, retains its durable queued job and leaves an accepted cue waiting for analysis priority while maintenance waits for the cue. | Installed35f52167 (or prior accepted ca549), complete3,830-case gate and user acceptance; Candidate uses callable cancel before callable stop/interruption and refuses cue/grid logical holds before touching flags, UI, timers, source actors or canonical state. Actual cue/grid controls preserve FIFO and durable analysis intentions, drain through the ordinary fair source turn, then permit retry. Thirty focused admission/cancellation/source/pause cases passed before the subsequently accepted delivery named at the start of this cell. General arbitrary cancellation exceptions retain their prior policy. |
 
 The previoused9db9fc/4caf9787 candidates failed actual scrolling. The ca5491fc
 helper release then passed3,753cases and Sonny reported **Smooth**. The next
-35f52167 QOL release is now installed and accepted: **Looks good and still
+35f52167 QOL release was subsequently installed and accepted: **Looks good and still
 smooth**, with resumed song updates and context-menu interaction. Its complete
 bare gate passes3,830cases, zero skips/expected failures. See [HANDOFF](HANDOFF.md)
 for current identity, guarded moving-progress curation verification and retention.
@@ -525,9 +762,14 @@ success. Exact UI preferences now have installed asynchronous routing, tested
 with a held metadata commit, real navigation/scrollbar input, failure, newer RAM
 values, restore fencing and explicit Quit retry. The complete3,753-case release is accepted.
 
-## Confirmed queued critical fixes
+## Confirmed critical findings — current disposition
 
-| Priority | Finding | Production trigger and isolated evidence | Next fix scope |
+The original queue retains its isolated failures as evidence. Entries explicitly
+marked **Delivered** below have since been addressed; the other rows remain
+queued for separate validated updates. An earlier release's acceptance does not
+establish fixes for every row or authorize live reproduction.
+
+| Priority | Finding | Production trigger and isolated evidence | Disposition / next fix scope |
 | --- | --- | --- | --- |
 | P1 | Fix Links can select different audio by filename alone | `soundbox/imports.py:424–436` rejects a known-size mismatch only with multiple candidates. A missing123456-byte `Track.wav` accepted the sole same-name10-byte `OTHER SONG` file. Unregistered imports then play the wrong file; registered imports retain the old native path while incorrectly reporting success. Native DB is not silently rewritten by this callback. | Enforce saved known size for one candidate too, or independently verified content identity. Keep mismatches unresolved. |
 | P1 | Generic CDJ export can overwrite a concurrently created unrelated file | `cdj_transaction.commit` checks vacancy before copy, but `device_staging.py:86` publishes with replacing rename. In disposable USB/candidate directories, an external file arriving after the check was overwritten, commit succeeded and no backup retained it. No physical device was used. | Atomic no-replace for expected-absent leaves; exact baseline/identity protection for replacements and rollback. Audit other exporters sharing the primitive. |
@@ -539,14 +781,14 @@ values, restore fencing and explicit Quit retry. The complete3,753-case release 
 | P2 | Foreign-source conversion head stalls current-source work | Source selection omits native-analysis/media queues. Isolated production methods permitted A→B with a valid A media job; adding a valid B job then admitted no worker and repeatedly armed retry because the A head stayed first. No wrong-source SQL or loss occurred. | Define consistent source-switch admission/partition policy for both domains and retain foreign intentions without indefinitely blocking current-source work. |
 | P2 | Folder import races completion of legacy playlist adoption | Folder expansion captures a legacy custom name; unification may finish before its callback. Isolated production methods then registered the song into a terminal hidden legacy custom bag without appending it to the adopted native playlist. Ordinary post-adoption drops are correctly routed. | Include outstanding import-task ownership in adoption completion and revalidate/remap the captured destination before publishing expanded imports. |
 | P2 | Retained local menu creates hidden organization after adoption | Actual retained QAction opened before customs_done then activated after terminal adoption calls `_new_local_playlist` and saves Late Playlist only in the now-hidden local bag; native enqueue remains0 and terminal migration does nothing. This is another trigger of the adoption callback race above. | Recheck current source/adoption at action activation; map the captured parent to its exact native destination or reject the obsolete menu. |
-| P2 | Late load positioning/autoplay overrides newer transport intent | Actual PlayerBar with isolated fake backend and delayed manifest produced Play at0 then Seek375 for both initial autoplay modes. Follow-up controls show Stop and released Memory preview overridden by first-beat seek5s/restart, and released Hot/Memory positions30s overwritten even without autoplay. Held Hot also jumps. Untouched-load positioning remains correct. | Bind initial positioning/autoplay to the load's transport epoch; newer Stop/Play/Pause/seek/jump/cue intent wins while late waveform/grid data remains usable. Cover pending-toggle and double-Space semantics too. |
+| P2 | Late load positioning/autoplay overrides newer transport intent | Actual PlayerBar with isolated fake backend and delayed manifest produced Play at0 then Seek375 for both initial autoplay modes. Follow-up controls show Stop and released Memory preview overridden by first-beat seek5s/restart, and released Hot/Memory positions30s overwritten even without autoplay. Held Hot also jumps. Untouched-load positioning remains correct. | **Delivered** in the complete-readiness pass and retained in `7a5c`: latest explicit positioning/Play/Pause/Stop and held/released cue intent survive late manifest/decoder/surface completion. Complete waveform readiness gates audible start; focused `test_player_gesture_freshness.py` controls cover both arrival orders, pending toggles, double-Space, errors/retry and stale tracks. This does not close the separate post-ready native-refill finding below. |
 | P2 | Pause fails to cancel a native decoder start still reporting paused | Actual fully prepared PlayerBar with a native-protocol fake: Play retains a paused snapshot during refill; second toggle sends Play again, and explicit Pause sends no backend pause. Refill then starts playing despite the newer UI pause. Stop control cancels correctly. Native source independently has a pending playRequested state below the startup threshold. This is command-dispatch proof, not native audible timing. | Toggle requested intent and cancel pending backend starts even before a PLAYING snapshot; preserve ordinary paused behavior, clickless fades and newer command ownership. |
 | P2 | Shortcut recorder consumes release of an already held cue | Genuine offscreen QApplication delivery through the actual MainWindow router and BindingDialog: hold mapped Session CUE or Hot1, open KeyboardPage capture, release inside recorder, then Cancel. Router holds and preview remain active/playing; explicit release_all stops them. Text-focus and ordinary-modal controls correctly release. No real audio/native SQL. | Release existing application holds before the recorder installs its consume-all release filter. Preserve new binding/modifier capture, cancellation/save-failure truth and normal modal routing. |
 | P2 | Local hide/custom removal reports success after save failure | Actual local Collection-hide and legacy custom-removal methods with injected storage failure mutated RAM and reported Removed success; Collection hide also discarded disposable analysis. Independently guarded native-removal ACKs are unaffected. | Snapshot/rollback pre-edit state, return durable save result and gate success/dependent cleanup. Keep native ACK's already-durable presentation path separate. |
 | P1 | Ordinary folder Delete absorbs descendants added during confirmation | Actual ordinary-only folder controller captured no subtree envelope, then built a fresh recursive delete after the dialog. Isolated confirmation added child4000 to the original subtree; pending projection and native planner included that unconfirmed child. Existing regression covered only a smart subtree. | Capture/verify ordinary descendants too, while preserving the separately accepted ordinary multi-row clock protocol. Refuse/reconfirm changed destructive scope. |
 | P2 | Artist Pictures rename reports acceptance after refusal | Actual default metadata controller rejected admission, leaving aliases/jobs unchanged, but catalog callback unconditionally reported success and renamed the dialog row. Its “rekordbox is never touched” text also contradicts the accepted shared-DB merge route. | Propagate admission/save outcome and pending status, retain rejected row, and make wording match the active source behavior. |
 | P2 | Multi-file import leaves an unsaved partial record after I/O failure | Actual import loop inserted the first file in RAM, then an explicit stat failure on the second escaped before save/jobs/rollback. An unrelated later save could persist that local-only partial import. | Stage file/path/job validation before mutation, or comprehensively rollback exact pre-admission owners on every failure. |
-| P2 | Late artwork fetch overwrites newer explicit removal | Actual one-shot worker and disposable real ArtCache: Fetch → Remove persisted blocked → old fetch completion persisted ok/manual, silently losing the newer removal. Generic fetch/URL/picker completion lacks the profile action's guard. | Capture source/track identity and artwork-choice generation/snapshot centrally; newer removal/local picture wins over older completion. |
+| P2 | Late artwork fetch overwrites newer explicit removal | Actual one-shot worker and disposable real ArtCache: Fetch → Remove persisted blocked → old fetch completion persisted ok/manual, silently losing the newer removal. Generic fetch/URL/picker completion lacks the profile action's guard. | **Delivered** through `desktop.artwork_requests`, retained in `7a5c`: exact source/track/repository, current artwork selection and latest per-target token are checked after worker join. `test_artwork_requests.py` rejects a late result after block/removal, newer image, source replacement or restore generation. This does not solve the separate cross-source canonical artwork-key finding. |
 | P2 | Restore does not drain accepted directory-import expansion | TEMP restore through actual TaskOwner/engine methods allowed a late folder callback to add an imported record and registration job to the freshly restored empty state. Normal shutdown finds all TaskOwners, while the maintenance barrier uses a narrower inventory. | Include accepted import-task ownership in restore admission/drain; old callbacks must not publish into the new generation. |
 | P2 | Native playback stalls on a very short remaining tail | Muted hidden Cocoa probe of the unchanged existing deck:150ms control reaches end;50ms/20ms tails remain paused after450ms; exact EOF emits no end; a23ms clip never starts. Static startup/EOF branches support the cause; observed duration is450ms, not a proven indefinite wait. | Handle decoder EOF below the4096-frame startup threshold and preserve one end event, seek cancellation and normal playback. |
 | P2 | Discarding import registration strands a dependent metadata edit | Actual default controllers and canonical TEMP state: metadata edited before registration, then Discard empties import jobs but leaves an uncaptured error-free metadata intention. Four pump passes plus Retry admit no worker; normal Quit keeps saying Finishing saves. Curation survives and manual reimport can recover. | Make cancellation dependency-aware; retain curation with an actionable terminal/recovery state instead of an impossible progressing queue. |
@@ -561,8 +803,8 @@ values, restore fencing and explicit Quit retry. The complete3,753-case release 
 | P2 | Manual Next gets trapped on duplicate playlist occurrences | Actual MainWindow relative navigation on rendered[A,A,B,C] loads[A,A,A] across three Next commands because each request finds the first A with `order.index`. Automatic Down already retains its numeric occurrence. | Carry the committed occurrence through relative navigation and highlighting, preserving supplied order, source binding and cancelled loads. |
 | P3 | Right/middle waveform clicks alter playback and zoom | Genuine synthetic RightButton/MiddleButton QMouseEvents on actual WaveformBar hard-pause, seek20s and resume a fake deck; right/middle plus also changes zoom92→128. | Accept the intended mouse button only; preserve normal left-button drag, zoom and release ownership. |
 | P2 | Deferred Eject can target a replacement device | Actual `_eject` plus Qt finished/resume: original mount identity11/A is replaced by22/B at the same path; the deferred callback invokes macOS eject for B. OS eject is mocked; no physical volume is touched. | Retain the original mount/UUID through deferral and freshly revalidate before OS eject; reject a replaced target. |
-| P3 | Search/header sort drops still-visible multi-selection | Actual TrackModel/reset and MainWindow reseating reduce selected[A,C] to[A] after sort; a query matching every row likewise reduces[B,C] to[B]. | Preserve selected occurrence identities/current/scroll across reset, respecting newer selection revisions and truly filtered-out rows. |
-| P3 | UI-preference saves claim song-edit status ownership | Real held canonical preference ACK for device_views/stock_ipod_models reserves the tag state token and displays Saving song details; Ready can briefly replace it while background pause remains suppressed. The held-ACK test-isolation proof identifies the exact preference owner. Existing presentation design, separate from the current cue correction. | Keep persistence interlocks while giving ordinary preferences quiet, domain-specific status ownership; preserve musical-save progress and honest completion. |
+| P3 | Search/header sort drops still-visible multi-selection | Actual TrackModel/reset and MainWindow reseating reduce selected[A,C] to[A] after sort; a query matching every row likewise reduces[B,C] to[B]. | **Delivered** in the responsiveness pass, retained in `7a5c`: sorting remaps persistent occurrence indexes, unchanged search preserves its projection, and membership-changing filtering restores surviving selections/current/viewport. `test_model.py` and `test_browser_readiness.py` cover repeated row objects, multiple selections and filtered-out rows. |
+| P3 | UI-preference saves claim song-edit status ownership | Real held canonical preference ACK for device_views/stock_ipod_models reserves the tag state token and displays Saving song details; Ready can briefly replace it while background pause remains suppressed. The held-ACK test-isolation proof identifies the exact preference owner. Existing presentation design, separate from the current cue correction. | **Delivered** quiet status separates `TagController.footer_status_text` from lifecycle busy ownership, while ordered preference commits and error/retry/Quit interlocks remain. This is a presentation correction, not permission to skip durable preference publication. |
 | P2 | Artists Load and filtered Info use the wrong visible context | Actual configurable Load with Artists B selected calls ordinary table `_play_row` and loads stale A through a fake load. Separately, filtering Artists to hide its current B leaves actual Track Info opening hidden B. No native/audio access. | Route Load through the active browser; hidden current rows cannot supply actions. Preserve USB's independently bound route and meaningful group selection. |
 | P1 | Stock-iPod export rollback deletes a foreign replacement | Actual two-song generated TEMP stock export verifies its new copy at inode294; a simulated external atomic replacement installs other audio at inode295 before a later database-write failure. Rollback unlinks that new foreign recording and reports rolled back. Source audio/native DB remain exact. | Atomically capture rollback candidates into owned recovery and verify exact publication identity/content before disposal; preserve foreign occupants and require recovery on conflict. A pre-unlink check alone still races. |
 
@@ -580,21 +822,24 @@ claim/restore need their own validation. No patch is in the current candidate.
 Compact evidence:`critical-device-failure-outcome-audit-20261118/`
 `acknowledged-copy-future-audit/later-transaction-ownership-scope.json`.
 
-These are confirmed isolated findings queued for separate validated updates;
-they do not alter the frozen cue/Sync candidate or authorize live reproduction.
+Except for entries explicitly marked Delivered, these confirmed isolated findings
+remain queued for separate validated updates; they do not authorize live reproduction.
 The shortcut-recorder correction now has a private two-file candidate and13
 passing genuine headless event-delivery controls, including exclusive new-key
 capture, Cancel and actual canonical save-failure rollback. It is not applied to
 the frozen source or installed. Private diff/receipt:
 `keyboard-recorder-release-future-candidate-20261117.diff` and
 `keyboard-recorder-release-private-prototype-20261117.json` in the browser audit
-area. The next player-intent and prep-delta prototypes remain separate too.
-The private player-intent candidate passes eleven focused groups plus six unchanged
+area. The prep-delta prototype remains separate. The earlier private player-intent
+candidate passed eleven focused groups plus six unchanged
 gesture/EOF cases; its baseline reproduces14failing subcases. It covers delayed
 manifest commands and native-refill command cancellation with silent backends,
 not audible/native readiness timing. Pre-duration/sample-rate commands still
-need native proof. Exact candidate/validation are under the source/recovery
-audit's `player-intent-prototype-20261117/`; no source application is implied.
+needed native proof at that checkpoint. Exact candidate/validation remain under
+the source/recovery audit's `player-intent-prototype-20261117/`; that prototype
+alone implied no source application. The later complete-readiness delivery above
+supersedes its pending-load status, while the separate post-ready refill finding
+retains its own proof/next-fix scope.
 The preserved cursor31 checkpoint has no active conversion job or registered
 FLAC/AIFF binding (one existing failed MP3 job remains), so the codec-rebinding
 finding is not a current metadata-rollout blocker. Import/relink/restore proofs
@@ -682,13 +927,14 @@ defensive fix. Private script/receipt/proposal are under
   epochs/GUI owners, with older-ACK/tail/failure/foreign-epoch controls. It is not
   production-integrated and establishes no Qt heartbeat or native receipt proof.
   Receipt: `sparse-prep-record-delta-prototype-20261117.json` in the same area.
-- All three disposable pyrekordbox consumers (`rekordbox_db.load_live`,
-  `analysis._source_context` and `cdj_source.capture`) call session-only close;
-  each owns its engine, and pyrekordbox's database/registry cycle leaves pool and
-  compiled-cache reclamation to GC. Explicit owned-engine cleanup releases the
+- At the November17 checkpoint, all three disposable pyrekordbox consumers
+  (`rekordbox_db.load_live`, `analysis._source_context` and `cdj_source.capture`)
+  called session-only close; pyrekordbox's database/registry cycle left owned pool
+  and compiled-cache reclamation to GC. Explicit owned-engine cleanup released the
   measured eight cache entries in~1.6ms but has not reduced isolated GC stalls.
   Treat this as resource-lifecycle work, not an established explanation of the
-  recurring whole-app50–60ms pause. Full update-path proof remains required.
+  recurring whole-app50–60ms pause. The delivered reader above now owns
+  complete cleanup; no reduction of that separate GC stall is established.
 - Analysis queue validation visits saved beat arrays on unrelated idle wakes.
   Fresh admission validation remains mandatory; investigate a bounded scheduling
   distinction without trusting mutable payload identity.
@@ -724,16 +970,18 @@ defensive fix. Private script/receipt/proposal are under
   cache prototype was under investigation at that checkpoint. The later installed
   helper/accepted scrolling outcome is recorded above; these private measurements
   remain historical, not a new no-hang guarantee.
-- Local artwork file actions read, normalize, encode and persist image data on
-  the GUI thread. Source trace confirms the synchronous work; payload-dependent
-  latency is not yet measured. Worker staging needs exact artwork-choice/source
-  guards and must preserve complete selected artwork before Track Info appears.
-- Random autoplay/shuffle-cycle refill synchronously checks every playlist path
-  on the GUI thread. Actual-method synthetic inventory measured3,297 is_file
-  calls for3,296 songs. Build scalar shuffle candidates without I/O, then verify
-  candidates lazily/off-worker with playback-generation cancellation, missing-
-  song skipping and no immediate repeat. Filesystem-dependent stall is not a
-  claimed native audio failure.
+- The earlier local-artwork GUI read/normalization lead is delivered through the
+  owned request worker described in [the UI audit](ui-polish-audit.md). Its
+  generated 3000px input control separates near-unchanged complete publication
+  from reduced GUI blocking. Guarded canonical publication and review's exact
+  CoverSnapshot capture remain GUI-owned costs; no all-artwork-I/O claim follows.
+- Random autoplay's earlier full-playlist `is_file` sweep is removed. Scalar bags
+  are built without I/O and only drawn candidates receive fresh availability
+  checks; `test_autoplay_candidates.py` covers missing/reappearing files, bounded
+  all-missing attempts, cycles, no immediate repeat and directional modes. A slow
+  chosen-path stat can still block its handler; this is not an off-thread media
+  resolver or a measured filesystem/audio-latency guarantee. Separate duplicate
+  occurrence and source-switch autoplay findings remain queued above.
 - At the sidebar/Classic identity checkpoint, new iPod export waited for the global native-source backlog, including unrelated
   cues/tags/analysis. Existing cached catalog Sync already captures selected
   effective metadata independently. A generated real stock plan/commit/reopen

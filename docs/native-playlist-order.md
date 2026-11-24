@@ -1,7 +1,7 @@
 # Native playlist ordering and bounded organization
 
-November2 source/reference base, reconciled November20 with the separately
-accepted smart/node/creation profiles. Current installed-build provenance belongs
+November2 source/reference base, reconciled November23 with the separately
+accepted smart/node/creation profiles and November21 membership dragging. Current installed-build provenance belongs
 to [HANDOFF.md](HANDOFF.md); the native reference and acceptance sequence is below.
 
 ## Ordering
@@ -12,8 +12,26 @@ SoundBox; it creates no native folder or per-artist playlist, source database jo
 or ongoing reconciliation. Ordinary native playlists and folders support dragging
 before or after a sibling. Dropping above the fixed rows clamps below them. The operation changes
 native sibling order; cross-parent transfers use the independent Move profile
-described below. Neither changes song membership or the newest-first track-table
-display policy.
+described below. Neither changes song membership. Since Sonny's November21
+correction, only Collection and smart playlists default newest first; regular
+native/XML/local sets show their authored occurrence order. Header sorts remain
+view-only and clearing the sort restores that authored order.
+
+Song movement is separate from sidebar node order. The desktop captures exact
+membership IDs/UUIDs and complete source order before dragging; hidden entries
+and duplicates remain part of the set. Native movement composes independently
+accepted exact-occurrence removal and duplicate-preserving append in one atomic,
+durable batch, keeping the longest desired prefix already in source-relative
+order. Native removal advances survivor clocks even when their positions stay
+fixed. The `membership-replay-v1` plan encoding derives the same final native
+rows, counter, tombstones and XML without a quadratic intermediate journal;
+unmarked saved requests retain their original reconstruction. Replacement membership IDs retain desktop occurrence identity for
+selection/drafts, and net-zero membership moves retain local removal masks.
+Marked pending feedback and native ACK reuse prepared browser occurrences with
+a layout permutation; they do not rebuild unrelated sidebar, Collection or
+Artists data. Explicit header sorting and search retain their own view policy.
+Fresh source guards, journal/recovery, native readback and FIFO acknowledgements
+remain mandatory; a presentation-only reorder is unfinished work.
 
 Folder rows have three drop zones: the upper quarter inserts before, the middle
 half appends inside, and the lower quarter inserts after. Inside shows both row
@@ -32,7 +50,7 @@ move source items before their native intention is admitted.
 Internal native reorder metadata is separate from the existing export MIME text.
 Dragging a native folder or playlist to a device retains its normal export
 identity. Empty native folders can also start an internal reorder drag.
-Smart playlists add a small gear to the chosen note, star or crate icon. The
+Smart playlists add a larger bright four-point sparkle over the upper-right corner of the normal note, star or crate. The
 modifier follows exact native kind4 and keeps the original row/icon hit geometry,
 theme colors and selected background; names never determine playlist type.
 
@@ -54,7 +72,10 @@ rebasing later pending app commands requires a strict proven committed edge
 matching the current catalog/XML. Retired legacy evidence missing original UUIDs
 remains guarded. No reorder, source-write or hardware acceptance is broadened.
 
-Reordering requires the independent `PlaylistAuthority.reorder_accepted` flag.
+Ordinary sidebar sibling reordering requires the independent
+`PlaylistAuthority.reorder_accepted` flag. Track membership dragging instead
+composes the existing accepted removal/append commands; this flag grants no new
+TrackNo mutation profile.
 It defaults to false, including when loading existing CRUD authorities. Neither
 choosing a source nor replaying a private fixture grants it.
 

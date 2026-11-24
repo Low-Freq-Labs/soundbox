@@ -9,7 +9,7 @@ from unittest import mock
 import zipfile
 
 from soundbox import backup
-from soundbox.artfetch import ArtCache, ArtResult
+from soundbox.artwork import ArtCache, ArtResult
 from soundbox.state_io import StateArea, StateChangedError, state_area
 from soundbox.state_repository import InvalidState, StateRepository, validate_state
 
@@ -537,7 +537,7 @@ import tempfile
 from pathlib import Path
 class NoProvider(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
-        if fullname in ("soundbox.artfetch", "yt_dlp") or fullname.startswith("yt_dlp."):
+        if fullname in ("soundbox_personal", "yt_dlp") or fullname.startswith(("soundbox_personal.", "yt_dlp.")):
             raise AssertionError("provider imported: " + fullname)
 sys.meta_path.insert(0, NoProvider())
 def denied(*args, **kwargs):

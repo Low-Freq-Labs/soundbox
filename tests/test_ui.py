@@ -210,7 +210,7 @@ class LocalPlaylistFolders(unittest.TestCase):
         self.assertEqual([r['id'] for r in _win.model._rows],before)
         _win.sb_tree.setCurrentItem(folder.child(0))
         self.assertEqual(_win._view_key,'sb:A')
-        self.assertEqual([r['id'] for r in _win.model._rows],['2','1'])
+        self.assertEqual([r['id'] for r in _win.model._rows],['1','2'])
 
     def test_rekordbox_folder_keeps_active_view_and_track_action_scope(self):
         from PySide6.QtWidgets import QMenu
@@ -359,12 +359,12 @@ class PlaylistSelection(unittest.TestCase):
         QTest.keyClick(_win.table,Qt.Key_Up)
         self.assertEqual(_win.table.currentIndex().row(),0)
 
-    def test_newest_first_display_preserves_native_export_order(self):
+    def test_regular_playlist_display_preserves_authored_set_order(self):
         it = _win._find_tree_item("CRATES / SET ONE")
         self.assertIsNotNone(it)
         _win.tree.setCurrentItem(it)
         _app.processEvents()
-        self.assertEqual([r["id"] for r in _win.model._rows], ["1", "3"])
+        self.assertEqual([r["id"] for r in _win.model._rows], ["3", "1"])
 
     def test_select_only_clears_other_trees(self):
         _win.sb_tree.setCurrentItem(_win.sb_tree.topLevelItem(0))
@@ -415,7 +415,8 @@ class ArtColumn(unittest.TestCase):
             _win._reload_current_view()
         finally:
             _win.art_cache = real
-        self.assertEqual([r["art"] for r in _win.model._rows], ["miss", "cover"])
+        self.assertEqual([(r["id"],r["art"]) for r in _win.model._rows],
+                         [("3","cover"),("1","miss")])
 
 
 class SortAndSearch(unittest.TestCase):
@@ -425,11 +426,12 @@ class SortAndSearch(unittest.TestCase):
 
     def test_header_sort_then_clear_restores(self):
         from desktop.model import COLUMNS
+        self.assertEqual([r["id"] for r in _win.model._rows], ["3", "1"])
         bpm = next(i for i, c in enumerate(COLUMNS) if c[0] == "bpm")
         _win.table.sortByColumn(bpm, Qt.DescendingOrder)
         self.assertEqual([r["id"] for r in _win.model._rows], ["1", "3"])
         _win.table.sortByColumn(-1, Qt.AscendingOrder)
-        self.assertEqual([r["id"] for r in _win.model._rows], ["1", "3"])
+        self.assertEqual([r["id"] for r in _win.model._rows], ["3", "1"])
 
     def test_search_filters_titles(self):
         _win.search.setText("brav")
@@ -874,7 +876,7 @@ class DeviceLabels(unittest.TestCase):
             saved = json.loads(_win._data_file.read_text())
             self.assertEqual(saved["custom"]["Device Picks"], ["1", "2"])
             _win._show_custom("Device Picks")
-            self.assertEqual([r["id"] for r in _win.model._rows], ["2", "1"])
+            self.assertEqual([r["id"] for r in _win.model._rows], ["1", "2"])
         finally:
             _win.custom = old_custom
             _win._refresh_custom()
@@ -4323,15 +4325,15 @@ class Graveyard(unittest.TestCase):
     def test_collection_removal_discards_exact_analysis_immediately(self):
         import tempfile
         from PySide6.QtWidgets import QMessageBox
-        from soundbox.track_analysis import cache_path, legacy_cache_path
+        from soundbox.track_analysis import cache_path
 
         with tempfile.TemporaryDirectory() as td:
             saved = _win._track_analysis_dir
             _win._track_analysis_dir = Path(td)
             current = cache_path(td, "2")
-            legacy = legacy_cache_path(td, "2")
+            unrelated = cache_path(td, "other")
             current.write_bytes(b"current")
-            legacy.write_bytes(b"legacy")
+            unrelated.write_bytes(b"keep")
             try:
                 with mock.patch(
                         "desktop.app.QMessageBox.question",
@@ -4340,7 +4342,7 @@ class Graveyard(unittest.TestCase):
                             "cancel_analysis_cache_writes") as cancel:
                     _win._delete_tracks(["2"])
                 self.assertFalse(current.exists())
-                self.assertFalse(legacy.exists())
+                self.assertEqual(unrelated.read_bytes(), b"keep")
                 cancel.assert_called_once_with({"2"})
             finally:
                 _win._track_analysis_dir = saved
@@ -5022,8 +5024,7 @@ class PlayerHardening(unittest.TestCase):
         entered=threading.Event();release=threading.Event()
         try:
             with mock.patch.object(_win,'player_bar',pb), \
-                    mock.patch.object(_win.grid_controller,'reason',return_value=''), \
-                    mock.patch.object(_win.grid_controller,'bpm_reason',return_value=''), \
+                    mock.patch.object(_win.grid_controller,'presentation_reasons',return_value=('','')), \
                     mock.patch.object(_win.grid_controller,'view',return_value=([[1,0,120]],120)), \
                     mock.patch.object(_win.tag_controller,'cue_reason',return_value=''), \
                     mock.patch.object(_win,'_cache_library'), \
@@ -5084,10 +5085,9 @@ class PlayerHardening(unittest.TestCase):
         old_map=_win._keyboard_router.keymap
         try:
             with mock.patch.object(_win,'player_bar',pb), \
-                    mock.patch.object(_win.grid_controller,'reason',side_effect=lambda *_a,**_k:'' if pb._analysis_parts.get('beats') else 'Waiting for grid'), \
+                    mock.patch.object(_win.grid_controller,'presentation_reasons',side_effect=lambda *_a,**_k:('','') if pb._analysis_parts.get('beats') else ('Waiting for grid','Waiting for grid')), \
                     mock.patch.object(_win.grid_controller,'is_local',return_value=True), \
                     mock.patch.object(_win.grid_controller,'view',return_value=None), \
-                    mock.patch.object(_win.grid_controller,'bpm_reason',return_value=''), \
                     mock.patch.object(_win,'_edit_grid') as edit:
                 _win._sync_grid();self.assertFalse(_win.grid_edit_buttons[0].isEnabled())
                 pb._on_analysis_manifest(pb._src_path,'',pb._analysis_generation,
@@ -7003,7 +7003,7 @@ class QtTrapAudit(unittest.TestCase):
     def test_art_index_save_is_atomic(self):
         import json, tempfile
         from pathlib import Path
-        from soundbox.artfetch import ArtCache
+        from soundbox.artwork import ArtCache
         with tempfile.TemporaryDirectory() as td:
             c = ArtCache(Path(td))
             c.index["x"] = {"status": "none"}
@@ -7071,7 +7071,7 @@ class ArtistCatalog(unittest.TestCase):
         self.assertNotIn("2", sum((t for _a, t, _i in groups), []))
 
     def test_apply_sets_art_on_all_tracks(self):
-        from soundbox.artfetch import ArtResult
+        from soundbox.artwork import ArtResult
         _win._apply_artist_picture(["1", "3"], ArtResult(
             b"\xff\xd8z", "image/jpeg", 1.0, "https://soundcloud.com/zed", "Zed"))
         self.assertEqual(_win.art_cache.status_kind("1"), "avatar")
@@ -7104,7 +7104,7 @@ class ArtistCatalog(unittest.TestCase):
         _win.art_cache.index.clear()
 
     def test_catalog_group_action_preserves_a_newer_real_cover(self):
-        from soundbox.artfetch import ArtResult
+        from soundbox.artwork import ArtResult
         _win.art_cache.store_ok('1', ArtResult(b'\xff\xd8avatar', 'image/jpeg', 1,
                                               'https://soundcloud.com/zed', 'Avatar'))
         _win.art_cache.store_ok('3', ArtResult(b'\xff\xd8cover', 'image/jpeg', 1,
@@ -7475,7 +7475,8 @@ class AutoplaySemantics(unittest.TestCase):
         _win.tree.setCurrentItem(playlist)
         _app.processEvents()
         _win._capture_autoplay_context("1")
-        self.assertEqual(_win._autoplay_order, ["1", "3"])
+        self.assertEqual(_win._autoplay_order, ["3", "1"])
+        self.assertEqual(_win._autoplay_index,1)
 
         # Browse elsewhere after playback starts; the frozen origin remains.
         _win.sb_tree.setCurrentItem(_win.sb_tree.topLevelItem(0))
@@ -7483,11 +7484,11 @@ class AutoplaySemantics(unittest.TestCase):
         real_playable = _win._autoplay_playable
         _win._autoplay_playable = lambda _index: True
         try:
-            _win._set_autoplay_mode("down", save=False)
-            self.assertEqual(_win._next_autoplay_index(), 1)
-            _win._autoplay_index = 1
             _win._set_autoplay_mode("up", save=False)
             self.assertEqual(_win._next_autoplay_index(), 0)
+            _win._autoplay_index = 0
+            _win._set_autoplay_mode("down", save=False)
+            self.assertEqual(_win._next_autoplay_index(), 1)
         finally:
             _win._autoplay_playable = real_playable
 
@@ -8423,7 +8424,7 @@ class WaveformFill(unittest.TestCase):
                       source_analysis_path=str(dat))
         return canonical, Library({"0": track}, [], source="synthetic"), imported, record
 
-    def test_background_upgrades_ready_legacy_without_selection_or_repeat_decode(self):
+    def test_background_upgrades_signed_mip_without_selection_or_repeat_decode(self):
         from desktop.workers import WaveformFillWorker
         from desktop.player import WaveformWorker
         from soundbox import track_analysis as ta
@@ -9102,7 +9103,7 @@ class WaveformFill(unittest.TestCase):
             canonical, "0").exists())
         self.assertNotIn(self.paths[0], ready)
 
-    def test_interrupted_decode_never_degrades_existing_v4(self):
+    def test_interrupted_decode_never_degrades_existing_v5(self):
         from pathlib import Path
         from unittest.mock import patch
         from desktop.workers import WaveformFillWorker
@@ -9720,6 +9721,30 @@ class WaveformRapidLoad(unittest.TestCase):
         self.assertFalse(visible)
         backend.set_overview.assert_not_called();backend.set_complete_analysis.assert_not_called()
         backend.set_audio_detail.assert_not_called()
+
+    def test_native_rejected_complete_upload_never_publishes_a_ready_surface(self):
+        from desktop.player import WaveformWorker
+        backend=mock.Mock();backend.set_complete_analysis.return_value=(True,False)
+        worker=WaveformWorker(self.paths[0],track_id='rejected',track_analysis_dir=self.cache,native_backend=backend)
+        visible=[];worker.overview_ready.connect(lambda *_:visible.append('overview'))
+        worker.detail_ready.connect(lambda *_:visible.append('detail'))
+        with mock.patch('soundbox.track_analysis.load_manifest',return_value={}), \
+                mock.patch('soundbox.track_analysis.load_overview',return_value={'_overview_heights':b'\xff'}), \
+                mock.patch('soundbox.track_analysis.load_detail',return_value={'_audio_detail':{'rate':1000}}):
+            self.assertEqual(worker._load_stages(),(True,True,True))
+        self.assertFalse(worker.surface_ready);self.assertEqual(visible,[])
+
+    def test_no_canonical_directory_prepares_complete_private_surface(self):
+        from desktop.player import WaveformWorker
+        from soundbox.track_analysis import store
+        worker=WaveformWorker(self.paths[0],track_id='standalone')
+        destinations=[];visible=[]
+        def capture(destination,*args,**kwargs):
+            destinations.append(Path(destination));return store(destination,*args,**kwargs)
+        worker.detail_ready.connect(lambda _path,_generation,data:visible.append(data))
+        with mock.patch('soundbox.track_analysis.store',side_effect=capture):worker.run()
+        self.assertTrue(worker.surface_ready);self.assertTrue(visible[0]['_waveform_complete'])
+        self.assertTrue(destinations);self.assertTrue(all(not path.exists() for path in destinations))
 
     def test_valid_cached_surface_does_not_resize_when_background_upgrade_finishes(self):
         from desktop.player import WaveformWorker

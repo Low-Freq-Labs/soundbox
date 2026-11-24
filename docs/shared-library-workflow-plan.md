@@ -1,6 +1,6 @@
 # Shared library, analysis and player corrections
 
-Current-status review November20,2026; exact installed provenance and validation
+Current-status review November23,2026; exact installed provenance and validation
 are recorded in HANDOFF. The November8 personal169 checkpoint, responsiveness
 build167/runtime `3fb0ff60…`, whole-app build165/runtime `7ffde716…`, build163,
 source release `4a3d29a` and build160/runtime `7bbe8577…` are prior delivery evidence.
@@ -19,12 +19,21 @@ bulk metadata pause, with selected physical/structural fences. Generic USB retai
 its native CDJ source-save barrier. HANDOFF distinguishes tested source, full-gate
 outcome and actual installation; these additions do not restamp an older binary.
 
+The November21 follow-ups preserve RGB, give BLUE native palette families over
+resident spectral proxies, and retain independent PWV7 main 3BAND geometry with
+gain 1.35 and joint seven-color coverage. Optional PWV4/PWV6 mini metadata prepares
+before grouped readiness; no late palette promotion or reanalysis is introduced.
+Regular playlists preserve authored occurrence order and exact-occurrence dragging
+through the accepted durable removal/append composition. Current contracts are in
+[PLAYER](PLAYER.md) and [playlist ordering](native-playlist-order.md); the older
+waveform proposals below retain their dated scope.
+
 The November2 delivery completes the one-time native Collection/custom merge,
 accepted native sibling reorder and virtual-only Artists correction. The complete
 waveform now appears once at its finished geometry/palette, including long
 AAC/ALAC sets; actual bytes, manual musical edits and source authority remain
 preserved. Playlist-only Star/Music note/Vinyl crate choices are local preferences;
-smart lists add a gear badge to the chosen icon. Artists, Collection and folders
+smart lists add a larger bright upper-right sparkle, slightly overlapping the normal chosen icon. Artists, Collection and folders
 retain their fixed icons. All2144cases passed
 for that dated build154 delivery. It and the later build163/2595-test delivery are
 historical. HANDOFF records the current whole-app delivery, signed dirty-source

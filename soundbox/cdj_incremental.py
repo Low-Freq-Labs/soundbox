@@ -355,7 +355,10 @@ def plan_incremental(library, playlists, session, previous, *, all_playlists=(),
         required = sum(Path(t['source_path']).stat().st_size for t in changed)
         if required*2+128*1024*1024>shutil.disk_usage(root).free:
             raise ValueError('Insufficient local disk space for the new/changed CDJ tracks')
-        request = deepcopy(captured)
+        # Retain root key order, but avoid copying the full inventory that the
+        # selected render inputs immediately replace below.
+        request: dict = deepcopy({key: None if key in ('tracks', 'track_extras', 'playlists') else value
+                                  for key, value in captured.items()})
         request['tracks'] = deepcopy(changed)
         request['track_extras'] = [extras[int(t['id'])] for t in changed]
         request['playlists'] = []

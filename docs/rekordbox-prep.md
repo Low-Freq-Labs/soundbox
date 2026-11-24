@@ -5,6 +5,13 @@ preferences and bounded native commands are documented in
 [native-playlist-order.md](native-playlist-order.md). Artists is a virtual
 SoundBox view and creates no native organization jobs.
 
+Current regular playlists preserve authored occurrence order; only Collection and
+smart playlists default newest first. Native track repositioning composes accepted
+remove/append commands through the existing shared writer and durable queue. It
+does not borrow sibling `Seq` authority or introduce a direct TrackNo-only profile.
+Pending feedback preserves duplicate occurrences, hidden members, selection and
+drafts; verified source/export truth still waits for readback and durable ACK.
+
 The later November4 whole-app audit coalesces discovery/queue wakeups and removes
 redundant private Grid staging when live bytes, mode and mtime already equal the
 recorded desired state. Existing staging evidence is still validated, and fresh
@@ -105,7 +112,9 @@ Active and pending playlist names remain globally unique after normalization.
 
 GUI tag/playlist intentions admit through bounded sparse canonical saves and
 exact queue comparisons. Pending checkboxes, future tags and playlist rows can be
-shown immediately; they are distinct from verified Library/export state. New-tag
+shown immediately; they are distinct from verified Library/export state. Paired
+local mappings and native queue changes commit together in the same admission;
+pending feedback alone never proves either one durable. New-tag
 dependencies preserve exact operation, source, category and tag identities, and
 the creation must be durable before a dependent intention is saved. Native
 creation, verified readback and durable acknowledgement/publication precede its
@@ -704,8 +713,10 @@ baselines. Preserve encrypted baselines, reference files and receipts.
 
 `desktop.grid_controller` probes only the loaded accepted track through the
 shared TagEditController TaskOwner lane. Buttons require loaded audio, matching
-track/path identity, an unlocked valid saved grid and no conflicting source-lane
-operation. iPod device ownership alone does not veto desktop prep capture;
+track/path identity, a usable loaded grid and no conflicting source-lane
+operation. While the saved-grid probe runs, a captured RAM-only preview may be
+usable sooner; source publication requires its exact verified base and unlocked
+saved metadata. iPod device ownership alone does not veto desktop prep capture;
 source publication retains the shared writer's exact guards. Manual SoundBox-owned cache rows remain protected. The BPM field accepts manual constant-tempo entry only with the separate
 `manual_bpm_accepted` authority. Enter captures track/value and queues the edit;
 Escape/focus loss cancels typing. Track switches discard unfinished input. Simultaneous source writes with rekordbox/agent running fail closed;

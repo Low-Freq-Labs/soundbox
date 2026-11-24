@@ -125,18 +125,57 @@ struct WaveSample {
     float b;
 };
 
+static std::vector<uint8_t> threeBandOverviewPixels(const uint8_t *rows, size_t count) {
+    if ((count && (!rows || count != 1200)) || (!count && rows)) return {};
+    // Native PWV6 is a separate1200x25 preview: three stacked, opaque
+    // layers in encoded display space. Prepare it outside the render lock.
+    double maximum = 1.0;
+    for (size_t i = 0; i < count; ++i) {
+        const uint8_t *point = rows + 3*i;
+        if (point[0] > 127 || point[1] > 127 || point[2] > 127) return {};
+        maximum = std::max(maximum, point[0] + point[1]
+            + 64.0*(1.0-std::cos(M_PI*point[2]/128.0)));
+    }
+    maximum = std::min(maximum, 128.0);
+    std::vector<uint8_t> pixels(count * 25 * 4, 0);
+    const std::array<std::array<double,3>,3> colors{{
+        {{255.0,255.0,255.0}}, {{255.0,166.0,0.0}}, {{0.0,85.0,225.0}}}};
+    for (size_t x = 0; x < count; ++x) {
+        const uint8_t *point = rows + 3*x;
+        const double low = 1.2*point[0];
+        const double mid = low + 0.6*point[1];
+        const double high = mid + 76.8*(1.0-std::cos(M_PI*point[2]/128.0));
+        const std::array<double,3> tops{{
+            std::clamp(24.0*(1.0-high/maximum),0.0,23.0),
+            std::clamp(24.0*(1.0-mid/maximum),0.0,23.0),
+            std::clamp(24.0*(1.0-low/maximum),0.0,23.0)}};
+        for (size_t y = 0; y < 24; ++y) {
+            std::array<double,4> color{};
+            for (size_t layer = 0; layer < 3; ++layer) {
+                const double coverage = std::clamp(
+                    static_cast<double>(y+1)-std::max(static_cast<double>(y),tops[layer]),0.0,1.0);
+                for (size_t channel = 0; channel < 3; ++channel) {
+                    color[channel] = colors[layer][channel]*coverage + color[channel]*(1.0-coverage);
+                }
+                color[3] = 255.0*coverage + color[3]*(1.0-coverage);
+            }
+            for (size_t channel = 0; channel < 4; ++channel) {
+                pixels[(y*count+x)*4+channel] = static_cast<uint8_t>(std::clamp(std::round(color[channel]),0.0,255.0));
+            }
+        }
+    }
+    return pixels;
+}
+
 static double waveformAttributeOffset(
         uint32_t mode, float zoom, float drawableScale,
         double exactCenter, int64_t tileCenter, float samplesPerPixel) {
-    // Keep a feature's raster phase fixed at the reported middle RGB
-    // stops. Fractional phase changes thin tips and color coverage despite
-    // unchanged song attributes. Use one physical pixel here; retain BLUE
-    // and the accepted logical-point RGB motion at 576/864.
-    const bool middleRGB = mode == 2
+    // BLUE follows RGB's accepted raster phase. Independent PWV7 bands retain
+    // continuous motion; source audio, seeks and the song lattice stay exact.
+    const bool middleRGB = (mode == 1 || mode == 2)
         && (zoom == 64.0f || zoom == 128.0f || zoom == 184.0f);
-    const bool logicalRGB = mode == 2 && (zoom == 576.0f || zoom == 864.0f);
-    const bool continuous = mode == 3
-        || (mode == 2 && !middleRGB && !logicalRGB);
+    const bool logicalRGB = (mode == 1 || mode == 2) && (zoom == 576.0f || zoom == 864.0f);
+    const bool continuous = mode != 0 && !middleRGB && !logicalRGB;
     const double pixelStep = zoom <= 384.0f ? 1.0 : drawableScale;
     const double quantum = samplesPerPixel * pixelStep;
     return (continuous ? exactCenter
@@ -152,6 +191,9 @@ struct DisplayWaveform {
     std::array<uint32_t, kWaveMipLevels> mipCounts{};
     size_t mipCount = 0;
 };
+
+// Palette metadata only; neither extent supplies the visible waveform mask.
+struct BlueOverviewSample { float outer; float front; float r; float g; float b; };
 
 struct AudioEnvelopeSample {
     uint16_t upper;
@@ -285,6 +327,8 @@ struct Uniforms {
     uint32_t waveformMode;
     uint32_t frameTraceMarkerActive;
     uint32_t frameTraceSequence;
+    uint32_t blueOverviewCount;
+    uint32_t threeBandOverviewCount;
 };
 
 struct AudioRing {
@@ -420,6 +464,10 @@ public:
         waveBuffer_ = nil;
         detailBuffer_ = nil;
         audioDetailBuffer_ = nil;
+        blueOverviewBuffer_ = nil;
+        threeBandOverviewBuffer_ = nil;
+        blueOverviewCount_ = 0;
+        threeBandOverviewCount_ = 0;
         gridBuffer_ = nil;
         gridOverrideActive_ = false;
         cueBuffer_ = nil;
@@ -857,7 +905,8 @@ public:
             0, std::memory_order_release);
     }
 
-    bool beginFrameTrace(uint32_t maxFrames, uint32_t cropWidthPixels) {
+    bool beginFrameTrace(uint32_t maxFrames, uint32_t cropWidthPixels,
+                         bool includeOverview = false) {
         if (!metalLayer_ || maxFrames == 0
                 || maxFrames > kMaxFrameTraceFrames) {
             return false;
@@ -869,7 +918,7 @@ public:
             0.0, std::floor(drawable.height)));
         const double widthPoints = std::max(1.0, metalLayer_.bounds.size.width);
         const double drawableScale = textureWidth / widthPoints;
-        const uint32_t cropOriginY = static_cast<uint32_t>(std::clamp(
+        const uint32_t cropOriginY = includeOverview ? 0u : static_cast<uint32_t>(std::clamp(
             std::llround(kZoomTop * drawableScale),
             0ll,
             static_cast<long long>(textureHeight)));
@@ -1130,6 +1179,10 @@ public:
             waveBuffer_ = nil;
             detailBuffer_ = nil;
             audioDetailBuffer_ = nil;
+            blueOverviewBuffer_ = nil;
+            threeBandOverviewBuffer_ = nil;
+            blueOverviewCount_ = 0;
+            threeBandOverviewCount_ = 0;
             waveSampleCount_ = 0;
             detailSampleCount_ = 0;
             audioDetailSampleCount_ = 0;
@@ -1429,6 +1482,10 @@ public:
         waveBuffer_ = waveBuffer;
         detailBuffer_ = waveBuffer;
         audioDetailBuffer_ = nil;
+        blueOverviewBuffer_ = nil;
+        threeBandOverviewBuffer_ = nil;
+        blueOverviewCount_ = 0;
+        threeBandOverviewCount_ = 0;
         waveSampleCount_ = wave.size();
         waveMipOffsets_ = waveMipOffsets;
         waveMipCounts_ = waveMipCounts;
@@ -1805,9 +1862,8 @@ public:
         const float height = displayWaveformHeight(
             (packed & 0x1f) / 31.0f);
         const float luminance = ((packed >> 5) & 0x07) / 7.0f;
-        // Preserve PWV3 geometry. Its upper three bits select the full
-        // blue-to-cyan edge range measured in the October 1 reference.
-        // The fragment shader resolves the cyan/white interior separately.
+        // Preserve PWV3's overview contour and fallback luminance carrier.
+        // The main BLUE palette uses the resident song-color field instead.
         return {
             height,
             0.08f,
@@ -1944,6 +2000,62 @@ public:
         }
         displayWaveforms_ = std::move(prepared);
         return activateWaveformModeLocked();
+    }
+
+    bool setBlueOverview(const uint8_t *rows, size_t count, uint64_t generation) {
+        if (generation && generation != renderGeneration_.load(std::memory_order_acquire)) return false;
+        if ((count && (!rows || count != 1200)) || (!count && rows)) return false;
+        constexpr uint8_t palette[8][3] = {
+            {16,96,152}, {16,128,184}, {8,144,248}, {16,184,232},
+            {120,192,224}, {144,192,248}, {144,192,248}, {208,232,248},
+        };
+        std::vector<BlueOverviewSample> values;
+        values.reserve(count);
+        for (size_t i = 0; i < count; ++i) {
+            const uint8_t *point = rows + 6 * i;
+            const int first = static_cast<int8_t>(point[0]);
+            const int second = static_cast<int8_t>(point[1]);
+            const int inverse = static_cast<int8_t>(point[2]);
+            const int peak = std::max(first, second);
+            const int index = peak > 0 && inverse >= 0
+                ? std::clamp((peak - inverse) * 8 / peak, 0, 7) : 7;
+            values.push_back({
+                std::max({point[3], point[4], point[5]}) / 127.0f,
+                point[5] / 127.0f,
+                palette[index][0] / 255.0f,
+                palette[index][1] / 255.0f,
+                palette[index][2] / 255.0f});
+        }
+        id<MTLBuffer> buffer = count ? [device_ newBufferWithBytes:values.data()
+            length:values.size() * sizeof(BlueOverviewSample)
+            options:MTLResourceStorageModeShared] : nil;
+        if (count && !buffer) {
+            setError(-47, "Metal BLUE overview palette allocation failed");
+            return false;
+        }
+        std::lock_guard<std::mutex> lock(renderMutex_);
+        if (generation && generation != renderGeneration_.load(std::memory_order_acquire)) return false;
+        blueOverviewBuffer_ = buffer;
+        blueOverviewCount_ = count;
+        return true;
+    }
+
+    bool setThreeBandOverview(const uint8_t *rows, size_t count, uint64_t generation) {
+        if (generation && generation != renderGeneration_.load(std::memory_order_acquire)) return false;
+        if ((count && (!rows || count != 1200)) || (!count && rows)) return false;
+        const std::vector<uint8_t> pixels = threeBandOverviewPixels(rows, count);
+        if (count && pixels.empty()) return false;
+        id<MTLBuffer> buffer = count ? [device_ newBufferWithBytes:pixels.data()
+            length:pixels.size() options:MTLResourceStorageModeShared] : nil;
+        if (count && !buffer) {
+            setError(-48, "Metal 3BAND overview allocation failed");
+            return false;
+        }
+        std::lock_guard<std::mutex> lock(renderMutex_);
+        if (generation && generation != renderGeneration_.load(std::memory_order_acquire)) return false;
+        threeBandOverviewBuffer_ = buffer;
+        threeBandOverviewCount_ = count;
+        return true;
     }
 
     bool setWaveformMode(uint32_t mode) {
@@ -2422,7 +2534,11 @@ public:
         BeatPosition currentBeat{};
         bool hasCurrentBeat = false;
         id<MTLBuffer> waveBuffer = nil;
+        id<MTLBuffer> geometryBuffer = nil;
+        DisplayWaveform geometryWaveform;
         id<MTLBuffer> audioDetailBuffer = nil;
+        id<MTLBuffer> blueOverviewBuffer = nil;
+        id<MTLBuffer> threeBandOverviewBuffer = nil;
         id<MTLBuffer> gridBuffer = nil;
         id<MTLBuffer> sessionCueBuffer = nil;
         id<MTLBuffer> cueBuffer = nil;
@@ -2444,6 +2560,20 @@ public:
             // Loading it after unlocking can pair an older complete surface
             // with a newer upload's revision and retain the older silhouette.
             waveformRevision = waveformRevision_.load(std::memory_order_acquire);
+            // Cue overlays can use the complete resident waveform's timeline
+            // before the decoder publishes its authoritative duration. This
+            // count is the base stream, not the summed mip-pyramid allocation;
+            // keep this fallback local to drawing, never transport/readiness.
+            if (uniforms.durationSeconds <= 0.0f && waveBuffer_
+                    && waveSampleCount_ && waveSamplesPerSecond_ > 0.0f
+                    && std::isfinite(waveSamplesPerSecond_)) {
+                const double waveformSeconds =
+                    static_cast<double>(waveSampleCount_) / waveSamplesPerSecond_;
+                if (std::isfinite(waveformSeconds)
+                        && waveformSeconds <= std::numeric_limits<float>::max()) {
+                    uniforms.durationSeconds = static_cast<float>(waveformSeconds);
+                }
+            }
             uniforms.samplesPerSecond = waveSamplesPerSecond_;
             uniforms.sampleCount = static_cast<uint32_t>(
                 std::min<NSUInteger>(
@@ -2490,7 +2620,15 @@ public:
             uniforms.waveformMode =
                 displayWaveformActive_ ? waveformMode_ : 0u;
             waveBuffer = waveBuffer_;
+            if (displayWaveformActive_) {
+                geometryWaveform = displayWaveforms_[1];
+                geometryBuffer = geometryWaveform.buffer;
+            }
             audioDetailBuffer = audioDetailBuffer_;
+            blueOverviewBuffer = blueOverviewBuffer_;
+            threeBandOverviewBuffer = threeBandOverviewBuffer_;
+            uniforms.blueOverviewCount = static_cast<uint32_t>(blueOverviewCount_);
+            uniforms.threeBandOverviewCount = static_cast<uint32_t>(threeBandOverviewCount_);
             gridBuffer = gridBuffer_;
             sessionCueBuffer = sessionCueBuffer_;
             cueBuffer = cueBuffer_;
@@ -2588,7 +2726,7 @@ public:
                 || waveAttributeCount_ != desiredAttributeCount) {
             waveAttributeBuffer_ = [device_
                 newBufferWithLength:
-                    desiredAttributeCount * sizeof(float) * 8
+                    desiredAttributeCount * sizeof(float) * 12
                 options:MTLResourceStorageModePrivate];
             waveAttributeCount_ = waveAttributeBuffer_
                 ? desiredAttributeCount : 0;
@@ -2672,6 +2810,26 @@ public:
                 offset:0 atIndex:4];
             [compute setBuffer:waveAttributeBuffer_ offset:0 atIndex:5];
             [compute setBuffer:clockBuffer offset:0 atIndex:6];
+            // The tail holds BLUE's inner palette, not RGBA/coverage pixels.
+            [compute setBuffer:waveAttributeBuffer_
+                offset:waveAttributeCount_ * sizeof(float) * 8 atIndex:9];
+            // RGB owns the main contour even when another palette is selected.
+            // The overview continues to read its own authored mode stream.
+            Uniforms geometryUniforms = attributeUniforms;
+            if (geometryBuffer) {
+                geometryUniforms.waveformMode = 2;
+                geometryUniforms.threeBandActive = 0;
+                geometryUniforms.sampleCount = static_cast<uint32_t>(geometryWaveform.sampleCount);
+                geometryUniforms.samplesPerSecond = geometryWaveform.samplesPerSecond;
+                geometryUniforms.waveMipCount = static_cast<uint32_t>(geometryWaveform.mipCount);
+                std::copy(geometryWaveform.mipOffsets.begin(), geometryWaveform.mipOffsets.end(),
+                    geometryUniforms.waveMipOffsets);
+                std::copy(geometryWaveform.mipCounts.begin(), geometryWaveform.mipCounts.end(),
+                    geometryUniforms.waveMipCounts);
+            }
+            [compute setBuffer:(geometryBuffer ? geometryBuffer : waveBuffer)
+                offset:0 atIndex:7];
+            [compute setBytes:&geometryUniforms length:sizeof(geometryUniforms) atIndex:8];
             const NSUInteger threads = std::min<NSUInteger>(
                 256, attributePipeline_.maxTotalThreadsPerThreadgroup);
             [compute dispatchThreads:MTLSizeMake(
@@ -2729,6 +2887,12 @@ public:
             [encoder setFragmentBuffer:
                 (waveAttributeBuffer_ ? waveAttributeBuffer_ : waveBuffer)
                 offset:0 atIndex:5];
+            [encoder setFragmentBuffer:(blueOverviewBuffer ? blueOverviewBuffer : waveBuffer)
+                offset:0 atIndex:6];
+            [encoder setFragmentBuffer:(waveAttributeBuffer_ ? waveAttributeBuffer_ : waveBuffer)
+                offset:(waveAttributeBuffer_ ? waveAttributeCount_ * sizeof(float) * 8 : 0) atIndex:7];
+            [encoder setFragmentBuffer:(threeBandOverviewBuffer ? threeBandOverviewBuffer : waveBuffer)
+                offset:0 atIndex:8];
             [encoder setFragmentBytes:&uniforms
                                length:sizeof(uniforms)
                               atIndex:1];
@@ -3680,6 +3844,10 @@ private:
                     activeGeneration = generation;
                     loaded_.store(true, std::memory_order_release);
                     ended_.store(false, std::memory_order_release);
+                    // A paused load may have painted cues before its timeline
+                    // existed. Repaint when that timeline becomes authoritative,
+                    // without waiting for a later waveform or transport event.
+                    requestDisplay();
                 }
             }
 
@@ -3811,6 +3979,10 @@ private:
     id<MTLBuffer> waveBuffer_ = nil;
     id<MTLBuffer> detailBuffer_ = nil;
     id<MTLBuffer> audioDetailBuffer_ = nil;
+    id<MTLBuffer> blueOverviewBuffer_ = nil;
+    id<MTLBuffer> threeBandOverviewBuffer_ = nil;
+    size_t blueOverviewCount_ = 0;
+    size_t threeBandOverviewCount_ = 0;
     id<MTLBuffer> gridBuffer_ = nil;
     bool gridOverrideActive_ = false;
     id<MTLBuffer> cueBuffer_ = nil;
@@ -4191,6 +4363,24 @@ int sb_deck_set_waveform_streams_for_generation(
     return result;
 }
 
+int sb_deck_set_blue_overview_for_generation(
+    SBDeckRef deck, uint64_t generation, const uint8_t *rows, size_t row_count) {
+    if (!deck) return 0;
+    auto *instance = static_cast<SBDeck *>(deck);
+    const int result = instance->setBlueOverview(rows, row_count, generation);
+    instance->requestDisplay();
+    return result;
+}
+
+int sb_deck_set_three_band_overview_for_generation(
+    SBDeckRef deck, uint64_t generation, const uint8_t *rows, size_t row_count) {
+    if (!deck) return 0;
+    auto *instance = static_cast<SBDeck *>(deck);
+    const int result = instance->setThreeBandOverview(rows, row_count, generation);
+    instance->requestDisplay();
+    return result;
+}
+
 int sb_deck_set_waveform_mode(SBDeckRef deck, uint32_t mode) {
     if (!deck) return 0;
     auto *instance = static_cast<SBDeck *>(deck);
@@ -4489,6 +4679,14 @@ int sb_deck_begin_frame_trace(
         uint32_t crop_width_pixels) {
     return deck && static_cast<SBDeck *>(deck)->beginFrameTrace(
         max_frames, crop_width_pixels);
+}
+
+int sb_deck_begin_surface_trace(
+        SBDeckRef deck,
+        uint32_t max_frames,
+        uint32_t crop_width_pixels) {
+    return deck && static_cast<SBDeck *>(deck)->beginFrameTrace(
+        max_frames, crop_width_pixels, true);
 }
 
 int sb_deck_frame_trace_status(

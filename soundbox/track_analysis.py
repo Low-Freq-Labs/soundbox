@@ -9,9 +9,8 @@ always a clean miss rather than partially trusted state.
 The public ``load`` result intentionally matches the player analysis shape:
 beat rows, RGB overview rows, cues, and an ``_audio_detail`` envelope. V5 stores
 the exact song-anchored signed min/max mip levels used at the supported player
-zooms, rather than four redundant 6144 Hz base streams. V4 records remain
-playable and can be migrated atomically; a direct audio cook and a V4 migration
-produce byte-identical V5 waveform sections.
+zooms, rather than four redundant 6144 Hz base streams. Only the current V5
+container is read; historical V4 numerical/conversion oracles live in test support.
 """
 
 from __future__ import annotations
@@ -29,22 +28,18 @@ import struct
 from typing import Callable, Iterable
 
 from .cache_io import atomic_cache_bytes
-from .waveform_sections import (
-    encode_sections as _encode_sections, decode_sections as _decode_sections,
-)
+from .waveform_sections import encode_sections as _encode_sections
 
 from soundbox.waveform_detail import (
     DETAIL_MODEL, DETAIL_RATE, DETAIL_DIVISORS, IMPORTED_COLOR_MODEL,
 )
 
 SCHEMA = 5
-LEGACY_SCHEMA = 4
 ULTRA_RATE = 6144.0
 COLOR_RATE = 150.0
 SPECTRAL_BANDS = 24
 COLOR_MODEL = "soundbox-rgb-filterbank-v2"
 WAVEFORM_MODEL = "soundbox-polarity-range-mips-i16-v5"
-LEGACY_WAVEFORM_MODEL = "soundbox-polarity-range-u16-v4"
 THREE_BAND_MODEL = "soundbox-three-band-u7-v2"
 DISPLAY_WAVEFORM_MODEL = "rekordbox-blue-rgb-three-band-v1"
 DISPLAY_RENDER_MODEL = "rekordbox-native-mode-render-v3"
@@ -55,7 +50,6 @@ CHANNEL_SAFETY_FLOOR = 1.0 / 16.0
 RANGE_MIP_DIVISORS = (8, 13, 18, 25, 35, 50, 66, 99, 132, 192, 256)
 RANGE_MIP_ENCODING = "song-anchored-extrema-i16le-v1"
 _MAGIC = b"SBA5"
-_LEGACY_MAGIC = b"SBA4"
 _HEADER = struct.Struct("<4sI")
 _SOURCE_IDENTITY_XATTR = (
     "com.lowfreqlabs.soundbox.source-identity-v1")
@@ -579,14 +573,9 @@ def cache_path(cache_dir: str | Path, track_id: str) -> Path:
     return Path(cache_dir) / _record_name(track_id)
 
 
-def legacy_cache_path(cache_dir: str | Path, track_id: str) -> Path:
-    """Return the V4 compatibility path without treating it as V5-ready."""
-    return cache_path(cache_dir, track_id).with_suffix(".sba4")
-
-
 def discard_records(
         cache_dir: str | Path, track_ids: Iterable[str]) -> tuple[int, int]:
-    """Delete exact disposable V4/V5 records for the supplied track IDs.
+    """Delete exact disposable V5 records for the supplied track IDs.
 
     Source audio and provider analysis are never involved. The returned pair is
     ``(record_count, bytes_reclaimed)`` so callers can log an honest cleanup.
@@ -595,28 +584,17 @@ def discard_records(
     removed = 0
     reclaimed = 0
     for track_id in {str(value) for value in track_ids if str(value)}:
-        for target in (
-                cache_path(cache_dir, track_id),
-                legacy_cache_path(cache_dir, track_id)):
-            try:
-                size = target.stat().st_size
-                target.unlink()
-            except FileNotFoundError:
-                continue
-            except OSError:
-                continue
-            removed += 1
-            reclaimed += size
+        target = cache_path(cache_dir, track_id)
+        try:
+            size = target.stat().st_size
+            target.unlink()
+        except FileNotFoundError:
+            continue
+        except OSError:
+            continue
+        removed += 1
+        reclaimed += size
     return removed, reclaimed
-
-
-def _record_candidates(
-        cache_dir: str | Path, track_id: str
-) -> tuple[tuple[Path, bytes, int], ...]:
-    return (
-        (cache_path(cache_dir, track_id), _MAGIC, SCHEMA),
-        (legacy_cache_path(cache_dir, track_id), _LEGACY_MAGIC, LEGACY_SCHEMA),
-    )
 
 
 def cue_fingerprint(cues: list[dict]) -> str:
@@ -633,13 +611,6 @@ def grid_fingerprint(beats: list) -> str:
         list(beats), ensure_ascii=False, separators=(",", ":"),
         sort_keys=True).encode()
     return hashlib.sha256(encoded).hexdigest()
-
-
-def _manifest_magic(manifest: dict) -> bytes:
-    return (
-        _MAGIC if manifest.get("schema") == SCHEMA
-        else _LEGACY_MAGIC
-    )
 
 
 def with_imported_cues(data: dict, cues: list[dict]) -> dict:
@@ -660,30 +631,28 @@ def _read_container_manifest(
     """Read and validate the small manifest plus opaque compressed payload."""
     source = Path(audio_path)
     stat = source.stat()
-    for target, expected_magic, expected_schema in _record_candidates(
-            cache_dir, track_id):
-        try:
-            packed = target.read_bytes()
-            if len(packed) < _HEADER.size:
-                continue
-            magic, manifest_size = _HEADER.unpack_from(packed)
-            if magic != expected_magic or manifest_size <= 0:
-                continue
-            start = _HEADER.size
-            manifest = json.loads(packed[start:start + manifest_size])
-            if (manifest.get("schema") != expected_schema
-                    or manifest.get("track_id") != str(track_id)
-                    or not _source_identity_matches(
-                        target, manifest, stat)):
-                continue
-            payload = packed[start + manifest_size:]
-            if (hashlib.sha256(payload).hexdigest()
-                    != manifest.get("payload_sha256")):
-                continue
-            return target, manifest, payload
-        except (OSError, ValueError, KeyError, TypeError):
-            continue
-    return None
+    target = cache_path(cache_dir, track_id)
+    try:
+        packed = target.read_bytes()
+        if len(packed) < _HEADER.size:
+            return None
+        magic, manifest_size = _HEADER.unpack_from(packed)
+        if magic != _MAGIC or manifest_size <= 0:
+            return None
+        start = _HEADER.size
+        manifest = json.loads(packed[start:start + manifest_size])
+        if (manifest.get("schema") != SCHEMA
+                or manifest.get("track_id") != str(track_id)
+                or not _source_identity_matches(
+                    target, manifest, stat)):
+            return None
+        payload = packed[start + manifest_size:]
+        if (hashlib.sha256(payload).hexdigest()
+                != manifest.get("payload_sha256")):
+            return None
+        return target, manifest, payload
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
 
 
 # A worker scopes this to one track's discovery, never across publication or
@@ -706,6 +675,30 @@ def reset_manifest_probe() -> None:
         memo.clear()
 
 
+# Interactive stages always read fresh bytes and validate source identity. Only
+# their repeated JSON decoding is shared, bounded to the last exact header.
+_manifest_parse: ContextVar[list[tuple[bytes, dict]] | None] = ContextVar('manifest_parse', default=None)
+
+
+@contextmanager
+def manifest_parse_session():
+    token = _manifest_parse.set([])
+    try:
+        yield
+    finally:
+        _manifest_parse.reset(token)
+
+
+def _parse_manifest(encoded: bytes) -> dict:
+    memo = _manifest_parse.get()
+    if memo and memo[0][0] == encoded:
+        return memo[0][1]
+    manifest: dict = json.loads(encoded)
+    if memo is not None:
+        memo[:] = [(encoded, manifest)]
+    return manifest
+
+
 def _read_manifest_header(cache_dir: str | Path, track_id: str,
                           audio_path: str | Path) -> tuple[Path, dict, int] | None:
     memo = _manifest_probe.get()
@@ -724,29 +717,27 @@ def _read_manifest_header_uncached(
     """Read only the header and JSON manifest for one source-keyed record."""
     source = Path(audio_path)
     stat = source.stat()
-    for target, expected_magic, expected_schema in _record_candidates(
-            cache_dir, track_id):
-        try:
-            with target.open("rb") as handle:
-                header = handle.read(_HEADER.size)
-                if len(header) != _HEADER.size:
-                    continue
-                magic, manifest_size = _HEADER.unpack(header)
-                if magic != expected_magic or manifest_size <= 0:
-                    continue
-                encoded = handle.read(manifest_size)
-                if len(encoded) != manifest_size:
-                    continue
-            manifest = json.loads(encoded)
-            if (manifest.get("schema") != expected_schema
-                    or manifest.get("track_id") != str(track_id)
-                    or not _source_identity_matches(
-                        target, manifest, stat)):
-                continue
-            return target, manifest, _HEADER.size + manifest_size
-        except (OSError, ValueError, KeyError, TypeError):
-            continue
-    return None
+    target = cache_path(cache_dir, track_id)
+    try:
+        with target.open("rb") as handle:
+            header = handle.read(_HEADER.size)
+            if len(header) != _HEADER.size:
+                return None
+            magic, manifest_size = _HEADER.unpack(header)
+            if magic != _MAGIC or manifest_size <= 0:
+                return None
+            encoded = handle.read(manifest_size)
+            if len(encoded) != manifest_size:
+                return None
+        manifest = _parse_manifest(encoded)
+        if (manifest.get("schema") != SCHEMA
+                or manifest.get("track_id") != str(track_id)
+                or not _source_identity_matches(
+                    target, manifest, stat)):
+            return None
+        return target, manifest, _HEADER.size + manifest_size
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
 
 
 def load_manifest(
@@ -1054,64 +1045,20 @@ def load_detail(
         if header is None:
             return None
         manifest = header[1]
-        if manifest.get("schema") == SCHEMA:
-            loaded = _load_sections(
-                cache_dir, track_id, audio_path,
-                (("spectral_24",) if include_spectral
-                 and manifest.get("waveform_model") != DETAIL_MODEL else ())
-                + ("blue_detail", "rgb_detail", "three_band"))
-            if loaded is None:
-                return None
-            sections = loaded[1]
-            detail = _load_v5_range_mips(
-                cache_dir, track_id, audio_path, manifest)
-            if detail is None:
-                return None
-            return {
-                "_audio_detail": detail,
-                "_spectral_24": sections.get("spectral_24", b""),
-                "_blue_detail": sections["blue_detail"],
-                "_rgb_detail": sections["rgb_detail"],
-                "_detail_bands": sections["three_band"],
-            }
         loaded = _load_sections(
             cache_dir, track_id, audio_path,
-            ("detail",) + (("spectral_24",) if include_spectral else ())
+            (("spectral_24",) if include_spectral
+             and manifest.get("waveform_model") != DETAIL_MODEL else ())
             + ("blue_detail", "rgb_detail", "three_band"))
         if loaded is None:
             return None
-        manifest, sections = loaded
-        lower = sections["detail"]
-        if (manifest.get("waveform_model") == LEGACY_WAVEFORM_MODEL
-                and "detail_lower" in (manifest.get("sections") or {})):
-            lower_loaded = _load_sections(
-                cache_dir, track_id, audio_path, ("detail_lower",))
-            if lower_loaded is None:
-                return None
-            lower = lower_loaded[1]["detail_lower"]
-        range_rows = {}
-        section_names = manifest.get("sections") or {}
-        if (
-                manifest.get("waveform_model") == LEGACY_WAVEFORM_MODEL
-                and "detail_minimum" in section_names
-                and "detail_maximum" in section_names):
-            range_loaded = _load_sections(
-                cache_dir, track_id, audio_path,
-                ("detail_minimum", "detail_maximum"))
-            if range_loaded is None:
-                return None
-            range_rows = {
-                "range_min": range_loaded[1]["detail_minimum"],
-                "range_max": range_loaded[1]["detail_maximum"],
-            }
+        sections = loaded[1]
+        detail = _load_v5_range_mips(
+            cache_dir, track_id, audio_path, manifest)
+        if detail is None:
+            return None
         return {
-            "_audio_detail": {
-                "rate": float(manifest.get("detail_rate") or 0),
-                "heights": sections["detail"],
-                "lower_heights": lower,
-                "encoding": str(manifest.get("height_encoding") or ""),
-                **range_rows,
-            },
+            "_audio_detail": detail,
             "_spectral_24": sections.get("spectral_24", b""),
             "_blue_detail": sections["blue_detail"],
             "_rgb_detail": sections["rgb_detail"],
@@ -1295,7 +1242,7 @@ def update_grid_source(
             manifest, ensure_ascii=False, separators=(",", ":"),
             sort_keys=True).encode()
         atomic_cache_bytes(
-            target, _HEADER.pack(_manifest_magic(manifest), len(encoded))
+            target, _HEADER.pack(_MAGIC, len(encoded))
             + encoded + payload, sync_file=False)
         return True
     except Exception:  # noqa: BLE001 - derived grid metadata is retryable
@@ -1330,7 +1277,7 @@ def update_imported_cues(
             manifest, ensure_ascii=False, separators=(",", ":"),
             sort_keys=True).encode()
         atomic_cache_bytes(
-            target, _HEADER.pack(_manifest_magic(manifest), len(encoded))
+            target, _HEADER.pack(_MAGIC, len(encoded))
             + encoded + payload, sync_file=False)
         return True
     except Exception:  # noqa: BLE001 - imported metadata is always retryable
@@ -1397,7 +1344,7 @@ def is_ready(cache_dir: str | Path, track_id: str,
 
 
 def _fallback_signed_ranges(heights: bytes, encoding: str) -> tuple[bytes, bytes]:
-    """Create a symmetric signed range for old/test inputs lacking V4 ranges."""
+    """Create the symmetric signed-range fallback for height-only V5 inputs."""
     import numpy as np
 
     values = _height_values(heights, encoding)
@@ -1566,107 +1513,9 @@ def store(cache_dir: str | Path, track_id: str, audio_path: str | Path,
         return None
 
 
-def retire_legacy_record(
-        cache_dir: str | Path, track_id: str,
-        audio_path: str | Path) -> bool:
-    """Remove one V4 only after the corresponding complete V5 is verified."""
-    if not is_ready(cache_dir, track_id, audio_path):
-        return False
-    if not verify_complete(cache_dir, track_id, audio_path):
-        return False
-    legacy = legacy_cache_path(cache_dir, track_id)
-    try:
-        legacy.unlink(missing_ok=True)
-        return not legacy.exists()
-    except OSError:
-        return False
-
-
-def migrate_v4(
-        cache_dir: str | Path, track_id: str,
-        audio_path: str | Path) -> bool:
-    """Atomically reduce one valid V4 to byte-equivalent V5 renderer mips."""
-    import zstandard as zstd
-
-    if is_ready(cache_dir, track_id, audio_path):
-        return retire_legacy_record(cache_dir, track_id, audio_path)
-    source = Path(audio_path)
-    legacy = legacy_cache_path(cache_dir, track_id)
-    try:
-        packed = legacy.read_bytes()
-        if len(packed) < _HEADER.size:
-            return False
-        magic, manifest_size = _HEADER.unpack_from(packed)
-        if magic != _LEGACY_MAGIC or manifest_size <= 0:
-            return False
-        start = _HEADER.size
-        manifest = json.loads(packed[start:start + manifest_size])
-        stat = source.stat()
-        if (manifest.get("schema") != LEGACY_SCHEMA
-                or manifest.get("track_id") != str(track_id)
-                or manifest.get("source", {}).get("identity")
-                != f"{stat.st_size}:{stat.st_mtime_ns}"
-                or manifest.get("waveform_model") != LEGACY_WAVEFORM_MODEL):
-            return False
-        payload = packed[start + manifest_size:]
-        if hashlib.sha256(payload).hexdigest() != manifest.get(
-                "payload_sha256"):
-            return False
-        sections = _decode_sections(payload, manifest)
-        if sections is None:
-            return False
-        required = {
-            "detail_minimum", "detail_maximum",
-            "overview_heights", "overview_rgb", "spectral_24",
-            "blue_detail", "rgb_detail", "three_band",
-        }
-        if not required.issubset(sections):
-            return False
-        prepared = {
-            "detail_minimum_values": sections["detail_minimum"],
-            "detail_maximum_values": sections["detail_maximum"],
-            # ``store`` keeps this solely as a compatibility fallback; V5 does
-            # not persist it.
-            "detail_heights": sections.get("detail", b""),
-            "detail_rate": float(manifest.get("detail_rate") or 0),
-            "overview_heights": sections["overview_heights"],
-            "overview_rgb": sections["overview_rgb"],
-            "spectral_bands": sections["spectral_24"],
-            "blue_detail": sections["blue_detail"],
-            "rgb_detail": sections["rgb_detail"],
-            "three_band": sections["three_band"],
-            "sample_rate": float(manifest.get("color_rate") or COLOR_RATE),
-            "color_model": str(manifest.get("color_model") or ""),
-            "waveform_model": WAVEFORM_MODEL,
-            "three_band_model": str(
-                manifest.get("three_band_model") or ""),
-            "display_waveform_model": str(
-                manifest.get("display_waveform_model") or ""),
-            "display_render_model": str(
-                manifest.get("display_render_model")
-                or DISPLAY_RENDER_MODEL),
-            "height_encoding": str(
-                manifest.get("height_encoding") or HEIGHT_ENCODING),
-            "range_encoding": RANGE_ENCODING,
-            "beats": list(manifest.get("beats") or []),
-            "cues": list(manifest.get("cues") or []),
-            "grid_import": dict(manifest.get("grid_import") or {}),
-            "cue_import": dict(manifest.get("cue_import") or {}),
-            "provenance": dict(manifest.get("provenance") or {}),
-            "stream_provenance": dict(
-                manifest.get("stream_provenance") or {}),
-        }
-        if store(cache_dir, track_id, source, prepared) is None:
-            return False
-        return retire_legacy_record(cache_dir, track_id, source)
-    except (
-            OSError, ValueError, KeyError, TypeError, zstd.ZstdError):
-        return False
-
-
 def load(cache_dir: str | Path, track_id: str, audio_path: str | Path,
          compact: bool = False) -> dict | None:
-    """Compatibility full-load API.
+    """Complete V5 full-load API.
 
     Interactive player loads use ``load_manifest``/``load_overview``/
     ``load_detail`` so no phase reads or hashes unrelated sections.
@@ -1732,7 +1581,7 @@ def update_user_data(cache_dir: str | Path, track_id: str,
             manifest, ensure_ascii=False, separators=(",", ":"),
             sort_keys=True).encode()
         atomic_cache_bytes(
-            target, _HEADER.pack(_manifest_magic(manifest), len(encoded))
+            target, _HEADER.pack(_MAGIC, len(encoded))
             + encoded + payload, sync_file=False)
         return True
     except Exception:  # noqa: BLE001
@@ -2309,7 +2158,7 @@ def confirm_published_grid(cache_dir, track_id, audio_path, beats, detector_beat
         manifest['beats']=list(beats)
         manifest['grid_import']=dict(source='rekordbox-anlz',fingerprint=grid_fingerprint(beats))
         encoded=json.dumps(manifest,ensure_ascii=False,separators=(',',':'),sort_keys=True).encode()
-        atomic_cache_bytes(target,_HEADER.pack(_manifest_magic(manifest),len(encoded))+encoded+payload,
+        atomic_cache_bytes(target,_HEADER.pack(_MAGIC,len(encoded))+encoded+payload,
                            sync_file=False)
         return True
     except Exception:

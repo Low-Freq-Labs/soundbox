@@ -1,6 +1,223 @@
 # Performance audits and measured limits — November 2026
 
-## Current follow-up — November19–20
+## Current delivery and measurement boundary — reviewed November23
+
+The performance and cleanup changes below are included in the November21
+personal 174 installation, runtime
+`7a5cf06d3e00c8e332abd5b6d1d0d6463de4093afad003f475b60c570f797eba`.
+That build also includes regular-playlist authored order and exact membership
+reposition, BLUE's shared RGB contour/native palette, and the dedicated PWV6
+3BAND mini. Main 3BAND retains its independent PWV7 geometry and 1.35 display gain.
+See [PLAYER](PLAYER.md), [playlist order](native-playlist-order.md) and
+[HANDOFF](HANDOFF.md) for behavior, focused validation and installed provenance.
+
+All timings, census counts, candidate states and release totals below belong to
+their dated checkpoints. Earlier delivered fixes remain included; rejected or
+unapplied proposals remain identified separately. Historical app-control, cleanup
+or device-test approvals are not current authorization. November21 focused proof
+is distinct from the November23 wrap-up gate recorded in HANDOFF. No count below
+is a new full-suite result for that wrap-up, an exhaustive code audit, or a promise
+that every function or live database save is immediate.
+
+## Wider delegated review — November21
+
+Sonny requested a wider pass with the same complete-artwork, complete-waveform
+and durable-save requirements. Three concurrent audits cover desktop/UI,
+state/native transactions, and playback/import/device/export orchestration.
+The new census contains259 first-party production files,105520 lines and4540
+Python functions. Per-file receipts distinguish semantic sections from structural
+inventory; overlapping assignments do not count as additional coverage. This is
+an audit of measured paths, never proof that every function is instantaneous.
+The reconciled first sweep covers all259 paths:129 full source reads and130
+files with explicitly bounded semantic sections, plus the packaged entrypoint.
+Large remaining bodies are not implied to have received complete review. Exact
+ranges and baseline/current hashes live in `coverage-union.json` and its four
+per-owner receipts.
+
+The following generated comparisons use exact copies of preceding runtime6f92
+as their baseline. They were delivered in runtimec53c and remain included in `7a5c`;
+HANDOFF separately records
+package/process and fresh state preservation. No real source/device writes or
+real-app input were automated.
+
+| Generated workload | Baseline → candidate | Preserved behavior |
+| --- | --- | --- |
+| Complete cached review,3000px original and three previews |619.61→287.92ms; maximum GUI gap517.22→8.78ms | Identical final pixels, candidate order/count and complete first comparison. |
+| Same comparison, streamed/saved previews |520.20→184.73ms /517.87→190.70ms | Fresh selection/artwork/policy fences; search/close/restore ownership. |
+| Unchanged3740-row Graveyard refresh |90.74→11.85ms | Exact items, selection, current column, scroll and fresh title/date/path observations. |
+| Native two-hour28800-beat grid transaction |1142.30→304.02ms | Identical SQL and DAT/EXT/2EX outputs; fresh payload/authority/source/recovery checks. |
+| Delete confirmation preparation,1000 TEMP device files |5150.35→160.13ms | Same guarded paths, count, ordering and confirmation; benchmark always cancels. |
+| Healthy3300-record import metadata / full GUI library application |18.46→0.27ms /130.18→113.91ms | Missing-reference injection and incomplete/malformed repair behavior remain. |
+| CDJ render request construction,3300 DTOs with eight cues each |69.58→0.42ms for ten changed songs;141.19→64.33ms for all changed | Same values/key order, detached retained/changed inputs and existing extras references; component timing only. |
+| Legacy playlist-retirement lookup,6433files/86lists |38.19–38.88→2.65–2.77ms | Same ordered first valid proof, full fallback and exact paths/ownership/hash checks; empty selections do no work. |
+
+Review derives the original duplicate-art sample once per worker batch, using
+the exact former fit/colour/threshold rules. Cached choices finish comparison
+before reveal; late choices continue with the already decoded image. Fresh GUI
+policy checks still reject newly excluded sources. Invalid current artwork can
+still be repaired. The picker retains its unfiltered default behavior.
+
+Graveyard compares fresh complete role/title/date values and source/restore
+scope before reusing unchanged Qt items. Paths come only from currently settled
+presentation metadata and are cleared when that metadata is no longer current.
+Changed membership, titles, dates or source scope retain reconstruction and
+selection/viewport restoration. No filesystem or write authority is cached.
+
+Grid recovery retains one successful pure-transformation key per GridStore.
+Every call still validates the current journal, decision, authority, source file
+identity, backup, payload generation/destination and all four archived payload
+hashes. Exact audio-end proofs remain fresh. A changed key or a cold store
+reconstructs independently; no live plan, DB connection or source observation is
+retained. The affected named prep recovery suite passes252 cases with zero skips.
+
+CDJ planning avoids deep-copying complete track/extras/playlist inventories that
+are immediately replaced by the changed selection. Retained root fields still
+share one deep-copy memo; source capture, revision/hash checks, cancellation,
+renderer output and device publication remain unchanged.
+Retirement lookup likewise hoists only the ordered pending-proof candidates for
+one invocation; the complete original mapping still supplies legacy fallback.
+
+The wider audit also records unresolved costs: complete-grid encode/GUI ACK,
+one-file import admission walking existing paths, large XML parsing, native
+catalog witness validation and additional UI projection. Conversion receipt ACKs
+also repeat full prep-queue validation: a generated eight-long-grid queue cost
+102.7ms for one receipt and1.643s for sixteen. Batch validation remains a proposal
+requiring preserved failure order, identities and replay behavior. Potential
+repeated native output SQL scans also remain an unimplemented lead.
+Worker-predecoded state
+publication failed its GUI heartbeat control and remains unaccepted. Faster
+portable-backup rendering remains a separate proposal. Evidence and bounded
+reproducers live at `~/Library/Logs/Soundbox/wide-speed-audit-20261121/`.
+
+At the c53c checkpoint, unchanged inputs passed5134offscreen plus68unlocked Cocoa cases, with all5202
+identities reconciled and zero skips/expected failures. The initial bare command
+stopped during locked-session presentation checks; the native replay took73.037s.
+That is complete two-phase evidence, not a new successful bare invocation.
+All932saved source/test/build hashes match through package/install. Strict signing,
+236runtime/startup code comparisons, four native text sections and disposable
+packaged runtime checks pass. Fresh installed state matches all6433records and
+217protected JSONs exactly. Current install/retention scope remains in HANDOFF.
+
+## Complete readiness and responsiveness pass — November20–21
+
+This source pass follows Sonny's explicit complete-artwork/complete-waveform
+requirement. Earlier partial callbacks are not successful load measurements.
+The structural inventory covered250 first-party Python/native files and4522
+Python functions; it is a routing census, not a claim of exhaustive semantic
+review or instant completion of every function. Critical-path reviews covered
+playback, artwork/Info, native reading/saving, browser projection, state admission,
+prepared desktop/device surfaces and export capture. Installed identity and
+validation remain in [HANDOFF](HANDOFF.md); these generated timings alone are
+neither live-source nor physical-device acceptance.
+
+| Generated workload | Baseline → candidate | Meaning |
+| --- | --- | --- |
+| 3000px manual image,3300-row art index | handler135.66→0.24ms; maximum GUI gap136.83→4.54ms | Full publication137.33→137.67ms; worker preparation removes the GUI stall. |
+| Two catalog avatars,3300-row index | maximum GUI gap135.36→4.81ms | Full publication134.54→136.69ms; unaffected targets survive a newer per-song choice. |
+| Selected3000px review cover | maximum GUI gap110.03→7.10ms | Complete selected comparison102.66→105.97ms; exact full decoder pixels and original scaling. |
+| Cue with eight queued two-hour grids | maximum GUI gap313.65→100.44ms | Immediate cue0.65ms; full4.12MB save remains, durable ACK3.185s. |
+| Warm cached two-hour muted native load | complete GUI-accepted surface188.53→176.82ms | Seven loads, first excluded; ordinary195s fixture remains~10ms. |
+| Fresh encrypted3298-track/86-playlist reader |612.0→516.9ms median | Full Library equality and unchanged source bytes;9892 tag links. |
+| Artists filter,3300 tracks/100 artists |5.384→3.525ms median | One matching pass with exact group/child visibility. |
+| Empty Graveyard filter,3740 rows |11.56→2.17ms median | No unnecessary historical metadata copies; title refresh106.97→85.71ms. |
+| Complete export capture,3740 tracks/100 playlists |25.76→24.16ms median | Full overlap boundary retained; shared native/analysis aliases38.90→16.12ms. |
+
+Random autoplay now checks the drawn candidate rather than statting3300 files
+when refilling its normal3300-song bag. Missing files remain freshly checked;
+later calls retry newly available songs. Sorting preserves persistent selected
+occurrences/current column, and unchanged search projections preserve selection.
+Filtering that changes membership restores surviving browser selections and the
+viewport. None changes source playlist/export order.
+
+Playback now gates audible Play/autoplay and `track_ready` on the complete
+accepted overview/detail surface. Early manifest/grid/cue preparation still
+positions the paused deck. Newer Play/Pause, Stop, seek and held/released cue
+intentions win; rejected current surfaces report a retryable playback error.
+Manifest parsing reuse lasts only one selected worker and requires identical
+freshly reread header bytes; all source/section validation remains fresh.
+
+Artwork preparation retains exact source/track/cache/repository generations,
+newest selected-choice tokens and existing external-byte profile guards. Only
+finished/joined workers publish canonically. Accepted manual choices retain
+Quit/backup/source-switch ownership; Info waits for that song's latest choice
+and complete first-frame covers. Normal complete Info opening is unchanged:
+500px JPEG35.82→37.69ms and3000px PNG120.80→120.74ms in eight warm samples.
+See [artwork evidence](ui-polish-audit.md).
+
+The later bounded prep fix removes unrelated grid-row walks only from control
+availability. It retains every queue header/cue/operation/prepared-request check,
+the complete selected grid, and one shared general/BPM result per refresh. Loading,
+maintenance, shutdown and manual-grid blockers still skip BPM-specific work;
+source errors retain their original precedence. Actual requests/admission/native
+pump still validate the complete queue. Final generated maximum GUI gap is100.44ms
+versus313.65ms; prior86.9ms/67.6ms intermediate rounds are not the final receipt.
+Full-patch encoding49.84ms, GUI acknowledgement53.75ms and durable3.185s remain.
+A sparse-grid candidate was rejected because plain GUI object identity could not
+prove the canonical grid or detect later mutation. A full-value carrier prototype
+also failed the heartbeat control. Neither storage redesign ships; full validated
+freezing and both changed-grid/frozen-intention regressions remain.
+
+Review now full-decodes the exact selected bytes with QImageReader off GUI and
+retains original GUI pixmap conversion/scaling. A scaled JPEG shortcut changed
+pixels and direct QImage.loadFromData retained a GIL stall; both were rejected.
+Current-cover first reveal, atomic cover/title/source replacement, same-track
+audition, global Undo/Exclusions and latest-selection/close/restore ownership stay
+covered. At this checkpoint its separate GUI `_same_art` duplicate comparison
+still measured168.29ms for one generated large original, and Graveyard rebuilt
+Qt rows on refresh. The later delegated review above addresses both: duplicate
+comparison runs on owned workers and unchanged Graveyard rows reuse exact fresh
+presentation values. Those later gains must use their own measured scopes.
+
+Preservation checks include complete first frames, latest callback/transport
+ownership, cue usability, selection/multi-selection/scroll/focus/drafts, durable
+FIFO saves and failure/retry/restart/Quit behavior. Ordinary pages stay prepared;
+device pages initialize on demand. Native guards, journals/readbacks, original
+audio, waveform/DSP appearance and device authority remain independent.
+Bounded private receipts and generated reproducers are at
+`~/Library/Logs/Soundbox/code-speed-audit-20261120/`; rejected candidate results
+are explicitly unaccepted evidence.
+
+The initial complete validation attempt passed5081 offscreen cases and rendered
+the isolated window, then encountered zero actual presentations in the native
+phase. A read-only macOS session check reported the screen locked; exact unchanged
+HEAD test/helper controls reproduced the four failures. GPU frame traces can
+complete while actual presentation timestamps remain zero, so those results do
+not establish a rendering regression or successful native acceptance. A separate
+test-helper control proved `processEvents()+sleep` omitted deferred widget deletion;
+the helper now retains `QTest.qWait(5)` plus a1ms Python yield under its unchanged
+real2s deadline. After Sonny unlocked, all68 native cases passed in72.416s and
+both phase inventories reconciled5149 cases. The subsequent review/availability
+fixes passed85 Cocoa plus13 final review cases,49 availability/native/full-freezing
+and128 adjacent lifecycle cases; these overlap and are focused evidence for the
+final follow-up, not a new complete bare-gate pass. Final lint/types/layout pass.
+Package/isolated checks and installed identity remain separate in HANDOFF.
+
+## Native save success path — November20 follow-up
+
+The source now shares bounded process-memory SQLCipher passphrase derivation
+across native connection boundaries. Each connection reads its actual salt,
+algorithm and iteration count; matching inputs supply the identical derived raw
+key. Fresh encrypted pages, schema/library authority, apps, locks, journals and
+readback remain checked. New databases retain ordinary random-salt creation;
+unknown KDF settings retain the original passphrase path. No key is persisted or
+logged. This follows SQLCipher's [documented raw-key API](https://www.zetetic.net/sqlcipher/sqlcipher-api/#key).
+
+Fresh playlist saves also reuse their already proved plan after exact private and
+archive-byte checks, rather than reopening another encrypted copy to reconstruct
+the same plan. Restart/historical recovery reconstructs independently. A released
+writer now promotes metadata's stale two-second contention poll to the next event
+turn; measured native-owner/failure deadlines still gate retries.
+
+On a tiny generated encrypted TEMP database, three baseline rename samples took
+429–432ms. Proof reuse with the additional integrity bracket alone took432–434ms;
+combined with key-derivation reuse, samples took15–16ms. Five warm connection opens took
+about293ms with repeated derivation versus less than1ms using the identical raw
+key; the first derivation still cost about63ms. These are synthetic component
+measurements, not immediate live-library or UI completion guarantees. Existing
+app logs still show full tag/smart readback as a separate substantial cost.
+Current validation, package and installed status belong in [HANDOFF](HANDOFF.md).
+
+## Delivered follow-up — November19–20
 
 The dated measurements below retain their original workload and build scope;
 they are not timings for the current installed app. [HANDOFF](HANDOFF.md) records
@@ -1216,8 +1433,12 @@ validation belongs in [HANDOFF.md](HANDOFF.md).
 The playlist batch does not add SQL tables, fields or musical-data authority.
 Source guards, accepted per-command identities/counters, encrypted before/after
 pairs, the common lock/journal, exact native readback and replay remain required.
-Reorder remains a separate accepted capability. The corresponding recovery and
-sequential-equivalence tests are not optional performance costs.
+Sidebar node reorder remains a separate accepted capability. The November21
+song-order implementation composes accepted remove/append commands and uses
+`membership-replay-v1` only to derive their identical final rows/counters/history
+and XML compactly; unmarked archived requests keep their original reconstruction.
+The corresponding recovery and sequential-equivalence tests are not optional
+performance costs.
 
 The cache-writer row describes an existing implementation verified during this
 audit, not a new change or a newly measured before/after serialization speedup.

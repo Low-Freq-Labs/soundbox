@@ -14,6 +14,7 @@ class SourceIntentAdmission(QObject):
     def __init__(self, controller, key, changed, *, current_owner):
         super().__init__(controller)
         self.controller=controller;self.window=controller.window
+        self._copy=getattr(controller,'copy_intents',deepcopy)
         self.key=key;self.changed=changed;self.staged=[]
         self.current_owner=current_owner
         self.active=False;self.error='';self.stopping=False
@@ -35,22 +36,22 @@ class SourceIntentAdmission(QObject):
 
     @property
     def rows(self):
-        return [{**job,'error':self.error or job.get('error','')} for job in deepcopy(self.staged)]
+        return [{**job,'error':self.error or job.get('error','')} for job in self._copy(self.staged)]
 
     def stage(self,job,*,paired_settings=None):
         if self.stopping or self.error or self._discarding:return False
-        paired=deepcopy(paired_settings or {})
+        paired=self._copy(paired_settings or {})
         if paired and (self.active or self._paired):return False
         if any(type(key) is not str or not key or key==self.key for key in paired):
             raise ValueError('Paired source intentions require separate settings keys')
         if not self.staged:
-            self._scope=self._context();self._base=deepcopy(self.window.settings.get(self.key,[]))
+            self._scope=self._context();self._base=self._copy(self.window.settings.get(self.key,[]))
             self._uncertain=[]
         elif self._scope!=self._context():return False
         for key,value in paired.items():
-            self._paired_before[key]=(key in self.window.settings,deepcopy(self.window.settings.get(key)))
+            self._paired_before[key]=(key in self.window.settings,self._copy(self.window.settings.get(key)))
             self._paired[key]=value
-        self.staged.append(deepcopy(job));self.schedule();return True
+        self.staged.append(self._copy(job));self.schedule();return True
 
     def schedule(self):
         if self.pending and not self.active and not self.error and not self.stopping:
@@ -72,8 +73,8 @@ class SourceIntentAdmission(QObject):
         if not self._current():
             self._failed(RuntimeError('The library or pending intentions changed before saving'))
             return False
-        batch=deepcopy(self.staged);discarding=self._discarding
-        paired=deepcopy(self._paired)
+        batch=self._copy(self.staged);discarding=self._discarding
+        paired=self._copy(self._paired)
         desired=[] if discarding else [*self._base,*batch]
         def current():
             return (self._current() and self.staged[:len(batch)]==batch
@@ -82,7 +83,7 @@ class SourceIntentAdmission(QObject):
         def committed():
             self.active=False
             del self.staged[:len(batch)]
-            self._base=deepcopy(w.settings.get(self.key,[]))
+            self._base=self._copy(w.settings.get(self.key,[]))
             self._uncertain=[]
             self._paired={};self._paired_before={}
             self._discarding=False;self.error=''
@@ -93,7 +94,7 @@ class SourceIntentAdmission(QObject):
         try:
             allowed=[]
             for value in (self._base,*self._uncertain):
-                if value not in allowed:allowed.append(deepcopy(value))
+                if value not in allowed:allowed.append(self._copy(value))
             replacements={} if discarding else {('settings',key):value for key,value in paired.items()}
             replacements[('settings',self.key)]=desired
             accepted=w._commit_tag_state(replacements,(),committed,failed,current=current,
@@ -103,7 +104,7 @@ class SourceIntentAdmission(QObject):
         if not accepted:
             self.active=False
             if not self.stopping:self.timer.start(50)
-        elif self.pending and desired not in self._uncertain:self._uncertain.append(deepcopy(desired))
+        elif self.pending and desired not in self._uncertain:self._uncertain.append(self._copy(desired))
         return bool(accepted)
 
     def advance(self,before,after,*,staged=None,expected_staged=None):
@@ -111,8 +112,8 @@ class SourceIntentAdmission(QObject):
         if not self.staged:return
         if self.active or self._base!=before or expected_staged is not None and self.staged!=expected_staged:
             self._failed(RuntimeError('Pending source intentions changed during acknowledgement'));return
-        self._base=deepcopy(after);self._uncertain=[]
-        if staged is not None:self.staged=deepcopy(staged)
+        self._base=self._copy(after);self._uncertain=[]
+        if staged is not None:self.staged=self._copy(staged)
         self.schedule()
 
     def _failed(self,error):
@@ -165,6 +166,7 @@ class SourceQueueAcknowledgement(QObject):
     """Sparse durable queue ACK with a logical source reservation while waiting."""
     def __init__(self,controller,key):
         super().__init__(controller);self.controller=controller;self.window=controller.window;self.key=key
+        self._copy=getattr(controller,'copy_intents',deepcopy)
         self.row=None;self.active=False;self.error='';self.stopping=False;self.token=object()
         self.timer=QTimer(self);self.timer.setSingleShot(True);self.timer.timeout.connect(self.pump)
         controller.tags.idle.connect(self.schedule)
@@ -177,9 +179,9 @@ class SourceQueueAcknowledgement(QObject):
               staged_after=None,expected_staged=None):
         if self.pending:return False
         admission=self.controller.admission
-        self.row=dict(before=deepcopy(before),desired=deepcopy(desired),committed=committed,failed=failed,
-            scope=admission._context(),current=current,replacements=deepcopy(replacements or {}),removals=tuple(removals),
-            staged_after=deepcopy(staged_after),expected_staged=deepcopy(expected_staged),discard=False)
+        self.row=dict(before=self._copy(before),desired=self._copy(desired),committed=committed,failed=failed,
+            scope=admission._context(),current=current,replacements=self._copy(replacements or {}),removals=tuple(removals),
+            staged_after=self._copy(staged_after),expected_staged=self._copy(expected_staged),discard=False)
         admission.timer.stop()
         reserve=getattr(self.controller.tags,'reserve_source_ack',None)
         if callable(reserve):reserve(self.token)
@@ -207,8 +209,8 @@ class SourceQueueAcknowledgement(QObject):
         if w._shutting_down and not allow_shutdown:return False
         if not self._current():self._failed(RuntimeError('Source queue acknowledgement lost its exact owner'));return False
         desired=[] if row['discard'] else row['desired']
-        replacements={} if row['discard'] else deepcopy(row['replacements'])
-        replacements[('settings',self.key)]=deepcopy(desired);self.active=True
+        replacements={} if row['discard'] else self._copy(row['replacements'])
+        replacements[('settings',self.key)]=self._copy(desired);self.active=True
         def committed():
             self.active=False;self.row=None;self.error=''
             admission=self.controller.admission
@@ -270,8 +272,8 @@ class SourceQueueAcknowledgement(QObject):
         """Candidate only: the caller must freshly verify one canonical queue."""
         if not self.error or self.active or self.row is None or self.controller.admission.pending or not self._current():return None
         return dict(owner=self.row,scope=self.controller.admission._context(),error=self.error,
-            before=deepcopy(self.row['before']),desired=deepcopy(self.row['desired']),
-            queue=deepcopy(self.window.settings.get(self.key,[])))
+            before=self._copy(self.row['before']),desired=self._copy(self.row['desired']),
+            queue=self._copy(self.window.settings.get(self.key,[])))
 
     def retention_current(self,captured):
         return bool(captured and self.row is captured['owner'] and self.error==captured['error']
@@ -287,7 +289,7 @@ class SourceQueueAcknowledgement(QObject):
         """
         if (not self.retention_current(captured)
                 or canonical_queue not in (captured['before'],captured['desired'])):return False
-        self.window.settings[self.key]=deepcopy(canonical_queue)
+        self.window.settings[self.key]=self._copy(canonical_queue)
         self.row=None;self.error='';self.timer.stop()
         release=getattr(self.controller.tags,'release_source_ack',None)
         if callable(release):release(self.token)

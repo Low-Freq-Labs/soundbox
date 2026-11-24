@@ -130,6 +130,45 @@ class SortBehavior(unittest.TestCase):
         m.set_filter("lt")  # only delta
         self.assertEqual(self._titles(m), ["delta"])
 
+    def test_sort_preserves_multiple_selected_occurrences_and_current_column(self):
+        from PySide6.QtCore import QItemSelectionModel, QPersistentModelIndex
+        rows=[dict(id='same',title='Zulu',occurrence='first'),dict(id='other',title='Middle'),
+              dict(id='same',title='Alpha',occurrence='second')]
+        model=TrackModel(rows);selection=QItemSelectionModel(model)
+        selection.setCurrentIndex(model.index(0,1),QItemSelectionModel.ClearAndSelect|QItemSelectionModel.Rows)
+        selection.select(model.index(2,0),QItemSelectionModel.Select|QItemSelectionModel.Rows)
+        first=QPersistentModelIndex(model.index(0,0));second=QPersistentModelIndex(model.index(2,0))
+        reset=mock.Mock();model.modelReset.connect(reset)
+        model.sort(_col('title'))
+        reset.assert_not_called()
+        self.assertEqual({model._rows[i.row()]['occurrence'] for i in selection.selectedRows()},
+                         {'first','second'})
+        self.assertEqual((first.row(),first.data(),second.row(),second.data()),(2,'Zulu',0,'Alpha'))
+        self.assertEqual((selection.currentIndex().row(),selection.currentIndex().column()),(2,1))
+        self.assertEqual(model._all_rows,rows)
+
+    def test_sort_preserves_distinct_occurrences_even_for_repeated_row_object(self):
+        from PySide6.QtCore import QPersistentModelIndex
+        repeated=dict(id='1',title='Zulu');model=TrackModel([repeated,dict(id='2',title='Alpha'),repeated])
+        first=QPersistentModelIndex(model.index(0,0));second=QPersistentModelIndex(model.index(2,0))
+        model.sort(_col('title'))
+        self.assertEqual((first.row(),second.row()),(1,2))
+        model.sort(-1)
+        self.assertEqual((first.row(),second.row()),(0,2))
+
+    def test_search_with_unchanged_visible_rows_does_not_reset_or_lose_selection(self):
+        from PySide6.QtCore import QItemSelectionModel
+        model=TrackModel([dict(id=str(i),title='Common song '+str(i)) for i in range(4)])
+        selection=QItemSelectionModel(model)
+        selection.select(model.index(1,0),QItemSelectionModel.Select|QItemSelectionModel.Rows)
+        selection.select(model.index(3,0),QItemSelectionModel.Select|QItemSelectionModel.Rows)
+        visible=model._rows;reset=mock.Mock();model.modelReset.connect(reset)
+        for query in ('common','song','common song',''):
+            model.set_filter(query)
+            self.assertIs(model._rows,visible)
+            self.assertEqual([i.row() for i in selection.selectedRows()],[1,3])
+        reset.assert_not_called()
+
 
 class ArtColumn(unittest.TestCase):
     def test_glyphs_and_tooltips(self):
@@ -174,6 +213,20 @@ class DisplayRoles(unittest.TestCase):
 
 
 class AnalysisUpdates(unittest.TestCase):
+    def test_sorted_analysis_change_without_order_change_keeps_selection_and_updates_cell(self):
+        from PySide6.QtCore import QItemSelectionModel
+        model=TrackModel(_rows());model.sort(_col('bpm'))
+        selection=QItemSelectionModel(model)
+        selected=next(i for i,row in enumerate(model._rows) if row['id']=='1')
+        selection.setCurrentIndex(model.index(selected,_col('bpm')),
+            QItemSelectionModel.ClearAndSelect|QItemSelectionModel.Rows)
+        before=model._rows;reset=mock.Mock();changed=mock.Mock()
+        model.modelReset.connect(reset);model.dataChanged.connect(changed)
+        self.assertFalse(model.update_analysis('1',bpm='141.00'))
+        self.assertIs(model._rows,before);reset.assert_not_called();changed.assert_called_once()
+        self.assertEqual(model._rows[selection.currentIndex().row()]['id'],'1')
+        self.assertEqual(selection.currentIndex().data(),'141.00')
+
     def test_estimated_bpm_tooltip_requires_both_flag_and_value(self):
         m = TrackModel(_rows())
         index = m.index(0, _col('bpm'))

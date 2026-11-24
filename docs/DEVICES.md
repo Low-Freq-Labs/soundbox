@@ -292,8 +292,10 @@ progress. Physical commit truth remains separate from refresh success.
 
 Cancel stops queued work immediately and cooperatively stops the active plan
 or transaction. Device copy, hashing and Rockbox preparation check cancellation
-between bounded chunks; an interrupted generic export keeps its verified partial
-playlist/manifest so a later explicit export can resume. Cancellation does not
+between bounded chunks. Filesystem/Rockbox export can retain an honest partial
+M3U/manifest for a later Sync. Generic CDJ export instead retains its exact local
+intent/recovery and completed-payload proofs; an incomplete native catalog pair
+cannot publish as a successful export. Cancellation does not
 start another completion scan or claim a successful Sync. Captured source/catalog
 waits retire their own request without cancelling another device owner or any
 pending library edits. Foreground progress retains priority over metadata status.
@@ -835,7 +837,8 @@ model from its own prior sync plan. This display catalog grants no write
 authority. It deliberately does not key display memory by `DatabaseID`, which
 Apple changes during normal rewrites. Normal Export/Sync adds no plan question.
 Commit pins the mount and rechecks
-the database, pending play counts, every source hash, and every destination. It
+the database, pending play counts, source contracts and destination preconditions.
+Unchanged retained inventory is not freshly rehashed merely to keep it. It
 saves the original database/play-count bytes plus every replaced ArtworkDB and,
 for full compaction only, ithmb file under `.soundbox/stock-ipod-recovery/`.
 Incremental art records verified ranges and never overwrites a referenced slot.

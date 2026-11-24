@@ -73,6 +73,157 @@ class PlaylistPresentation(unittest.TestCase):
         self.assertFalse(self.controller.admission_error)
         return StateRepository(self.win._state_repository.path).load()['settings'].get(QUEUE,[])
 
+    def _prepare_track_move(self):
+        """Distinct occurrences share songs; no source file is opened."""
+        w = self.win; catalog = w.lib.source_playlist_catalog
+        catalog['members'] = [row for row in catalog['members'] if row['PlaylistID'] != '2'] + [
+            dict(ID=f'entry-{index}', UUID=f'00000000-0000-4000-8000-{index + 100:012d}', PlaylistID='2',
+                 ContentID=content, TrackNo=index, rb_local_deleted=0)
+            for index, content in enumerate(('42', '43', '42', '43'), 1)]
+        w.lib.playlists[0].keys = ['t', 'u', 't', 'u']
+        catalog['revision'] = planner.revision(catalog['nodes'], catalog['members'])
+        w._reload_current_view()
+        self.assertEqual([row['id'] for row in w.model._rows], ['t', 'u', 't', 'u'])
+        return w
+
+    def test_track_move_feedback_is_durable_atomic_and_preserves_duplicate_selection_and_masks(self):
+        w = self._prepare_track_move(); before = deepcopy(w.lib.source_playlist_catalog)
+        w.removals = {'2': {'u': 'keep-this-mask'}}
+        selection = w.table.selectionModel()
+        selection.setCurrentIndex(w.model.index(2, 1), QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows)
+        identity = w._native_row_identity(w.model._rows[2])
+        captured = w._capture_track_reorder([w.model._rows[2]])
+        anchor = deepcopy(w.model._rows[0]['_native_membership'])
+        with self.held_canonical():
+            self.assertTrue(w._drop_track_reorder(captured, anchor))
+            self.assertEqual([row['id'] for row in w.model._rows], ['t', 't', 'u', 'u'])
+            self.assertEqual(w._native_row_identity(w.model._rows[0]), identity)
+            self.assertEqual(w.table.currentIndex().row(), 0)
+            self.assertEqual(w.table.currentIndex().column(), 1)
+            self.assertEqual(w.lib.source_playlist_catalog, before)
+            self.source.assert_not_called()
+        jobs = self.durable()
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual([child['operation'] for child in jobs[0]['request']['requests']], ['remove', 'append'])
+        self.assertEqual(jobs[0]['removal_overlay']['entries'], [])
+        self.assertEqual(w.removals, {'2': {'u': 'keep-this-mask'}})
+        # A second drag binds the replacement occurrences already projected by
+        # the first durable envelope, without changing the verified source.
+        second = w._capture_track_reorder([w.model._rows[0]])
+        self.assertTrue(w._drop_track_reorder(second, None))
+        self.assertEqual([row['id'] for row in w.model._rows], ['t', 'u', 'u', 't'])
+        self.assertEqual(w._native_row_identity(w.model._rows[-1]), identity)
+        self.assertEqual(w.lib.source_playlist_catalog, before)
+        self.assertEqual(len(self.durable()), 2)
+
+    def test_track_move_rejects_stale_drag_and_does_not_reorder_filtered_or_sorted_views(self):
+        w = self._prepare_track_move()
+        captured = w._capture_track_reorder([w.model._rows[2]])
+        w.lib.source_playlist_catalog['members'][1]['UUID'] = 'changed-after-drag'
+        self.assertFalse(w._drop_track_reorder(captured, None))
+        self.assertEqual(self.controller.pending, [])
+        w.model.set_filter('Synthetic')
+        self.assertIsNone(w._capture_track_reorder(w.model._rows[:1]))
+        w.model.set_filter(''); w.model.sort(0)
+        self.assertIsNone(w._capture_track_reorder(w.model._rows[:1]))
+
+    def test_membership_move_reuses_prepared_rows_without_sidebar_or_artist_work(self):
+        w = self._prepare_track_move(); reset = mock.Mock(); w.model.modelReset.connect(reset)
+        capture = w._capture_track_reorder([w.model._rows[2]])
+        anchor = deepcopy(w.model._rows[0]['_native_membership'])
+        with mock.patch.object(w, '_populate_tree') as sidebar, \
+                mock.patch.object(w, '_prepare_artists') as artists, \
+                mock.patch.object(w, '_row_for') as derive:
+            self.assertTrue(w._drop_track_reorder(capture, anchor))
+            request = self.durable()[0]['request']
+            self.assertEqual([row['id'] for row in w.model._rows], ['t', 't', 'u', 'u'])
+            # Exact source-ACK cause survives removal of its queue row; the
+            # renderer must not infer a full refresh from an empty queue.
+            w._native_refresh_view(request)
+            sidebar.assert_not_called(); artists.assert_not_called(); derive.assert_not_called()
+        reset.assert_not_called()
+
+    def test_retry_after_failed_admission_reprojects_the_complete_saved_order(self):
+        w = self._prepare_track_move()
+        capture = w._capture_track_reorder([w.model._rows[2]])
+        anchor = deepcopy(w.model._rows[0]['_native_membership'])
+        with mock.patch.object(w._state_repository, 'commit_patch', side_effect=OSError('Fixture disk full')):
+            self.assertTrue(w._drop_track_reorder(capture, anchor)); self.failed_admission()
+        w._reload_current_view()
+        self.assertEqual([row['id'] for row in w.model._rows], ['t', 'u', 't', 'u'])
+        self.assertTrue(self.controller.retry())
+        self.assertEqual([row['id'] for row in w.model._rows], ['t', 't', 'u', 'u'])
+        self.durable()
+        self.assertEqual([row['id'] for row in w.model._rows], ['t', 't', 'u', 'u'])
+
+    def test_track_table_self_drag_reaches_atomic_membership_intention(self):
+        from types import SimpleNamespace
+        from PySide6.QtCore import QPointF, Qt
+        w = self._prepare_track_move(); table = w.table
+        table.selectRow(2)
+        accepted = []
+        event = SimpleNamespace(source=lambda: table, position=lambda: QPointF(table.visualRect(w.model.index(0, 0)).topLeft()),
+                                accept=lambda: accepted.append(True), setDropAction=lambda action: None)
+        def drag(*args, **kwargs):
+            self.assertIsNotNone(table._track_reorder_capture)
+            table.dragMoveEvent(event)
+            self.assertIsNotNone(table._reorder_line)
+            table.dropEvent(event)
+        with mock.patch('desktop.trees._start_chip_drag', side_effect=drag):
+            table.startDrag(Qt.CopyAction)
+        self.assertEqual(len(accepted), 2)
+        self.assertIsNone(table._track_reorder_capture)
+        self.assertIsNone(table._reorder_line)
+        self.assertEqual([row['id'] for row in w.model._rows], ['t', 't', 'u', 'u'])
+        self.assertEqual(len(self.durable()), 1)
+
+    def test_track_reorder_autoscrolls_long_sets_and_stops_on_leave(self):
+        from types import SimpleNamespace
+        from PySide6.QtCore import QPointF
+        w = self._prepare_track_move(); catalog = w.lib.source_playlist_catalog
+        catalog['members'] = [row for row in catalog['members'] if row['PlaylistID'] != '2'] + [
+            dict(ID=f'long-{i}', UUID=f'00000000-0000-4000-8000-{i + 200:012d}', PlaylistID='2',
+                 ContentID='42', TrackNo=i, rb_local_deleted=0) for i in range(1, 121)]
+        w.lib.playlists[0].keys = ['t'] * 120
+        catalog['revision'] = planner.revision(catalog['nodes'], catalog['members'])
+        w._reload_current_view(); w.resize(1100, 900); w.show(); self.app.processEvents()
+        table = w.table; bar = table.verticalScrollBar(); bar.setValue(0)
+        self.assertGreater(bar.maximum(), 1)
+        table._track_reorder_capture = w._capture_track_reorder([w.model._rows[0]])
+        event = SimpleNamespace(source=lambda: table,
+                                position=lambda: QPointF(20, table.viewport().height() - 2),
+                                accept=lambda: None, setDropAction=lambda action: None)
+        table.dragMoveEvent(event); self.assertTrue(table._reorder_scroll_timer.isActive())
+        table._reorder_autoscroll(); self.assertGreater(bar.value(), 0)
+        table._set_reorder_line(None); self.assertFalse(table._reorder_scroll_timer.isActive())
+        table._track_reorder_capture = None
+
+    def test_track_move_keeps_typed_duplicate_draft_bound_to_the_same_occurrence(self):
+        from PySide6.QtTest import QTest
+        from PySide6.QtWidgets import QLineEdit
+        w = self._prepare_track_move(); w.show(); w.activateWindow(); w.raise_(); QTest.qWait(40)
+        index = w.model.index(1, 0)
+        w.table.setCurrentIndex(index); w.table.edit(index); self.app.processEvents()
+        editor = w.table.findChild(QLineEdit)
+        self.assertIsNotNone(editor)
+        editor.setFocus(); self.app.processEvents()
+        self.assertTrue(editor.hasFocus(), 'The synthetic draft editor must own native focus before the drag')
+        editor.selectAll(); QTest.keyClicks(editor, 'Keep this unsaved text')
+        editor.setSelection(5, 7)
+        identity = w._native_row_identity(w.model._rows[1])
+        # Move another occurrence to the front, replacing its neighboring tail
+        # memberships; the open editor remains song-bound.
+        captured = w._capture_track_reorder([w.model._rows[2]])
+        self.assertTrue(w._drop_track_reorder(captured, w.model._rows[0]['_native_membership']))
+        self.app.processEvents()
+        editors = w.table.findChildren(QLineEdit)
+        self.assertTrue(editors)
+        replacement = next(value for value in editors if value.isVisible() and value.text() == 'Keep this unsaved text')
+        self.assertTrue(replacement.isModified())
+        self.assertEqual(replacement.selectedText(), 'this un')
+        self.assertEqual(w._native_row_identity(w.model._rows[w.table.currentIndex().row()]), identity)
+        self.durable()
+
     def failed_admission(self):
         self.wait(lambda:bool(self.controller.admission.error) and not self.controller.admission.active
                   and not self.win._state_publication)
@@ -398,7 +549,7 @@ class PlaylistPresentation(unittest.TestCase):
     def test_membership_feedback_preserves_order_and_source_rows_until_save(self):
         before=deepcopy(self.win.lib.source_playlist_catalog)
         self.win._native_append('2',['u'])
-        self.assertEqual([r['id'] for r in self.win.model._rows],['u','t'])
+        self.assertEqual([r['id'] for r in self.win.model._rows],['t','u'])
         self.assertEqual(self.win._native_view_playlist('Folder / Delete').keys,['t','u'])
         self.win._native_remove('Folder / Delete',['t'])
         self.assertEqual([r['id'] for r in self.win.model._rows],['u'])

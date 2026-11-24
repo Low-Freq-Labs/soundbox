@@ -914,8 +914,8 @@ class WaveformFillWorker(QThread):
 
     Rekordbox analysis is imported read-only into SoundBox-owned records.
     Source audio is decoded by libsndfile or Qt's QAudioDecoder for AAC/ALAC.
-    A verified V4 can be reduced losslessly to V5 one record at a time; its
-    source V4 is retired only after the V5 payload passes a complete audit.
+    Signed-mip V5 remains playable while a complete imported compact upgrade
+    prepares; atomic publication replaces it only after the new record is ready.
 
     Runs off the UI thread and honors requestInterruption().
     Preparation yields inside the current track during playback and interaction
@@ -1199,10 +1199,7 @@ class WaveformFillWorker(QThread):
             imported_waveforms_need_sync,
             is_dataless_source,
             is_ready as track_is_ready,
-            legacy_cache_path,
             merge_import,
-            migrate_v4,
-            retire_legacy_record,
             store as track_store,
             update_grid_source,
             update_imported_cues,
@@ -1247,8 +1244,7 @@ class WaveformFillWorker(QThread):
                     source_cues = getattr(t, "source_cues", None)
                     paths = [t.path]
                     if self.track_analysis_dir:
-                        paths += [analysis.cache_path(self.track_analysis_dir, track_id),
-                                  analysis.legacy_cache_path(self.track_analysis_dir, track_id)]
+                        paths.append(analysis.cache_path(self.track_analysis_dir, track_id))
                     if analysis_path:
                         dat = Path(analysis_path)
                         paths += [dat, dat.with_suffix('.EXT'), dat.with_suffix('.2EX')]
@@ -1295,10 +1291,8 @@ class WaveformFillWorker(QThread):
                             # boundary.
                             if dataless:
                                 continue
-                            legacy = legacy_cache_path(
-                                self.track_analysis_dir, track_id)
                             todo.append((
-                                "v4-migrate" if legacy.is_file() else "v5",
+                                "v5",
                                 audio_path, str(analysis_path or ""),
                                 track_id, bpm_hint, source_cues, None))
                             continue
@@ -1318,7 +1312,7 @@ class WaveformFillWorker(QThread):
                     if fallback_modes or compact_pending:
                         current_import = read_analysis(analysis_path, packed_only=True)
                         if compact_pending and complete_import(current_import):
-                            # A playable legacy V5 is not finished preparation.
+                            # A playable signed-mip V5 is not finished preparation.
                             # Upgrade local complete imports without waiting for
                             # selection, keeping the old record until publication.
                             todo.append((
@@ -1379,7 +1373,7 @@ class WaveformFillWorker(QThread):
         self._bulk_task_count = total
         task_counts = {
             kind: sum(task[0] == kind for task in todo)
-            for kind in ("v5", "v4-migrate", "compact", "grid-meta", "cue-meta")
+            for kind in ("v5", "compact", "grid-meta", "cue-meta")
         }
         if adopted_identities:
             LOG.info(
@@ -1390,7 +1384,7 @@ class WaveformFillWorker(QThread):
             "Library preparation: %d task(s) "
             "(%d analysis, %d compact upgrades, %d grid metadata, %d cue metadata)",
             total,
-            task_counts["v5"] + task_counts["v4-migrate"],
+            task_counts["v5"],
             task_counts["compact"],
             task_counts["grid-meta"],
             task_counts["cue-meta"],
@@ -1407,14 +1401,14 @@ class WaveformFillWorker(QThread):
             if priority:
                 task_index = next(
                     (j for j, task in enumerate(todo)
-                     if task[0] in {"v5", "v4-migrate", "compact"}
+                     if task[0] in {"v5", "compact"}
                      and task[1] == priority),
                     0,
                 )
             (kind, path, fallback_path, track_id, bpm_hint, imported_cues,
              imported_beats) = todo.pop(task_index)
             self._active_task_path = (
-                path if kind in {"v5", "v4-migrate", "compact"} else "")
+                path if kind in {"v5", "compact"} else "")
             i += 1
             if self._track_is_hidden(track_id):
                 if self.track_analysis_dir:
@@ -1428,11 +1422,11 @@ class WaveformFillWorker(QThread):
             if self.isInterruptionRequested():
                 break
             try:
-                if kind in {"v5", "v4-migrate", "compact"}:
+                if kind in {"v5", "compact"}:
                     # Unit tests exercise ``run`` synchronously. Production
                     # always reaches this path through QThread.start().
                     if self.isRunning() and not self._wait_for_storage(
-                            reclaiming=kind in {"v4-migrate", "compact"}):
+                            reclaiming=kind == "compact"):
                         break
                     # The source may have been evicted since planning or while
                     # waiting for playback/storage. Recheck at the I/O boundary.
@@ -1449,20 +1443,6 @@ class WaveformFillWorker(QThread):
                         # bulk worker waited. Never decode a finished upgrade.
                         self.progress.emit(i, total)
                         self._active_task_path = ""
-                        continue
-                    if (
-                            kind == "v4-migrate"
-                            and self.cache_writes.publish(track_id, lambda: migrate_v4(
-                                self.track_analysis_dir, track_id, path))):
-                        if self._track_is_hidden(track_id):
-                            discard_records(
-                                self.track_analysis_dir, (track_id,))
-                        else:
-                            done += 1
-                            self.detail_ready.emit(path)
-                            self._publish_bpm(self.lib.tracks_by_id[track_id])
-                        self.progress.emit(i, total)
-                        time.sleep(self.DELAY)
                         continue
                     # Inspect provider streams before spending CPU on fallback
                     # colors, FFT bands or beat detection.
@@ -1503,8 +1483,6 @@ class WaveformFillWorker(QThread):
                                 discard_records(
                                     self.track_analysis_dir, (track_id,))
                             else:
-                                retire_legacy_record(
-                                    self.track_analysis_dir, track_id, path)
                                 done += 1
                                 if track_id in self.force_track_ids:
                                     self.completed_forced_track_ids.add(track_id)
@@ -1634,7 +1612,7 @@ class ProgressTask(QThread):
 
 
 class _OneShotArt(QThread):
-    """A single art fetch (manual 'fetch now' / paste-URL), off the UI thread."""
+    """Fetch/read and normalize immutable image bytes before GUI publication."""
     done = Signal(str, object)  # track_id, ArtResult | None | Exception
 
     def __init__(self, tid, fn, *, provider=None):
@@ -1643,6 +1621,9 @@ class _OneShotArt(QThread):
         self.fn = fn
         self.provider = provider
         self._cancelled = threading.Event()
+        self.result = None
+        self.requires_save = False
+        self.local = False
 
     def stop(self):
         self._cancelled.set()
@@ -1652,11 +1633,19 @@ class _OneShotArt(QThread):
             with provider_operation(self.provider,
                     lambda:self._cancelled.is_set() or self.isInterruptionRequested()):
                 res = self.fn()
+                from soundbox.artwork import ArtResult
+                if (isinstance(res, ArtResult) and not self._cancelled.is_set()
+                        and not self.isInterruptionRequested()):
+                    from soundbox.artencode import ensure_device_safe
+                    res = replace(res, data=ensure_device_safe(bytes(res.data)))
+            if self._cancelled.is_set() or self.isInterruptionRequested():
+                raise OperationCancelled('Artwork preparation was cancelled')
         except Exception as exc:  # noqa: BLE001 — surfaced to the UI + log
             # NEVER collapse a failure into "no art found": a network error and
             # a genuinely artless page are different answers (a swallowed
             # exception here once made a working URL look art-less).
             res = exc
+        self.result = res
         self.done.emit(self.tid, res)
 
 

@@ -1,10 +1,51 @@
 import unittest
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
+from unittest import mock
+
+from hypothesis import given, settings, strategies as st
 
 from soundbox.paths import (
     decode_location, device_music_path, is_external_device_path, is_within,
-    sanitize_component,
+    sanitize_component, top_level_paths,
 )
+
+
+class SelectedTopLevelPaths(unittest.TestCase):
+    @staticmethod
+    def original(paths):
+        output = []
+        for path in paths:
+            if any(existing == path or existing in path.parents for existing in output):
+                continue
+            output = [existing for existing in output if path not in existing.parents]
+            output.append(path)
+        return output
+
+    def test_later_ancestors_remove_children_without_reordering_other_selections(self):
+        paths = list(map(Path, ['Music/A/song.wav', 'Music/B/song.wav', 'Music/A',
+                                'Music/A', 'Music/C/song.wav', 'Music/C/./song.wav']))
+        before = list(paths)
+        self.assertEqual(top_level_paths(paths), list(map(Path, ['Music/B/song.wav', 'Music/A', 'Music/C/song.wav'])))
+        self.assertEqual(paths, before)
+
+    def test_lexical_roots_case_unicode_and_parent_components_keep_path_semantics_without_io(self):
+        paths = list(map(Path, ['/Music/A', '/music/A', '//Music/A', 'Music/../A/song.wav',
+                               'Music/..', 'Café/song.wav', 'Cafe\u0301/song.wav', '/Music/A/./song.wav']))
+        with (mock.patch.object(Path, 'resolve', side_effect=AssertionError('Resolved a selection')),
+              mock.patch.object(Path, 'stat', side_effect=AssertionError('Inspected a selection')),
+              mock.patch.object(Path, 'open', side_effect=AssertionError('Opened a selection'))):
+            self.assertEqual(top_level_paths(iter(paths)), self.original(paths))
+        self.assertEqual(top_level_paths([Path('.'), Path('Music/A')]), [Path('.')])
+        windows = list(map(PureWindowsPath, ['C:/Music/A/song.wav', 'c:/music/A',
+                                           'D:/Music/A/song.wav', '//server/share/Music',
+                                           '//server/share/Music/song.wav']))
+        self.assertEqual(top_level_paths(windows), self.original(windows))
+
+    @settings(max_examples=150, deadline=None)
+    @given(st.lists(st.lists(st.sampled_from(['Music', 'A', 'a', '.', '..', 'Café', 'Cafe\u0301', 'song.wav']),
+                             min_size=0, max_size=5).map(lambda parts: Path(*parts)), max_size=30))
+    def test_matches_original_selection_reduction_for_arbitrary_order_and_duplicates(self, paths):
+        self.assertEqual(top_level_paths(paths), self.original(paths))
 
 
 class TestDecode(unittest.TestCase):

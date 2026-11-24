@@ -1,4 +1,4 @@
-"""Read-only V4/V5 lifecycle coverage audit."""
+"""Read-only current V5 lifecycle coverage audit."""
 
 from __future__ import annotations
 
@@ -51,7 +51,7 @@ class AnalysisAudit(unittest.TestCase):
         self.assertEqual(result["hidden_tracks"], 1)
         self.assertEqual(result["total_tracks"], 0)
         self.assertEqual(result["missing_analysis"], [])
-        self.assertTrue(result["safe_to_retire_v4"])
+        self.assertTrue(result["complete"])
 
         stored = store(
             self.data / "track_analysis", "1", self.audio,
@@ -82,12 +82,12 @@ class AnalysisAudit(unittest.TestCase):
         result = audit(self.data, full=True)
         self.assertEqual(result["ready"], 0)
         self.assertEqual(result["current_v5"], 0)
-        self.assertEqual(result["playable_legacy_v4"], 0)
+        self.assertNotIn("playable_legacy_v4", result)
         self.assertEqual(result["needs_current_analysis"], [])
-        self.assertTrue(result["safe_to_retire_v4"])
+        self.assertTrue(result["complete"])
         self.assertEqual(
             result["orphan_v5_records"], [stored.name])
-        self.assertEqual(result["orphan_v4_records"], [])
+        self.assertEqual(result["unsupported_records"], [])
 
     def test_imported_track_is_included(self):
         imported_audio = self.data / "imported.wav"
@@ -117,33 +117,33 @@ class AnalysisAudit(unittest.TestCase):
             result = audit(self.data, full=True)
         self.assertEqual(result["deferred_dataless"], ["1"])
         self.assertEqual(result["missing_analysis"], [])
-        self.assertFalse(result["safe_to_retire_v4"])
+        self.assertFalse(result["complete"])
 
     def test_corrupt_v5_is_invalid_analysis_never_playable_v4(self):
         (self.data / "library.json").write_text("{}", encoding="utf-8")
         data = track_analysis.analyze_soundfile(self.audio)
         record = store(self.data / "track_analysis", "1", self.audio, data)
-        self.assertTrue(audit(self.data, full=True)["safe_to_retire_v4"])
+        self.assertTrue(audit(self.data, full=True)["complete"])
         damaged = bytearray(record.read_bytes())
         damaged[-1] ^= 1
         record.write_bytes(damaged)
         result = audit(self.data, full=True)
         self.assertEqual(result["invalid_analysis"], ["1"])
-        self.assertEqual(result["playable_legacy_v4"], 0)
-        self.assertFalse(result["safe_to_retire_v4"])
+        self.assertNotIn("playable_legacy_v4", result)
+        self.assertFalse(result["complete"])
 
     def test_missing_source_and_orphan_v4_block_retirement(self):
         (self.data / "library.json").write_text("{}", encoding="utf-8")
         with mock.patch.object(Path, "is_file", return_value=False):
             result = audit(self.data, full=True)
         self.assertEqual(result["missing_source"], ["1"])
-        self.assertFalse(result["safe_to_retire_v4"])
+        self.assertFalse(result["complete"])
         (self.data / "library.json").write_text(
             json.dumps({"hidden_tracks": ["1"]}), encoding="utf-8")
         cache = self.data / "track_analysis"
         cache.mkdir()
         (cache / "orphan.sba4").write_bytes(b"unverified legacy record")
-        self.assertFalse(audit(self.data, full=True)["safe_to_retire_v4"])
+        self.assertFalse(audit(self.data, full=True)["complete"])
 
 
 if __name__ == "__main__":

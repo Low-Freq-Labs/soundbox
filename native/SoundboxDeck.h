@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-#define SB_DECK_ABI_VERSION 6u
+#define SB_DECK_ABI_VERSION 9u
 
 typedef void *SBDeckRef;
 
@@ -143,6 +143,10 @@ int sb_deck_set_waveform_streams_for_generation(
     size_t three_band_count,
     double samples_per_second);
 int sb_deck_set_waveform_mode(SBDeckRef deck, uint32_t mode);
+int sb_deck_set_blue_overview_for_generation(
+    SBDeckRef deck, uint64_t generation, const uint8_t *rows, size_t row_count);
+int sb_deck_set_three_band_overview_for_generation(
+    SBDeckRef deck, uint64_t generation, const uint8_t *rows, size_t row_count);
 uint32_t sb_deck_waveform_mode(SBDeckRef deck);
 int sb_deck_set_spectral_analysis(
     SBDeckRef deck,
@@ -225,6 +229,11 @@ double sb_deck_presentation_error_stddev_ms(SBDeckRef deck);
 double sb_deck_presentation_error_max_ms(SBDeckRef deck);
 void sb_deck_reset_display_stats(SBDeckRef deck);
 int sb_deck_begin_frame_trace(
+    SBDeckRef deck,
+    uint32_t max_frames,
+    uint32_t crop_width_pixels);
+/* Bounded drawable trace including the mini waveform and its cue markers. */
+int sb_deck_begin_surface_trace(
     SBDeckRef deck,
     uint32_t max_frames,
     uint32_t crop_width_pixels);

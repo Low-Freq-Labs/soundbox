@@ -378,6 +378,58 @@ class SelectedDatabase(unittest.TestCase):
 
 
 class MyTags(unittest.TestCase):
+    def test_raw_tag_links_preserve_offsets_duplicate_time_and_deleted_endpoints_without_orm(self):
+        from datetime import datetime
+        from types import SimpleNamespace
+        from sqlalchemy import create_engine
+        definitions=[Row(ID='category',Name='Genre',Attribute=1,ParentID='root',Seq=1),
+            Row(ID='active',Name='Genre',Attribute=0,ParentID='category',Seq=1),
+            Row(ID='gone',Name='Gone',Attribute=0,ParentID='category',Seq=2,rb_local_deleted=1)]
+        links=[('first','active',0,'2026-11-01 01:30:00.000 -05:00'),
+            ('first','active',0,'2026-11-01 01:15:00.000 -06:00'),
+            ('first','gone',0,'2026-11-01 01:30:00.000 -06:00'),
+            ('deleted','active',1,'2026-11-01 01:30:00.000 -06:00'),
+            ('unknown','active',0,'2026-11-01 01:30:00.000')]
+        engine=create_engine('sqlite:///:memory:');self.addCleanup(engine.dispose)
+        with engine.connect() as connection:
+            connection.exec_driver_sql('CREATE TABLE djmdSongMyTag '
+                '(ContentID TEXT,MyTagID TEXT,rb_local_deleted INTEGER,created_at TEXT)')
+            connection.exec_driver_sql('INSERT INTO djmdSongMyTag VALUES(?,?,?,?)',links)
+            orm=mock.Mock(side_effect=AssertionError('No ORM link construction'))
+            db=SimpleNamespace(session=SimpleNamespace(connection=lambda:connection),
+                get_my_tag=lambda:definitions,get_my_tag_songs=orm)
+            times={};tags,memberships=_read_tags(db,assignment_times=times)
+            self.assertEqual([tag.tag_id for tag in tags],['active'])
+            self.assertEqual(memberships,{'first':['active'],'unknown':['active']})
+            self.assertEqual(times,{'first':{'active':datetime.fromisoformat('2026-11-01T01:15:00-06:00').timestamp()}})
+            connection.exec_driver_sql("UPDATE djmdSongMyTag SET rb_local_deleted=1 WHERE ContentID='first'")
+            self.assertEqual(_read_tags(db)[1],{'unknown':['active']})
+            orm.assert_not_called()
+
+    def test_selected_raw_tag_reads_bound_sql_parameters_and_skip_unselected_rows(self):
+        from types import SimpleNamespace
+        from sqlalchemy import create_engine
+        definitions=[Row(ID='category',Name='Genre',Attribute=1,ParentID='root',Seq=1),
+            Row(ID='active',Name='Tag',Attribute=0,ParentID='category',Seq=1)]
+        engine=create_engine('sqlite:///:memory:');self.addCleanup(engine.dispose)
+        with engine.connect() as connection:
+            connection.exec_driver_sql('CREATE TABLE djmdSongMyTag '
+                '(ContentID TEXT,MyTagID TEXT,rb_local_deleted INTEGER,created_at TEXT)')
+            selected={str(index) for index in range(1001)}|{"quote' bound"}
+            connection.exec_driver_sql('INSERT INTO djmdSongMyTag VALUES(?,?,?,?)',
+                [(key,'active',0,'2026-11-01 01:30:00.000 -05:00') for key in [*selected,'unselected']])
+            db=SimpleNamespace(session=SimpleNamespace(connection=lambda:connection),get_my_tag=lambda:definitions)
+            with mock.patch.object(connection,'exec_driver_sql',wraps=connection.exec_driver_sql) as sql:
+                times={};_tags,memberships=_read_tags(db,track_ids=selected,assignment_times=times)
+                self.assertEqual(len(sql.call_args_list),3)
+                self.assertTrue(all(len(call.args[1])<=500 for call in sql.call_args_list))
+                self.assertTrue(all("quote' bound" not in call.args[0] for call in sql.call_args_list))
+                self.assertEqual(set(memberships),selected)
+                self.assertEqual(set(times),selected)
+                sql.reset_mock()
+                self.assertEqual(_read_tags(db,track_ids=set())[1],{})
+                sql.assert_not_called()
+
     def test_flat_order_uses_categories_and_leaf_sequence_without_merging_names(self):
         categories = [Row(ID='c2',Name='Components',Attribute=1,ParentID='root',Seq=2),
                       Row(ID='c1',Name='Genre',Attribute=1,ParentID='root',Seq=1)]

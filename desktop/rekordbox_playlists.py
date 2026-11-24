@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from collections import defaultdict, deque
+from collections import Counter, defaultdict, deque
 from dataclasses import replace
 import json
 import logging
@@ -14,6 +14,7 @@ from PySide6.QtWidgets import QInputDialog, QMessageBox
 
 from soundbox import engine
 from soundbox import playlist_creation_placement as creation_placement
+from soundbox.playlist_membership_replay import ENCODING as MEMBERSHIP_REPLAY
 from soundbox.library import Playlist
 from soundbox.rekordbox_playlist_plan import smart_tag_rule, ordinary_request_reason
 from soundbox.rekordbox_playlist_store import (PlaylistStore, load_authority, request_for, validate_request,
@@ -30,6 +31,12 @@ from .trees import (ARTISTS_ROLE, COLLECTION_ROLE, CUSTOM_ROLE, NATIVE_TREE_ROLE
 
 QUEUE='rekordbox_playlist_edits'
 LOG=logging.getLogger('soundbox')
+
+
+def _membership_order_ids(requests):
+    """Exact UI cause from validated marked intents, including a retired ACK."""
+    if not requests or any(request.get('plan_encoding') != MEMBERSHIP_REPLAY for request in requests):return None
+    return frozenset(request['requests'][0]['playlist_id'] for request in requests)
 _REMOVAL_OVERLAY='soundbox-playlist-removal-overlay-v1'
 _TAG_CREATION_DEPENDENCY_FIELDS=frozenset(('source','library_id','operation_id','tag_id',
     'tag_uuid','name','category_id','category_uuid'))
@@ -77,6 +84,12 @@ def _validate_removal_overlay(proof,request):
 
 def _capture_removal_overlay(request,removals,library,selected_tracks=()):
     """Capture only selected keys, using already-selected logical aliases."""
+    # Atomic membership moves remove/reappend occurrences without removing a
+    # logical song. Those masks still belong to the user after acknowledgement.
+    counts = {operation: Counter((command['playlist_id'], command['playlist_uuid'],
+                                 pin['track_id'], pin['uuid'])
+                                for command in command_requests(request) if command['operation'] == operation
+                                for pin in command['tracks']) for operation in ('remove', 'append')}
     aliases=defaultdict(dict)
     for track in selected_tracks:aliases[(track.native_id,track.source_uuid)][track.track_id]=None
     entries=[];seen=set();captured=set()
@@ -86,6 +99,7 @@ def _capture_removal_overlay(request,removals,library,selected_tracks=()):
         if not isinstance(bag,dict):raise ValueError('Saved playlist removal overlay needs attention')
         for pin in command['tracks']:
             group=(command['playlist_id'],command['playlist_uuid'],pin['track_id'],pin['uuid'])
+            if counts['remove'][group] <= counts['append'][group]:continue
             if group in captured:continue
             captured.add(group)
             current=library.tracks_by_id.get(pin['track_id'])
@@ -206,7 +220,17 @@ def _catalog_collection_pins(library,catalog,request,groups):
 
 
 class _PlaylistIntentAdmission(SourceIntentAdmission):
+    def retry(self):
+        accepted = super().retry()
+        identities = _membership_order_ids([job['request'] for job in self.staged])
+        if accepted and identities is not None:
+            self.window._native_pending_changed(rebuild=True, membership_order=identities)
+        return accepted
+
     def pump(self,*,allow_shutdown=False):
+        if not self.active:
+            jobs = [*self._base, *self.staged] if self._discarding else self.staged
+            self.feedback_requests = tuple(job['request'] for job in jobs)
         if (self.pending and not self.active and not self.error and not self.stopping
                 and not self._discarding and self._current()):
             for job in self.staged:
@@ -221,6 +245,11 @@ class _PlaylistIntentAdmission(SourceIntentAdmission):
 
 
 class PlaylistEditController(QObject):
+    @staticmethod
+    def copy_intents(value):
+        from soundbox.playlist_track_order import copy_intents
+        return copy_intents(value)
+
     def __init__(self, window, *, store_factory=None):
         super().__init__(window);self.window=window;self.tags=window.tag_controller
         self.factory=store_factory;self.closing=False;self.not_before=0.0
@@ -252,7 +281,12 @@ class PlaylistEditController(QObject):
             self.status('Playlist intention NOT saved — '+self.admission.error)
             w._flash_status('Playlist intention NOT saved — retry or discard the pending intention',15)
         else:
-            w._native_pending_changed(rebuild=True)
+            order_ids = _membership_order_ids(getattr(self.admission, 'feedback_requests', ()))
+            # Staged -> durable preserves this exact projected order. No new
+            # body/sidebar/Artists presentation is needed for that ACK alone.
+            if outcome != 'saved' or order_ids is None:
+                options = dict(membership_order=order_ids) if order_ids is not None else {}
+                w._native_pending_changed(rebuild=True, **options)
             if outcome=='discarded':self.status('');w._native_reconcile_source()
             else:self.status('Updating playlist…');self.schedule()
 
@@ -621,7 +655,7 @@ class PlaylistEditController(QObject):
         # clock a few milliseconds ahead. A rapid subsequent gesture must
         # advance that exact queued clock before its own durable admission.
         # Never infer it from SQL time or read source XML on the GUI thread.
-        request=deepcopy(request);clocks={}
+        request=self.copy_intents(request);clocks={}
         for pending in self.pending:
             if (pending['source']!=str(self.window.lib.source)
                     or pending['library_id']!=self.window.lib.source_library_id):continue
@@ -639,7 +673,8 @@ class PlaylistEditController(QObject):
             except (ValueError,KeyError,TypeError) as exc:w._flash_status(str(exc),10);return False
         if callable(getattr(w,'_commit_tag_state',None)):
             if not self.admission.stage(job,paired_settings=paired_settings):return False
-            w._native_pending_changed(rebuild=True)
+            options = dict(membership_order=_membership_order_ids([request])) if 'plan_encoding' in request else {}
+            w._native_pending_changed(rebuild=True, **options)
             self.status('Creating smart playlist…' if request['operation'] in CREATE_SMART_OPERATIONS else 'Updating playlist…')
             self.admission.pump();self.schedule()
             LOG.info('Playlist intention staged: operation=%s feedback_ms=%.2f',
@@ -656,7 +691,8 @@ class PlaylistEditController(QObject):
                 else:w.settings.pop(key,None)
             return False
         admitted=time.monotonic()
-        w._native_pending_changed(rebuild=True)
+        options = dict(membership_order=_membership_order_ids([request])) if 'plan_encoding' in request else {}
+        w._native_pending_changed(rebuild=True, **options)
         LOG.info('Playlist intent admitted: operation=%s persist_ms=%.2f feedback_ms=%.2f',
                  request['operation'],(admitted-started)*1000,(time.monotonic()-started)*1000)
         self.status('Updating playlist…');self.schedule();return True
@@ -1028,19 +1064,22 @@ class PlaylistEditController(QObject):
 class NativePlaylistsMixin:
     @staticmethod
     def _native_row_identity(row):
+        occurrence = row.get('_native_occurrence')
+        if occurrence is not None:
+            return occurrence
         pin = row.get('_native_membership')
         if isinstance(pin, dict):
-            return ('native-membership', *(pin.get(field) for field in
-                ('source', 'library_id', 'playlist_id', 'playlist_uuid', 'ID', 'UUID', 'ContentID', 'track_uuid')))
+            return ('native-membership', pin.get('source'), pin.get('library_id'), pin.get('playlist_id'),
+                    pin.get('playlist_uuid'), pin.get('ID'), pin.get('UUID'), pin.get('ContentID'), pin.get('track_uuid'))
         return ('track', row.get('id'))
 
-    def _native_membership_rows(self, playlist, rows):
+    def _native_membership_rows(self, playlist, rows, *, presentation=None):
         """Give each ordinary browser occurrence its own immutable source pins.
 
         Track display dictionaries may be cached/shared. Copy each occurrence
         before attaching view-specific identity, including repeated songs.
         """
-        library = self._native_presentation()
+        library = self._native_presentation() if presentation is None else presentation
         if not library or library.source_kind != 'rekordbox-db':
             return rows
         catalog = library.source_playlist_catalog
@@ -1057,6 +1096,7 @@ class NativePlaylistsMixin:
         for row in rows:
             copied = dict(row)
             copied.pop('_native_membership', None)
+            copied.pop('_native_occurrence', None)
             choices = members.get(row.get('id'))
             if choices:
                 member = choices.popleft()
@@ -1065,8 +1105,69 @@ class NativePlaylistsMixin:
                     playlist_id=playlist.pid, playlist_uuid=target['UUID'], ID=member['ID'], UUID=member['UUID'],
                     PlaylistID=member['PlaylistID'], ContentID=member['ContentID'],
                     track_uuid=track.source_uuid if track else None)
+                identity = self._native_row_identity(copied)
+                occurrence = getattr(self, '_native_occurrence_aliases', {}).get(identity)
+                if occurrence is not None:copied['_native_occurrence'] = occurrence
             result.append(copied)
         return result
+
+    def _capture_track_reorder(self, rows):
+        """Pin one manual drag before Qt's nested drag loop can refresh rows."""
+        key = getattr(self, '_view_key', '') or ''
+        if (not key.startswith('rb:') or not rows or self.model._sort or self.model._filter
+                or self._shutting_down or self._state_maintenance):return None
+        library = self._native_presentation()
+        playlist = self._native_view_playlist(key[3:])
+        node = self._native_node(playlist.pid) if playlist else None
+        if not library or library.source_kind != 'rekordbox-db' or not node or node['Attribute'] != 0:return None
+        pins = [row.get('_native_membership') for row in rows]
+        scope = (str(library.source), library.source_library_id, playlist.pid, node['UUID'])
+        if any(not isinstance(pin, dict) or tuple(pin.get(field) for field in
+               ('source', 'library_id', 'playlist_id', 'playlist_uuid')) != scope for pin in pins):return None
+        members = sorted((row for row in library.source_playlist_catalog['members']
+                          if row['PlaylistID'] == playlist.pid and row['rb_local_deleted'] == 0),
+                         key=lambda row: row['TrackNo'])
+        return dict(scope=scope, view=key, revision=library.source_playlist_catalog['revision'],
+                    selected=deepcopy(pins), members=deepcopy(members),
+                    tracks=tuple((track.track_id, track.native_id, track.source_uuid)
+                                 for track in library.tracks_by_id.values()),
+                    visible=tuple(self._native_row_identity(row) for row in self.model._rows))
+
+    def _drop_track_reorder(self, captured, anchor, after=False):
+        """Admit one accepted atomic remove/append envelope; never mutate source rows here."""
+        from soundbox.playlist_track_order import request as reorder_request
+        if self._shutting_down or self._state_maintenance:return False
+        current = self._capture_track_reorder(self.model._rows[:1])
+        if (not current or any(current[key] != captured[key] for key in
+                             ('scope', 'view', 'revision', 'members', 'tracks', 'visible'))):
+            self._flash_status('The playlist changed during the drag; choose its songs again', 10);return False
+        library = self._native_presentation()
+        try:
+            request, replacements = reorder_request(library, captured['scope'][2], captured['selected'],
+                                                    anchor, after=after)
+        except (ValueError, KeyError, WriteProofError) as exc:
+            self._flash_status(str(exc), 10);return False
+        if request is None:return True
+        previous = getattr(self, '_native_occurrence_aliases', {})
+        current_ids = {row['ID'] for source in (self.lib, library)
+                       for row in source.source_playlist_catalog['members'] if row['rb_local_deleted'] == 0}
+        aliases = {identity: original for identity, original in previous.items() if identity[5] in current_ids}
+        # Replacement memberships retain their exact desktop occurrence identity,
+        # so pending feedback/readback cannot lose duplicate selection or drafts.
+        tracks = {track.native_id: track for track in library.tracks_by_id.values()}
+        for old, new in replacements:
+            pin = dict(source=captured['scope'][0], library_id=captured['scope'][1],
+                       playlist_id=captured['scope'][2], playlist_uuid=captured['scope'][3],
+                       ID=old['ID'], UUID=old['UUID'], ContentID=old['ContentID'],
+                       track_uuid=tracks[old['ContentID']].source_uuid)
+            old_identity = self._native_row_identity({'_native_membership': pin})
+            pin.update(ID=new['id'], UUID=new['membership_uuid'])
+            new_identity = self._native_row_identity({'_native_membership': pin})
+            aliases[new_identity] = aliases.get(old_identity, old_identity)
+        self._native_occurrence_aliases = aliases
+        accepted = self.playlist_controller.enqueue(request, selected_tracks=list(tracks.values()))
+        if not accepted:self._native_occurrence_aliases = previous
+        return accepted
 
     def _native_capture_remove(self, display_path, ids, rows):
         """Capture clicked occurrences before a menu's nested event loop."""
@@ -1199,7 +1300,8 @@ class NativePlaylistsMixin:
             cached=getattr(self,'_native_presentation_cache',None)
             if not (cached and cached[0]==inputs and cached[1]==catalog and cached[2]==pending):
                 projected=project(project_input,projection_jobs)
-                cached=(inputs,copy_catalog(catalog),deepcopy(pending),projected.playlists,projected.source_playlist_catalog)
+                copier = getattr(controller, 'copy_intents', deepcopy)
+                cached=(inputs,copy_catalog(catalog),copier(pending),projected.playlists,projected.source_playlist_catalog)
                 self._native_presentation_cache=cached
             # Current filters, hidden IDs, artist registry, tracks, source tags
             # and other library metadata always come from the current Library.
@@ -1245,10 +1347,36 @@ class NativePlaylistsMixin:
         self._set_refreshed_rows(rows)
         if self.model._rows is not previous:self._restore_browser_seat(seat)
 
-    def _native_pending_changed(self, *, rebuild=False,presentation=None):
+    @preserve_inline_drafts
+    def _native_reload_membership_order(self, identities, *, presentation=None):
+        """Known musical multiset: reuse prepared rows and permute occurrences only."""
+        if self.stack.currentIndex() == 1:return
+        key = getattr(self, '_view_key', '') or ''
+        if not key.startswith('rb:'):return
+        library = self._native_presentation() if presentation is None else presentation
+        active = getattr(self, '_active_native_playlist_id', None)
+        playlist = next((playlist for playlist in library.playlists
+                         if playlist.pid == active and playlist.display_path == key[3:]), None) or next(
+            (playlist for playlist in library.playlists if playlist.display_path == key[3:]), None)
+        if playlist is None or playlist.pid not in identities:return
+        prepared = {row['id']: row for row in self.model._all_rows}
+        tracks = library.resolve(playlist)
+        if any(track.track_id not in prepared for track in tracks):
+            self._native_reload_pending_playlist(playlist.display_path);return
+        from .tag_selection_view import rows as selected_rows
+        rows = self._native_membership_rows(playlist, [prepared[track.track_id] for track in tracks], presentation=library)
+        rows = selected_rows(self, rows)
+        seat = self._browser_seat()
+        if not self.model.reorder_occurrences(rows, self._native_row_identity):self._set_refreshed_rows(rows)
+        self._restore_browser_seat(seat)
+
+    def _native_pending_changed(self, *, rebuild=False,presentation=None,membership_order=None):
         # The small test controller host has no sidebar; source behavior remains
         # independently testable. The desktop applies this in the admission turn.
         if not hasattr(self,'tree') or self.lib is None:return
+        if membership_order is not None:
+            self._native_reload_membership_order(membership_order, presentation=presentation)
+            return
         if rebuild and presentation is None:presentation=self._native_presentation()
         removed=self._native_pending_deletions(presentation=presentation)
         identity=(str(self.lib.source),self.lib.source_library_id) if self.lib else None
@@ -1695,6 +1823,11 @@ class NativePlaylistsMixin:
         self._sync_playlists_cache=None
 
     def _native_refresh_view(self,request):
+        order_ids = _membership_order_ids([request])
+        if order_ids is not None:
+            self._native_reload_membership_order(order_ids)
+            self._cache_library()
+            return
         self._populate_tree(engine.summary(self.lib))
         if (getattr(self,'_view_key','') or '').startswith('rb:'):self._reload_current_view()
         self._cache_library()

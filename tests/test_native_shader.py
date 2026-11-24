@@ -298,7 +298,7 @@ class NativeWaveformShader(unittest.TestCase):
 
     def test_main_lane_uses_a_fixed_song_attribute_lattice(self):
         kernel = self.shader.split(
-            "kernel void wave_attribute_kernel", 1
+            "inline WaveAttribute evaluate_wave_attribute", 1
         )[1].split(
             "constant uint kIntegrationTaps", 1
         )[0]
@@ -347,7 +347,7 @@ class NativeWaveformShader(unittest.TestCase):
 
     def test_mid_zoom_stability_kernel_preserves_close_detail(self):
         kernel = self.shader.split(
-            "kernel void wave_attribute_kernel", 1
+            "inline WaveAttribute evaluate_wave_attribute", 1
         )[1].split(
             "constant uint kIntegrationTaps", 1
         )[0]
@@ -363,7 +363,7 @@ class NativeWaveformShader(unittest.TestCase):
 
     def test_signed_range_geometry_never_scales_back_to_display_height(self):
         kernel = self.shader.split(
-            "kernel void wave_attribute_kernel", 1
+            "inline WaveAttribute evaluate_wave_attribute", 1
         )[1].split(
             "constant uint kIntegrationTaps", 1
         )[0]
@@ -376,7 +376,7 @@ class NativeWaveformShader(unittest.TestCase):
 
     def test_canonical_midrange_uses_one_same_lod_filter(self):
         kernel = self.shader.split(
-            "kernel void wave_attribute_kernel", 1
+            "inline WaveAttribute evaluate_wave_attribute", 1
         )[1].split(
             "constant uint kIntegrationTaps", 1
         )[0]
@@ -442,16 +442,14 @@ class NativeWaveformShader(unittest.TestCase):
 
     def test_attribute_surface_stores_premultiplied_color_not_coverage(self):
         kernel = self.shader.split(
-            "kernel void wave_attribute_kernel", 1
+            "inline WaveAttribute evaluate_wave_attribute", 1
         )[1].split(
             "constant uint kIntegrationTaps", 1
         )[0]
         self.assertIn(
-            "attributes[id].colorAndUpper =\n"
-            "        float4(color * height, upperHeight)", kernel)
+            "return {float4(color * height, upperHeight)", kernel)
         self.assertIn(
-            "attributes[id].lowerAndColorWeight =\n"
-            "        float4(lowerHeight, height, 0.0, 0.0)", kernel)
+            "float4(lowerHeight, height, 0.0, 0.0)", kernel)
         self.assertNotIn("profile_coverage(", kernel)
         self.assertNotIn("vivid_wave_coverage(", kernel)
 
@@ -532,7 +530,7 @@ class NativeWaveformShader(unittest.TestCase):
         self.assertEqual(fragment.count("saturate(coverage)"), 2)
         self.assertIn("resolve_interval_surface(", fragment)
         self.assertIn(
-            "background * (1.0 - interval.coverage)\n"
+            "encodedBackground * (1.0 - interval.coverage)\n"
             "                    + interval.premultipliedColor",
             fragment,
         )
@@ -562,7 +560,7 @@ class NativeWaveformShader(unittest.TestCase):
         self.assertIn("(u.heightPoints - 49.0) * 0.5 - verticalPadding", fragment)
 
     def test_wide_detail_uses_conservative_pixel_footprint_not_new_cache_data(self):
-        kernel = self.shader.split("kernel void wave_attribute_kernel", 1)[1]
+        kernel = self.shader.split("inline WaveAttribute evaluate_wave_attribute", 1)[1]
         self.assertIn(
             "const uint physicalDetailLevel = audio_detail_lod(\n            detailFootprint,",
             kernel)
@@ -587,7 +585,7 @@ class NativeWaveformShader(unittest.TestCase):
         self.assertIn("bool analyticVertical = false", helper)
         self.assertIn("const float fringe = analyticVertical ? 0.5f", helper)
         self.assertIn("lineX0, lineHalf", helper)
-        self.assertEqual(native.count("false, true);"), 1)
+        self.assertEqual(native.count("1.0f, false, true);"), 1)
 
         grid = self.shader.split(
             "vertex Out grid_vertex", 1
@@ -630,87 +628,50 @@ class NativeWaveformShader(unittest.TestCase):
             fragment.count("display_srgb_to_linear("), 4)
         self.assertNotIn("displayCoverage", self.shader)
 
-    def test_three_band_geometry_uses_native_layers_and_reference_palette(self):
-        kernel = self.shader.split(
-            "kernel void wave_attribute_kernel", 1
-        )[1].split(
-            "constant uint kIntegrationTaps", 1
-        )[0]
-        self.assertIn(
-            "const WaveTap sharpWave = u.waveformMode == 3", kernel)
-        self.assertIn("? three_band_detail_tap(", kernel)
-        self.assertIn("const uint waveLevel = requestedWaveLevel;", kernel)
-        self.assertNotIn("facetStrength", self.shader)
-        self.assertIn("if (u.waveformMode != 3", kernel)
-        interpolated = self.shader.split(
-            "inline WaveTap linear_wave_tap", 1
-        )[1].split(
-            "inline EnvelopeTap sharp_envelope_tap", 1
-        )[0]
-        self.assertIn("int(floor(local))", interpolated)
-        self.assertIn(
-            "leftSample.height, rightSample.height, phase", interpolated)
-        self.assertIn("result.weightedColor = mix(", interpolated)
-        native = self.source
-        three_band = native.split(
-            "static WaveSample threeBandWaveSample", 1
-        )[1].split(
-            "bool activateWaveformModeLocked", 1
-        )[0]
-        self.assertIn("* 0.40f / 64.0f", three_band)
-        self.assertIn("* 0.43f / 64.0f", three_band)
-        self.assertGreaterEqual(three_band.count("* 0.40f / 64.0f"), 2)
-
-        fragment = self.shader.split(
-            "fragment float4 wave_surface_fragment", 1
-        )[1].split(
-            "vertex Out grid_vertex", 1
-        )[0]
-        self.assertIn("float midHeights[kAttributeProfileCapacity]", fragment)
-        self.assertIn("float highHeights[kAttributeProfileCapacity]", fragment)
-        self.assertIn("float lowHeights[kAttributeProfileCapacity]", fragment)
-        self.assertIn(
-            "const float midCoverage = positioned_profile_coverage(", fragment)
-        self.assertIn(
-            "const float highCoverage = positioned_profile_coverage(", fragment)
-        self.assertIn(
-            "const float lowCoverage = positioned_profile_coverage(", fragment)
-        self.assertIn(
-            "lowHeights[i] = attribute.colorAndUpper.r", fragment)
-        self.assertIn(
-            "midHeights[i] = attribute.colorAndUpper.g", fragment)
-        self.assertIn(
-            "highHeights[i] = attribute.colorAndUpper.b", fragment)
-        self.assertIn(
-            "float3(0.0, 85.0 / 255.0, 225.0 / 255.0)", fragment)
-        self.assertIn(
-            "float3(180.0 / 255.0, 105.0 / 255.0, 10.0 / 255.0)",
-            fragment)
-        self.assertIn(
-            "float3(1.0, 166.0 / 255.0, 0.0)", fragment)
-        self.assertIn(
-            "float3(245.0 / 255.0, 235.0 / 255.0, 215.0 / 255.0)",
-            fragment)
-        self.assertIn("const float lowOnly =", fragment)
-        self.assertIn("const float midHigh =", fragment)
-        self.assertIn("const float all =", fragment)
-        self.assertIn("const float none =", fragment)
-        self.assertNotIn("highCoverage * 0.82", fragment)
-        self.assertIn("u.threeBandActive == 0", self.shader)
-        self.assertNotIn("inline float3 rgb_wave_color", self.shader)
-        self.assertNotIn("rgb_wave_color(encodedColor)", fragment)
-        self.assertNotIn("const float inverseOuter =", fragment)
-        self.assertNotIn("pow(averageBands", fragment)
+    def test_three_band_palette_keeps_its_own_native_layers_and_detail(self):
+        evaluator = self.shader.split('inline WaveAttribute evaluate_wave_attribute', 1)[1].split(
+            'constant uint kIntegrationTaps', 1)[0]
+        self.assertIn('const WaveTap sharpWave = u.waveformMode == 3', evaluator)
+        self.assertIn('? three_band_detail_tap(', evaluator)
+        self.assertIn('const uint waveLevel = requestedWaveLevel;', evaluator)
+        self.assertIn('geometrySamples, geometryUniforms, audioDetailSamples', evaluator)
+        self.assertIn('samples, u, audioDetailSamples, clock, id, false, true', evaluator)
+        self.assertNotIn('facetStrength', self.shader)
+        interpolated = self.shader.split('inline WaveTap linear_wave_tap', 1)[1].split(
+            'inline EnvelopeTap sharp_envelope_tap', 1)[0]
+        self.assertIn('int(floor(local))', interpolated)
+        self.assertIn('leftSample.height, rightSample.height, phase', interpolated)
+        self.assertIn('result.weightedColor = mix(', interpolated)
+        three_band = self.source.split('static WaveSample threeBandWaveSample', 1)[1].split(
+            'bool activateWaveformModeLocked', 1)[0]
+        self.assertIn('* 0.40f / 64.0f', three_band)
+        self.assertIn('* 0.43f / 64.0f', three_band)
+        self.assertGreaterEqual(three_band.count('* 0.40f / 64.0f'), 2)
+        kernel=self.shader.split('kernel void wave_attribute_kernel',1)[1].split('constant uint kIntegrationTaps',1)[0]
+        own=kernel.split('if (u.waveformMode == 3) {',1)[1].split('return;',1)[0]
+        self.assertIn('samples, u, audioDetailSamples, clock, id, false, true',own)
+        self.assertNotIn('geometrySamples',own)
+        self.assertIn('color * height * 1.35',evaluator)
+        fragment=self.shader.split('fragment float4 wave_surface_fragment',1)[1].split('vertex Out grid_vertex',1)[0]
+        for layer in ('lowHeights','midHeights','highHeights'):
+            self.assertIn('resolve_three_band_surface(',fragment)
+            self.assertIn(layer,fragment)
+        membership=self.shader.split('inline float3 three_band_membership_color',1)[1].split('inline IntervalSurface resolve_three_band_surface',1)[0]
+        for mask in range(1,8):
+            self.assertIn(f'case {mask}u:',membership)
+        self.assertIn('display_srgb_to_linear(encodedBackground*(1.0-surface.coverage)',fragment)
+        self.assertNotIn('three_band_interval_color',self.shader)
+        self.assertNotIn('threeBandMode',self.shader)
 
     def test_blue_and_rgb_use_signed_ranges_without_a_center_fill(self):
         self.assertIn("uint waveformMode;", self.shader)
         kernel = self.shader.split(
-            "kernel void wave_attribute_kernel", 1
+            "inline WaveAttribute evaluate_wave_attribute", 1
         )[1].split(
             "constant uint kIntegrationTaps", 1
         )[0]
         self.assertIn(
-            "if (u.waveformMode != 3\n"
+            "if (audioGeometry && u.waveformMode != 3\n"
             "            && u.audioDetailSampleCount > 0\n"
             "            && u.audioDetailMipCount > 0)", kernel)
         self.assertIn(
@@ -746,7 +707,7 @@ class NativeWaveformShader(unittest.TestCase):
             fragment,
         )
         self.assertIn(
-            "u.waveformMode == 1);",
+            "u.waveformMode == 1,\n                blueInnerColors, blueRadii);",
             fragment)
         self.assertNotIn("acceptedCoverage", fragment)
         self.assertNotIn("centerSum", fragment)
@@ -760,7 +721,7 @@ class NativeWaveformShader(unittest.TestCase):
         self.assertIn(
             "clipped_linear_coverage_moments(", resolve)
         self.assertIn(
-            "display_srgb_to_linear(saturate(encodedColors[segment]))",
+            "const float3 color0 = saturate(encodedColors[segment]);",
             resolve,
         )
         self.assertIn(
@@ -772,7 +733,7 @@ class NativeWaveformShader(unittest.TestCase):
         self.assertNotIn("moments.firstMoment / moments.area", resolve)
         self.assertIn("coverage * weights[tap] * halfSpan * segmentSpan", resolve)
         self.assertIn(
-            "centerLinear, edgeLinear, radialBlend", resolve)
+            "const float3 encoded = blue_interval_color(", resolve)
         self.assertNotIn("targeted_stop_filter(", resolve)
         native = self.source
         self.assertIn(
@@ -825,19 +786,19 @@ class NativeWaveformShader(unittest.TestCase):
         self.assertIn(
             "threeBandActive_ = waveformMode_ == 3", native)
         kernel = self.shader.split(
-            "kernel void wave_attribute_kernel", 1
+            "inline WaveAttribute evaluate_wave_attribute", 1
         )[1].split(
             "constant uint kIntegrationTaps", 1
         )[0]
         self.assertIn("reference_wave_color(samples,audioDetailSamples,u,clock,secondOffset,scale)", kernel)
-        reference=self.shader.split('inline float3 reference_wave_color(',1)[1].split('kernel void wave_attribute_kernel',1)[0]
+        reference=self.shader.split('inline float3 reference_wave_color(',1)[1].split('inline WaveAttribute evaluate_wave_attribute',1)[0]
         self.assertIn('linear_wave_color(',reference)
         self.assertIn('const float referencePixels = 92.0;',reference)
         self.assertNotIn('u.pixelsPerSecond',reference)
 
     def test_exact_display_modes_do_not_punch_gaps_between_rows(self):
         kernel = self.shader.split(
-            "kernel void wave_attribute_kernel", 1
+            "inline WaveAttribute evaluate_wave_attribute", 1
         )[1].split(
             "constant uint kIntegrationTaps", 1
         )[0]
@@ -847,7 +808,7 @@ class NativeWaveformShader(unittest.TestCase):
 
     def test_signed_trace_bypasses_the_compact_display_height(self):
         kernel = self.shader.split(
-            "kernel void wave_attribute_kernel", 1
+            "inline WaveAttribute evaluate_wave_attribute", 1
         )[1].split(
             "constant uint kIntegrationTaps", 1
         )[0]

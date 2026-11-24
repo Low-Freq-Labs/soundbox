@@ -197,12 +197,14 @@ anchors selectable technical details in a bordered panel. Lyricist is omitted
 from Info and Comments spans the full row. Global My Settings and Keyboard scroll
 at the right window edge.
 Album Artist, Track Number, Disc Number, Original Artist, Composer, Remixer and
-Mix Name are omitted. In tested source, native Title/Artist edits use durable
-source intentions and verified native readback under a separate default-off
-metadata authority. Broader native Track Info and artwork persistence remain
+Mix Name are omitted. Native Title/Artist edits use durable source intentions
+and verified native readback under the independently accepted exact-library v5
+metadata authority. That activation does not provision other libraries or fields.
+Broader native Track Info and artwork persistence remain
 unfinished; unsupported native field saves refuse. Retained local overlays still
 feed migration/display/export, and legacy/XML sources retain local edits. These
-changes are source-validated, not a claim of installed or broader native support.
+boundaries do not imply broader native field support; current installed identity
+and validation remain in [HANDOFF](HANDOFF.md).
 BPM remains tied to the beatgrid controls. USB-song Track Info is read-only and
 offers no desktop source-edit authority. Its cover comes from the selected
 native USB artwork reference, captured through pinned no-follow descriptors with

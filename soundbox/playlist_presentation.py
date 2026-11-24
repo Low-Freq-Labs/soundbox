@@ -4,6 +4,7 @@ The result is a UI view only. Never cache it as native source state, feed its
 catalog to a writer, or export it before the existing source FIFO has drained.
 """
 from dataclasses import replace
+from collections import defaultdict, deque
 import math
 
 from .library import Playlist
@@ -192,19 +193,41 @@ def project(library, jobs):
                 current=native_tracks.get(track['track_id'])
                 if current is None or current.source_uuid!=track['uuid']:valid=False;break
             if not valid:break
+            removed = set()
+            by_id = {row['ID']: row for row in rows}
+            unique_ids = len(by_id) == len(rows)
+            by_content: defaultdict[str, deque[dict]] = defaultdict(deque)
+            if operation == 'remove':
+                for row in rows:by_content[row['ContentID']].append(row)
             for track in request['tracks']:
                 if operation=='append':
                     if not request['allow_duplicate'] and any(r['ContentID']==track['track_id'] for r in rows):continue
                     rows.append(dict(ID=track['id'],UUID=track['membership_uuid'],PlaylistID=identity,
                                      ContentID=track['track_id'],TrackNo=len(rows)+1,rb_local_deleted=0))
                 else:
-                    match=next((r for r in rows if r['ContentID']==track['track_id']
-                                and ('membership_id' not in track or
-                                     (r['ID']==track['membership_id'] and r['UUID']==track['source_membership_uuid']))),None)
+                    if not unique_ids:
+                        # Preserve the prior first-match behavior for malformed
+                        # duplicate-ID snapshots; never collapse their occurrences.
+                        match = next((row for row in rows if row['ContentID'] == track['track_id']
+                                      and ('membership_id' not in track or (row['ID'] == track['membership_id']
+                                           and row['UUID'] == track['source_membership_uuid']))), None)
+                        if match is None:valid=False;break
+                        rows.remove(match)
+                        continue
+                    if 'membership_id' in track:
+                        match = by_id.get(track['membership_id'])
+                        if (match is not None and (match['ContentID'] != track['track_id']
+                                or match['UUID'] != track['source_membership_uuid'] or match['ID'] in removed)):
+                            match = None
+                    else:
+                        candidates = by_content[track['track_id']]
+                        while candidates and candidates[0]['ID'] in removed:candidates.popleft()
+                        match = candidates.popleft() if candidates else None
                     if match is None:
                         valid=False;break
-                    rows.remove(match)
+                    removed.add(match['ID'])
             if not valid:break
+            if removed:rows = [row for row in rows if row['ID'] not in removed]
             members[:]=[r for r in members if r['PlaylistID']!=identity or r['rb_local_deleted']!=0]
             for number,row in enumerate(rows,1):row['TrackNo']=number
             members.extend(rows)

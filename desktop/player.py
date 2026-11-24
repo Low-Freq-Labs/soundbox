@@ -376,6 +376,8 @@ class WaveformWorker(QThread):
         self.native_backend = native_backend
         self.detected_analysis = detected_analysis
         self.transient_analysis = False
+        self.surface_ready = False
+        self.error = ''
         self._discard_requested = threading.Event()
         self.cache_writes = AnalysisWriteFence()
 
@@ -385,6 +387,11 @@ class WaveformWorker(QThread):
         self.requestInterruption()
 
     def _load_stages(self, cache_dir=None) -> tuple[bool, bool, bool]:
+        from soundbox.track_analysis import manifest_parse_session
+        with manifest_parse_session():
+            return self._read_stages(cache_dir)
+
+    def _read_stages(self, cache_dir) -> tuple[bool, bool, bool]:
         from soundbox.track_analysis import (
             load_detail, load_manifest, load_overview,
         )
@@ -419,6 +426,13 @@ class WaveformWorker(QThread):
             # A damaged/incomplete cache may be repaired below. Its provisional
             # silhouette must not become a visible first frame in the meantime.
             return True, overview is not None, detail is not None
+        from soundbox.rekordbox_analysis import read_blue_preview, read_three_band_preview
+        detail['_blue_preview'] = read_blue_preview(self.analysis_path)
+        if self.isInterruptionRequested():
+            return True, True, True
+        detail['_three_band_preview'] = read_three_band_preview(self.analysis_path)
+        if self.isInterruptionRequested():
+            return True, True, True
         if self.native_backend is not None:
             combined = {**manifest, **overview}
             if (detail is not None
@@ -427,6 +441,10 @@ class WaveformWorker(QThread):
                 overview_ok, detail_ok = (
                     self.native_backend.set_complete_analysis(
                         combined, detail, self.generation))
+                if not (overview_ok and detail_ok):
+                    # A valid cache is not a ready deck when its generation's
+                    # complete native surface could not be accepted.
+                    return True, True, True
                 if overview_ok:
                     overview["_native_uploaded"] = True
                 if detail_ok:
@@ -445,11 +463,13 @@ class WaveformWorker(QThread):
                 self.native_backend.set_audio_detail(
                     detail.get("_audio_detail"), self.generation)
                 detail["_native_uploaded"] = True
+            self.surface_ready = True
+            detail['_waveform_complete'] = True
             self.detail_ready.emit(self.path, self.generation, detail)
         return True, overview is not None, detail is not None
 
     def run(self):
-        if self.transient_analysis:
+        if self.transient_analysis or not self.track_analysis_dir:
             # A blocked publication does not forbid reading a valid existing
             # waveform. In particular a compatible AAC registration must not
             # send an already-cached hours-long set through another decode.
@@ -510,7 +530,8 @@ class WaveformWorker(QThread):
                     self._load_stages(cache_dir)
                 # A valid older cache is already on deck. Keep its completed
                 # surface stable; the upgraded cache is ready for the next load.
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            self.error = str(exc)
             if not self.isInterruptionRequested():
                 self.manifest_ready.emit(self.path, self.generation, {})
         finally:
@@ -1637,6 +1658,10 @@ class PlayerBar(QWidget):
         self._pending_autoplay = False
         self._pending_should_play = True
         self._pending_start_ms: int | None = None
+        self._pending_position_explicit = False
+        self._pending_positioned_ms: int | float | None = None
+        self._waveform_ready = True
+        self._waveform_error = ''
         self._beat_grid: list[int] = []
         self._analysis_generation = 0
         self._analysis_parts: dict = {}
@@ -1966,7 +1991,7 @@ class PlayerBar(QWidget):
 
     def seek_ms(self, position: int):
         """Seek through the same clickless transport as the deck waveform."""
-        if self._dur > 0 and not self._pending_autoplay:
+        if self._dur > 0:
             self._move_clean(max(0, min(self._dur, int(position))))
 
     def set_jump_mode(self, mode: str, emit: bool = True):
@@ -2076,6 +2101,10 @@ class PlayerBar(QWidget):
             self._pending_autoplay = True
             self._pending_should_play = autoplay
             self._pending_start_ms = None
+            self._pending_position_explicit = False
+            self._pending_positioned_ms = None
+            self._waveform_ready = False
+            self._waveform_error = ''
             self._beat_grid = []
             self.cue_panel.set_cues([])
             self._anchor_transport(0, False)
@@ -2168,6 +2197,19 @@ class PlayerBar(QWidget):
     def _play_clean(self, *, fade_ms=None):
         """Start/resume with a short click-prevention gain envelope."""
         if not self._src_path or not self._playback_available:
+            return
+        if self._pending_autoplay:
+            self._pending_should_play = self._transport_play_active
+        if not self._waveform_ready:
+            # Decoding may prepare in parallel, but an audible start belongs
+            # to the complete waveform. Preserve the newest transport/cue
+            # request until that same generation's surface is accepted.
+            self._pending_should_play = self._transport_play_active
+            if self._waveform_error:
+                self._waveform_error = ''
+                self._pending_autoplay = True
+                self._pending_start_ms = self._pos if self._pending_position_explicit else None
+                self._start_waveform(self._src_path, self._analysis_path)
             return
         # Native PAUSED snapshots during seek/refill or wake describe the
         # engine, not a cancellation of the user's ordinary playback request.
@@ -2288,8 +2330,16 @@ class PlayerBar(QWidget):
             self._cue_preview_control = None
             self._cue_preview_token += 1
             self._transport_play_active = False
+            if self._pending_autoplay:
+                self._pending_should_play = False
             if self.is_playing() or self._pause_pending:
                 self._pause_clean()
+            self._sync_deck_button_states()
+            return
+        if self._pending_autoplay:
+            self._pending_should_play = not self._pending_should_play
+            self._transport_play_active = self._pending_should_play
+            self._try_pending_autoplay()
             self._sync_deck_button_states()
             return
         if self._pause_pending:
@@ -2316,6 +2366,9 @@ class PlayerBar(QWidget):
         if (not self.is_playing() and not self._pause_pending
                 and self._session_cue_state
                 == SessionCueState.RELOCATION_PENDING):
+            if self._pending_autoplay:
+                self._pending_should_play = False
+                self._transport_play_active = False
             target = self.quantize_cue_position(self._pos)
             if target != self._pos:
                 self._set_position(target)
@@ -2433,9 +2486,17 @@ class PlayerBar(QWidget):
         self._pause_pending = False
         self._pause_clock.invalidate()
         self._transport_play_active = False
+        pending_position = self._pending_autoplay or not self._waveform_ready
+        if pending_position:
+            self._pending_should_play = False
+            self._pending_start_ms = 0
+            self._pending_position_explicit = True
+            self._pending_positioned_ms = 0
         self._reset_cue_preview()
         self.audio.setVolume(self._deck_volume)
         self.player.stop()
+        if pending_position:
+            self._on_pos(0)
 
     def resynchronize_transport(self):
         """Rejoin controls to the authoritative native state on activation."""
@@ -2565,6 +2626,10 @@ class PlayerBar(QWidget):
                 self._move_clean(target)
 
     def _set_position(self, target: int | float):
+        if self._pending_autoplay or not self._waveform_ready:
+            self._pending_start_ms = target
+            self._pending_position_explicit = True
+            self._pending_positioned_ms = target
         self.player.setPosition(target)
         self._on_pos(target)
 
@@ -2788,17 +2853,28 @@ class PlayerBar(QWidget):
         start = max(0, self._pending_start_ms)
         if self._dur:
             start = min(start, self._dur)
+        # Position the paused deck from the immediate grid, before its complete
+        # native surface can appear. Completion must not seek a second time or
+        # replace a newer manual target. Audio/readiness retain their full gate.
+        if self._pending_positioned_ms != start:
+            self.player.setPosition(start)
+            self._on_pos(start)
+            self._pending_positioned_ms = start
+        if not self._waveform_ready:
+            return
         should_play = self._pending_should_play
+        cue_preview = self._cue_preview_active
         self._pending_autoplay = False
         self._pending_should_play = True
         self._pending_start_ms = None
-        self._set_session_cue(start)
-        self.player.setPosition(start)
-        self._on_pos(start)
-        if should_play:
-            self._transport_play_active = True
+        if not self._pending_position_explicit:
+            self._set_session_cue(start)
+        elif self._session_cue_state == SessionCueState.UNSET:
+            self._set_session_cue(self._beat_grid[0] if self._beat_grid else 0)
+        if should_play or cue_preview:
+            self._transport_play_active = should_play
             self._sync_deck_button_states()
-            self._play_clean()
+            self._play_clean(fade_ms=3 if cue_preview else None)
         else:
             self._transport_play_active = False
             self._sync_deck_button_states()
@@ -2855,6 +2931,12 @@ class PlayerBar(QWidget):
             self._wf_pending.remove(w)
         except ValueError:
             pass
+        if (not self._waveform_tasks.stopping and not w.isInterruptionRequested()
+                and self._analysis_is_current(w.path, w.analysis_path, w.generation)
+                and not self._waveform_ready):
+            self._waveform_error = ('Waveform preparation failed; press Play to retry'
+                                    + (': ' + w.error if w.error else ''))
+            self._on_error(None, self._waveform_error)
 
     def shutdown_waveforms(self):
         """Close admission and drain interactive work before native teardown."""
@@ -2892,8 +2974,8 @@ class PlayerBar(QWidget):
         if self._live_cues is not None:
             prepared = {**prepared, "cues": list(self._live_cues)}
         self._analysis_parts = dict(prepared)
-        # The manifest is transport-critical: it positions the paused deck on
-        # the first exact grid row without waiting for waveform decompression.
+        # Grid/cues become available immediately. Audible playback and a ready
+        # deck wait for the complete overview/detail surface below.
         self.wave.set_analysis(prepared)
         cues = list(prepared.get("cues") or [])
         self.cue_panel.set_cues(cues)
@@ -2903,7 +2985,10 @@ class PlayerBar(QWidget):
         self._mark_load_phase("manifest-ready")
         self._mark_load_phase("cues-grid-visible")
         if self._pending_autoplay:
-            self._pending_start_ms = self._beat_grid[0] if self._beat_grid else 0
+            if not self._pending_position_explicit:
+                self._pending_start_ms = self._beat_grid[0] if self._beat_grid else 0
+                if self._session_cue_state == SessionCueState.UNSET:
+                    self._set_session_cue(self._pending_start_ms)
             self._try_pending_autoplay()
         self._update_transport()
         self.grid_ready.emit()
@@ -2937,6 +3022,11 @@ class PlayerBar(QWidget):
                 and not data.get("_native_uploaded")):
             self.player.set_audio_detail(detail, generation)
         self._mark_load_phase("ultra-detail-promoted")
+        if data.get('_waveform_complete'):
+            self._waveform_ready = True
+            self._waveform_error = ''
+            self._mark_load_phase('complete-waveform-ready')
+            self._try_pending_autoplay()
 
     def _apply_analysis(self, data: dict):
         data = self._with_live_grid(_apply_loaded_grid_contract(data, self._analysis_path))

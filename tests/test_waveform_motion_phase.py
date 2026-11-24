@@ -67,23 +67,25 @@ class WaveformMotionPhase(unittest.TestCase):
         # Both sides of every half-pixel boundary must occur, including Retina.
         self.assertTrue(np.any(np.diff(rows[:, 5]) == 4))
 
-    def test_all_other_modes_and_zooms_retain_previous_motion(self):
-        rows = self.values[~((self.values[:, 0] == 2)
-                            & np.isin(self.values[:, 1], (64, 128, 184)))]
-        continuous = (rows[:, 0] == 3) | ((rows[:, 0] == 2)
-                                         & ~np.isin(rows[:, 1], (576, 864)))
+    def test_blue_follows_rgb_and_three_band_keeps_continuous_motion_at_every_zoom(self):
+        rows = self.values
+        continuous = (rows[:, 0] == 3) | ~np.isin(rows[:, 1], (64, 128, 184, 576, 864))
         quantum = 4*np.where(rows[:, 1] <= 384, 1, rows[:, 2])
         expected = np.where(continuous, rows[:, 3],
                             np.floor(rows[:, 3]/quantum+.5)*quantum)-rows[:, 4]
         np.testing.assert_allclose(rows[:, 5], expected, atol=1e-6, rtol=0)
         self.assertEqual(set(rows[:, 1]), set(ZOOMS))
+        np.testing.assert_array_equal(rows[rows[:, 0] == 1, 1:],
+                                      rows[rows[:, 0] == 2, 1:])
+        bands = rows[rows[:, 0] == 3]
+        np.testing.assert_array_equal(bands[:, 5], bands[:, 3]-bands[:, 4])
 
     def test_overlapping_tile_origins_preserve_the_display_coordinate(self):
         np.testing.assert_array_equal(self.values[:, 6]-128, self.values[:, 5])
 
     def test_original_fractional_policy_fails_the_reported_stop_contract(self):
         mutation = self.function.replace(
-            'mode == 2\n        && (zoom == 64.0f || zoom == 128.0f || zoom == 184.0f)', 'false')
+            '(mode == 1 || mode == 2)\n        && (zoom == 64.0f || zoom == 128.0f || zoom == 184.0f)', 'false')
         self.assertNotEqual(mutation, self.function)
         rows = offsets(mutation)
         rows = rows[(rows[:, 0] == 2) & np.isin(rows[:, 1], (64, 128, 184))]

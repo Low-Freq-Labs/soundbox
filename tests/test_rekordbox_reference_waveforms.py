@@ -14,7 +14,7 @@ from PIL import Image
 
 from scripts.check_fixtures import waveform_reference
 from scripts.compare_waveform_motion import compare as compare_motion
-from soundbox import track_analysis
+from soundbox.waveform_sections import decode_sections
 
 
 class RekordboxReferenceWaveforms(unittest.TestCase):
@@ -43,7 +43,7 @@ class RekordboxReferenceWaveforms(unittest.TestCase):
         manifest = json.loads(raw[8:8+size])
         self.assertEqual(manifest['source']['size'], source.stat().st_size)
         self.assertEqual(manifest['provenance']['analysis'], 'rekordbox-import+soundbox')
-        sections = track_analysis._decode_sections(raw[8+size:], manifest)
+        sections = decode_sections(raw[8+size:], manifest)
         self.assertIsNotNone(sections)
         for key, mode, width, tag in [('blue_detail', 'blue', 1, 'pwv3'),
                                       ('rgb_detail', 'rgb', 2, 'pwv5'),

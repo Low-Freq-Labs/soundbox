@@ -11,7 +11,7 @@ import json
 import secrets
 import time
 from dataclasses import dataclass
-from functools import wraps
+from functools import cached_property, wraps
 from pathlib import Path
 from typing import Any, Callable, Concatenate
 
@@ -41,8 +41,10 @@ class CoverSnapshot:
     entry: dict
     data: bytes
 
-    @property
+    @cached_property
     def digest(self) -> str:
+        # This object's bytes are immutable. A new snapshot still rereads the
+        # current image; retaining this pure result supplies no file proof.
         return hashlib.sha256(self.data).hexdigest()
 
 

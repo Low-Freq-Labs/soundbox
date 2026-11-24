@@ -24,11 +24,14 @@ Source launch uses real AppData; development tests/renders must use the supplied
 
 ## Everyday workflow
 
-1. Browse the read-only rekordbox snapshot or import audio through the app.
-2. Curate local title/artist/artwork; accepted native edits save through separately guarded domains.
+1. Browse a stable rekordbox snapshot or import audio through the app.
+2. Edit titles/artists, prep and organization through the accepted shared-native domains; artwork remains local where no native profile is accepted.
 3. Double-click to load a song. Space toggles playback; C is momentary CUE. See [keyboard mappings](KEYBOARD.md).
 4. Connect a supported destination and export selected playlists. Generic USBs use explicit Export; iPods retain firmware-specific Sync.
 5. Use Eject before disconnecting. It starts no final verification scan.
+
+Regular playlists keep authored song order and allow exact-occurrence dragging;
+Collection and smart playlists default newest first. Header sorts change only the view.
 
 Supported stock writes use observed Video/Classic iTunesDB/signature profiles on writable FAT32 mounts, with validated MP3 or stereo PCM16/44.1-kHz WAV. Dual iTunes/Rockbox uses one coordinated transaction. See [device limits](DEVICES.md).
 Ordinary playback/export preserves source audio; accepted recoverable conversion and confirmed Graveyard removal are separate domains.

@@ -85,11 +85,26 @@ class PrepEditController(QObject):
                               or lib.source_kind=='rekordbox-db' and track.source_uuid))
 
     def reason(self, tid, *, grid=False):
+        return self._reason(tid,grid=grid)
+
+    def presentation_reason(self, tid):
+        """Grid-control availability; never admission or source-write proof."""
+        return self._reason(tid,grid=True,presentation=True)
+
+    def _reason(self, tid, *, grid=False, presentation=False):
         if self.closing or self.window._shutting_down:return 'Finishing library edits…'
         if self.window._state_maintenance:return 'Restoring library state…'
         try:
             pending=self.pending
-            if grid or not isinstance(pending,list) or len(pending)>256:
+            if (presentation and isinstance(pending,list) and len(pending)<=256
+                    and all(isinstance(job,dict) and isinstance(job.get('grid'),list)
+                            and len(job['grid'])<=400000 for job in pending)):
+                # Every queue header, cue, operation and prepared request stays
+                # checked. Only unrelated grid rows leave this UI-only walk;
+                # actual requests and the native pump validate the full queue.
+                edits.validate([job if job.get('track_id')==tid else {**job,'grid':[]}
+                                for job in pending])
+            elif grid or not isinstance(pending,list) or len(pending)>256:
                 edits.validate(pending)
             else:
                 selected=self.job(tid)

@@ -11,6 +11,7 @@ from unittest import mock
 import numpy as np
 
 from soundbox import track_analysis
+from tests.support import waveform_v4
 
 
 class TrackAnalysisStore(unittest.TestCase):
@@ -131,6 +132,56 @@ class TrackAnalysisStore(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
+    def test_selected_parse_session_reuses_only_exact_fresh_header_bytes(self):
+        cache = self.root / 'parse-session'
+        data = track_analysis.analyze_soundfile(self.audio, bpm_hint=120)
+        track_analysis.store(cache, 'selected', self.audio, data)
+        with mock.patch.object(track_analysis.json, 'loads', wraps=json.loads) as parses:
+            with track_analysis.manifest_parse_session():
+                first = track_analysis.load_manifest(cache, 'selected', self.audio)
+                self.assertIsNotNone(track_analysis.load_overview(cache, 'selected', self.audio))
+                self.assertIsNotNone(track_analysis.load_detail(cache, 'selected', self.audio))
+                self.assertEqual(parses.call_count, 1)
+                # A replacement within the session must be parsed immediately.
+                data['beats'] = [[1, 375, 120]]
+                track_analysis.store(cache, 'selected', self.audio, data)
+                before_changed_read = parses.call_count
+                changed = track_analysis.load_manifest(cache, 'selected', self.audio)
+                self.assertNotEqual(first['beats'], changed['beats'])
+                self.assertEqual(changed['beats'], data['beats'])
+                self.assertEqual(parses.call_count, before_changed_read + 1)
+                before_new_session = parses.call_count
+            self.assertIsNotNone(track_analysis.load_manifest(cache, 'selected', self.audio))
+            self.assertEqual(parses.call_count, before_new_session + 1)
+
+    def test_selected_parse_session_keeps_source_and_section_validation_fresh(self):
+        cache = self.root / 'parse-guards'
+        data = track_analysis.analyze_soundfile(self.audio, bpm_hint=120)
+        target = track_analysis.store(cache, 'selected', self.audio, data)
+        with track_analysis.manifest_parse_session():
+            self.assertIsNotNone(track_analysis.load_manifest(cache, 'selected', self.audio))
+            packed = target.read_bytes()
+            _magic, size = track_analysis._HEADER.unpack(packed[:8])
+            manifest = json.loads(packed[8:8 + size])
+            offset = 8 + size + manifest['sections']['overview_rgb']['offset']
+            corrupt = bytearray(packed); corrupt[offset] ^= 0xff
+            target.write_bytes(corrupt)
+            self.assertIsNone(track_analysis.load_overview(cache, 'selected', self.audio))
+            target.write_bytes(packed)
+            self.assertIsNotNone(track_analysis.load_overview(cache, 'selected', self.audio))
+            self.audio.write_bytes(self.audio.read_bytes() + b'changed source')
+            self.assertIsNone(track_analysis.load_manifest(cache, 'selected', self.audio))
+
+    def test_selected_parse_session_rejects_corrupted_replacement_header(self):
+        cache = self.root / 'parse-corrupt'
+        target = track_analysis.store(cache, 'selected', self.audio,
+                                      track_analysis.analyze_soundfile(self.audio, bpm_hint=120))
+        with track_analysis.manifest_parse_session():
+            self.assertIsNotNone(track_analysis.load_manifest(cache, 'selected', self.audio))
+            packed = bytearray(target.read_bytes()); packed[8] = ord('!')
+            target.write_bytes(packed)
+            self.assertIsNone(track_analysis.load_manifest(cache, 'selected', self.audio))
+
     def test_cache_publishers_preserve_stale_aliases_and_skip_file_sync(self):
         import threading
 
@@ -201,7 +252,7 @@ class TrackAnalysisStore(unittest.TestCase):
         section_rows, payload = track_analysis._encode_sections(sections)
         stat = source.stat()
         manifest = {
-            "schema": track_analysis.LEGACY_SCHEMA,
+            "schema": waveform_v4.LEGACY_SCHEMA,
             "track_id": str(track_id),
             "source": {
                 "path": str(source.resolve()),
@@ -215,7 +266,7 @@ class TrackAnalysisStore(unittest.TestCase):
             "detail_rate": float(data["detail_rate"]),
             "color_rate": float(data["sample_rate"]),
             "color_model": track_analysis.COLOR_MODEL,
-            "waveform_model": track_analysis.LEGACY_WAVEFORM_MODEL,
+            "waveform_model": waveform_v4.LEGACY_WAVEFORM_MODEL,
             "three_band_model": track_analysis.THREE_BAND_MODEL,
             "display_waveform_model":
                 track_analysis.DISPLAY_WAVEFORM_MODEL,
@@ -233,12 +284,39 @@ class TrackAnalysisStore(unittest.TestCase):
             manifest, ensure_ascii=False, separators=(",", ":"),
             sort_keys=True).encode()
         cache.mkdir(parents=True, exist_ok=True)
-        target = track_analysis.legacy_cache_path(cache, track_id)
+        target = waveform_v4.legacy_cache_path(cache, track_id)
         target.write_bytes(
             track_analysis._HEADER.pack(
-                track_analysis._LEGACY_MAGIC, len(encoded))
+                waveform_v4._LEGACY_MAGIC, len(encoded))
             + encoded + payload)
         return target
+
+    def test_current_readers_never_open_retired_v4_or_fallback_from_corrupt_v5(self):
+        data = track_analysis.analyze_soundfile(self.audio)
+        cache = self.root / "retired-input"
+        old = self._write_v4(cache, "current-only", data)
+        original = old.read_bytes()
+        opening = Path.open
+        def guarded(path, *args, **kwargs):
+            if path.suffix == ".sba4":
+                raise AssertionError("Runtime opened retired V4 input")
+            return opening(path, *args, **kwargs)
+        with mock.patch.object(Path, "open", guarded):
+            self.assertIsNone(track_analysis.load_manifest(cache, "current-only", self.audio))
+            self.assertIsNone(track_analysis.load_overview(cache, "current-only", self.audio))
+            self.assertIsNone(track_analysis.load_detail(cache, "current-only", self.audio))
+            self.assertIsNone(track_analysis.load(cache, "current-only", self.audio))
+            self.assertFalse(track_analysis.verify_complete(cache, "current-only", self.audio))
+        target = track_analysis.store(cache, "current-only", self.audio, data)
+        self.assertIsNotNone(target)
+        damaged = bytearray(target.read_bytes());damaged[-1] ^= 0x40;target.write_bytes(damaged)
+        with mock.patch.object(Path, "open", guarded):
+            self.assertIsNone(track_analysis.load_detail(cache, "current-only", self.audio))
+            self.assertFalse(track_analysis.verify_complete(cache, "current-only", self.audio))
+        self.assertEqual(old.read_bytes(), original)
+        # An unsupported magic at the current filename is also a clean miss.
+        target.write_bytes(original)
+        self.assertIsNone(track_analysis.load_manifest(cache, "current-only", self.audio))
 
     def test_round_trip_is_source_keyed_and_checksummed(self):
         cache = self.root / "analysis"
@@ -353,11 +431,11 @@ class TrackAnalysisStore(unittest.TestCase):
         path.write_bytes(damaged)
         self.assertIsNone(track_analysis.load(cache, "x", self.audio))
 
-    def test_discard_records_removes_only_exact_v4_v5_cache_files(self):
+    def test_discard_records_removes_only_current_cache_and_preserves_unsupported_inputs(self):
         cache = self.root / "analysis"
         cache.mkdir()
         current = track_analysis.cache_path(cache, "grave")
-        legacy = track_analysis.legacy_cache_path(cache, "grave")
+        legacy = waveform_v4.legacy_cache_path(cache, "grave")
         keep = track_analysis.cache_path(cache, "active")
         current.write_bytes(b"v5-cache")
         legacy.write_bytes(b"old")
@@ -366,9 +444,9 @@ class TrackAnalysisStore(unittest.TestCase):
         removed, reclaimed = track_analysis.discard_records(
             cache, ("grave", "grave", "missing"))
 
-        self.assertEqual((removed, reclaimed), (2, 11))
+        self.assertEqual((removed, reclaimed), (1, 8))
         self.assertFalse(current.exists())
-        self.assertFalse(legacy.exists())
+        self.assertEqual(legacy.read_bytes(), b"old")
         self.assertEqual(keep.read_bytes(), b"keep")
         self.assertEqual(
             track_analysis.discard_records(cache, ("grave",)), (0, 0))
@@ -410,17 +488,18 @@ class TrackAnalysisStore(unittest.TestCase):
                     self._write_v4(cache, "playback", data)
                 else:
                     track_analysis.store(cache, "playback", self.audio, data)
-                complete = track_analysis.load_detail(cache, "playback", self.audio)
+                reader = waveform_v4 if version == 4 else track_analysis
+                complete = reader.load_detail(cache, "playback", self.audio)
                 self.assertEqual(complete["_spectral_24"], data["spectral_bands"])
-                with mock.patch.object(track_analysis, "_load_sections",
-                                       wraps=track_analysis._load_sections) as read:
-                    playback = track_analysis.load_detail(
+                with mock.patch.object(reader, "_load_sections",
+                                       wraps=reader._load_sections) as read:
+                    playback = reader.load_detail(
                         cache, "playback", self.audio, include_spectral=False)
                 self.assertTrue(read.call_args_list)
                 self.assertTrue(all("spectral_24" not in call.args[3]
                                     for call in read.call_args_list))
                 self.assertEqual(playback, {**complete, "_spectral_24": b""})
-                self.assertTrue(track_analysis.verify_complete(cache, "playback", self.audio))
+                self.assertTrue(reader.verify_complete(cache, "playback", self.audio))
 
     def test_skipped_spectral_corruption_never_hides_corrupt_display_sections(self):
         data = track_analysis.analyze_soundfile(self.audio, bpm_hint=120)
@@ -430,19 +509,20 @@ class TrackAnalysisStore(unittest.TestCase):
                 cache = self.root / f"corrupt-spectral-v{version}"
                 path = (self._write_v4(cache, "playback", data) if version == 4
                         else track_analysis.store(cache, "playback", self.audio, data))
+                reader = waveform_v4 if version == 4 else track_analysis
                 raw = bytearray(path.read_bytes())
                 _magic, size = track_analysis._HEADER.unpack_from(raw)
                 payload = track_analysis._HEADER.size + size
                 manifest = json.loads(raw[track_analysis._HEADER.size:payload])
                 raw[payload + manifest["sections"]["spectral_24"]["offset"]] ^= 0x55
                 path.write_bytes(raw)
-                self.assertIsNone(track_analysis.load_detail(cache, "playback", self.audio))
-                self.assertIsNotNone(track_analysis.load_detail(
+                self.assertIsNone(reader.load_detail(cache, "playback", self.audio))
+                self.assertIsNotNone(reader.load_detail(
                     cache, "playback", self.audio, include_spectral=False))
-                self.assertFalse(track_analysis.verify_complete(cache, "playback", self.audio))
+                self.assertFalse(reader.verify_complete(cache, "playback", self.audio))
                 raw[payload + manifest["sections"]["rgb_detail"]["offset"]] ^= 0x55
                 path.write_bytes(raw)
-                self.assertIsNone(track_analysis.load_detail(
+                self.assertIsNone(reader.load_detail(
                     cache, "playback", self.audio, include_spectral=False))
 
     def test_legacy_black_audible_rows_inherit_nearest_valid_hue(self):
@@ -534,7 +614,7 @@ class TrackAnalysisStore(unittest.TestCase):
         self.assertFalse(track_analysis.is_ready(
             migrated_cache, "same", self.audio))
 
-        self.assertTrue(track_analysis.migrate_v4(
+        self.assertTrue(waveform_v4.migrate_v4(
             migrated_cache, "same", self.audio))
         self.assertFalse(legacy.exists())
         self.assertTrue(track_analysis.is_ready(
@@ -570,7 +650,7 @@ class TrackAnalysisStore(unittest.TestCase):
         damaged = bytearray(current.read_bytes())
         damaged[-1] ^= 0x40
         current.write_bytes(damaged)
-        self.assertFalse(track_analysis.retire_legacy_record(
+        self.assertFalse(waveform_v4.retire_legacy_record(
             cache, "guarded", self.audio))
         self.assertTrue(legacy.exists())
 

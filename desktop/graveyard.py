@@ -163,6 +163,15 @@ class GraveyardController(QObject):
             row.update(w.settings.get('track_info',{}).get(tid,{}))
         return row
 
+    def prepared_paths(self):
+        """Current accepted display paths; never a filesystem or write proof."""
+        lib=self.window.lib
+        identity=(str(lib.source),lib.source_kind,lib.source_library_id) if lib else None
+        if (lib is None or self._settled_key is None or identity!=self._source_identity
+                or self._settled_key!=self._key()):return {}
+        return {tid:entry.get('canonical') or entry.get('path') or ''
+                for tid,entry in self.entries.items() if entry.get('display')}
+
     def status(self,text):
         label=getattr(self.window,'_grave_storage',None)
         if label:label.setText(text)

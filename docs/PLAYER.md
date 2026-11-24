@@ -6,9 +6,87 @@ and full waveform visibility separately; partial first paint does not count.
 Unpinned/cloud sets have a separate acquisition wait. Cue/background-save changes
 must retain the accepted local load path and bounded selected-track work.
 
-Sonny accepted the current visuals on November9,2026 and will reopen visual work
-if needed. No further waveform appearance tuning is queued. This acceptance does
-not close the separate device/firmware or native source-format gates below.
+The complete selected overview/detail surface gates audible Play/autoplay and
+`track_ready`. Decoder preparation overlaps waveform work; immediate grid/cue
+metadata still positions the paused deck before the complete surface arrives.
+Newer Play/Pause, Stop, seek and held/released cue intentions retain ownership
+through that wait. A failed current waveform reports the existing playback error;
+explicit Play retries that selected waveform without discarding a valid cache.
+
+Sonny accepted the visuals on November9,2026, then reopened a targeted main-lane
+comparison on November21. BLUE follows RGB's exact outline and motion; his latest
+3BAND clarification preserves its own PWV7 shape/detail, thickens it and corrects
+edge-color resolution without replacing those curves.
+RGB remains the fixed pixel-exact reference. Each mode retains its own palette;
+BLUE/RGB geometry, audio and separate source-format/device gates stay protected.
+
+## Mini cue readiness — November23
+
+Hot/Memory markers share the pads' immediate selected-track cue publication.
+Decoder duration publication requests a redraw even while paused. Before decoded
+duration is available, the resident waveform count/rate supplies a display-only
+mini projection; it never marks audio loaded or changes transport duration.
+Grouped waveform publication still prevents partial frames. No new wait, source
+read or preparation precedes audio, artwork or complete waveform readiness.
+ABI9 adds a bounded opt-in full-surface trace for first-frame mini marker checks;
+normal rendering and the existing main-only trace retain their behavior.
+
+## Main-lane mode geometry — November21 requirement
+
+BLUE and RGB use RGB's signed audio contour when present, and RGB's
+resident display contour otherwise. They share its song lattice, footprint/LOD,
+phase, motion and bounded faint-coverage shoulder at every zoom. Mode changes
+select resident palettes without analysis, cache rewriting or new source reads.
+BLUE uses the palette policy below. The latest3BAND clarification supersedes the
+earlier all-mode common-contour proposal: keep its original three PWV7 layer
+contours, detail reconstruction and continuous motion. Their display gain changes
+from1.20 to1.35, a12.5% nudge with the existing per-band ceiling. Main edges now
+resolve the exact joint area of seven palette regions in encoded space; zero-height
+bands are absent. Never substitute RGB/audio geometry for those PWV7 layers.
+The new3BAND mini preview is separate from this main-lane profile. Complete
+grouped publication still precedes audible playback and `track_ready`.
+
+## BLUE palette — November21 follow-up
+
+The main lane uses four native spectral-ratio LUT families and three encoded-
+color gradient layers. Its input is the accepted resident raw PWV5 RGB song-color
+field, sampled at the fixed92pt/s reference on the attribute lattice without
+RGB's25% occupancy correction. That field is a spectral proxy: the native physical
+filter amplitudes are not available in the cache. PWV7 is not a substitute for
+those filters, and this change does not claim exact native BLUE pixel parity.
+Inner colors occupy an auxiliary tail of the existing attribute allocation;
+gradient fractions use its spare geometry fields. This is no RGBA texture or
+new DSP/cache format. RGB's output and BLUE's shared RGB contour, LOD,
+motion and coverage remain protected. An unclassified audible cell uses native
+base blue `(51,134,206)`; zero geometry stays empty without an opacity floor.
+
+The mini BLUE palette optionally reads native PWV4's signed selector for eight
+colors, white underlay and palette-alpha shading; its geometry stays unchanged.
+The selected worker reads the bounded1200×6-byte payload before the first
+complete grouped surface, in every mode. Missing/unstable data uses the existing
+derived fallback. ABI9 uploads or clears that generation's palette inside the
+group; no late repaint, cache write/migration, reanalysis or source write occurs.
+Native palette facts and proxy-based appearance are distinct from exact pixel
+acceptance; current validation and installation state belong in [HANDOFF](HANDOFF.md).
+
+## 3BAND preview and edge resolve — November21 reference
+
+The mini uses dedicated1200×3-byte PWV6 rows from `.2EX`, not a downsample of
+150-Hz PWV7 detail. ABI9 preloads both PWV4/PWV6 previews on the selected worker
+before complete grouped publication, with stable reads, cancellation and generation
+guards; unavailable data retains a derived fallback without recooking/migration.
+The mini's bottom-to-top opaque bands are blue `(0,85,225)` low, orange
+`(255,166,0)` mid and white high; CPU paint order is white, orange, then blue.
+It has no seven-color overlap palette. All1200 rows supply the global
+normalizer `M=clamp(max(l+m+64*(1−cos(πh/128))),1,128)`; cumulative heights are
+`1.2l`, then `+0.6m`, then `+76.8*(1−cos(πh/128))`, scaled by24/M.
+The CPU prepares a1200×25 premultiplied encoded image before rendering. Native
+baseline24 leaves row23 blue and row24 transparent even for a zero row: that
+one-source-pixel floor is mini-only. Main zero-height bands remain absent.
+Main PWV7 attributes/gain1.35/motion stay unchanged; exact joint seven-region
+area replaces products of separately averaged masks and linear-light edge blends.
+Native formula/palette facts do not establish whole-frame or final mini-resampling
+quality parity; captures and acceptance remain separate in HANDOFF.
 
 ## Cleanup delivery — November8
 
@@ -94,8 +172,9 @@ song-anchored color field at every zoom, including its25% reference fine-area
 correction; it no longer switches between wide dimming, close occupancy dimming
 and different color interpolation curves. BLUE also uses the same reference
 color sampling footprint at every zoom. Three-band retains its fixed seven-color
-native palette and independent layer heights. Geometry, source detail, zoom
-footprints and motion remain separate from palette transfer. All13 zooms keep
+native palette and, at this historical checkpoint, independent layer heights.
+The latest November21 correction keeps3BAND's own contours with display gain1.35;
+BLUE follows RGB geometry/motion. Palette transfer remains separate. All13 zooms keep
 each mode's filled palette in the native drawable regression. This supersedes
 the historical per-zoom color/occupancy policies described below.
 
@@ -248,8 +327,10 @@ The Playlists sidebar keeps Collection's home icon, Artists' person icon and
 folder expansion icons fixed. Only playlist icons are configurable: right-click
 the icon for Star, Music note or Vinyl crate. These scoped local preferences
 preserve navigation and do not enqueue native database writes. Right-clicking
-row text retains the ordinary playlist menu. A smart playlist adds a small gear
-badge to its chosen base icon, including selected rows. The sidebar divider stays
+row text retains the ordinary playlist menu. A smart playlist adds approved B's
+bolder bright four-point sparkle, slightly overlapping the normal icon's upper-right
+corner with a row-background halo; selected sparkles follow
+the accent foreground. The sidebar divider stays
 one pixel wide, with Qt's wider invisible mouse grab area for resizing.
 
 Columns can reach the frame’s right edge, including FORMAT. The visible scrollbar
@@ -632,8 +713,9 @@ bounded faint-only coverage shoulder: below 18%, c′=c×(1+1.5×(1−c/0.18)²)
 stronger coverage receives no lift. The final opaque RGB pixel is decoded once
 for the sRGB attachment. The former overview-wide cubic/linear-light resolve
 brightened ordinary partial coverage. Geometry, authored colors, height transfer,
-sampling, caches and transport are unchanged. BLUE/3BAND overviews retain their
-cubic/linear-light resolve. Native before/after captures retain identical main
+sampling, caches and transport were unchanged at that October30 checkpoint.
+BLUE/3BAND then retained cubic/linear-light overview colors; the November21
+PWV4/PWV6 preview work supersedes those palette/mini policies. Those dated captures retain identical main
 lanes in all modes and identical BLUE/3BAND complete frames.
 
 Full native appearance equivalence was not established. Earlier private comparison
@@ -697,10 +779,10 @@ unused lane height without changing the amplitude curve, cached data, horizontal
 detail. Close views gain a little height too, with more breathing room than
 wide views. It applies only to the large scrolling waveform.
 
-All zooms select the conservative physical-pixel extrema footprint except
-RGB 576/864, which select one logical pixel. The October29 wide-view follow-up
+BLUE/RGB select the conservative physical-pixel extrema footprint except
+at576/864, where both select one logical pixel. 3BAND retains its own layer LOD. The October29 wide-view follow-up
 removes the former half-pixel footprint at 24/32/48 and extends the existing
-same-LOD reconstruction to wide BLUE/RGB. Compact detail is 2 ms at Retina 384 and RGB 576/864; the
+same-LOD reconstruction to wide BLUE/RGB. Compact detail is2ms at Retina384 and BLUE/RGB576/864; the
 other close cases retain 1 ms. One song-anchored mip and the final
 one-pixel profile integral preserve detail without mixing adjacent mip levels.
 The former four-pixel close footprint and divisor-dependent height gain were
@@ -727,17 +809,12 @@ must never alter authoritative musical samples or become native export payloads.
 
 Settings exposes three persistent waveform displays:
 
-- `BLUE` uses the exact packed PWV3 stream when Rekordbox supplies one. Its
-  three luminance bits select the calibrated blue-to-cyan edge range. The
-  interior transitions from cyan to white with normalized signed-interval width;
-  thin intervals no longer receive an unconditional white center. The October 1
-  correction reduces wide-view white washout without changing geometry or
-  smoothing detail. Sonny accepted the narrowed BLUE candidate in a live muted comparison. Exact
-  recording parity and broader track acceptance were not established by that
-  comparison. The reopened report above concerns RGB; it grants no new BLUE acceptance.
-  Its scrolling geometry is a high-rate signed
-  min/max trace: low-frequency bins remain thin oscillating lines and dense
-  bins widen naturally.
+- `BLUE` uses the November21 native LUT/encoded-gradient palette over the
+  resident raw PWV5 spectral proxy; the optional PWV4 mini palette is separate.
+  PWV3 remains an imported/derived cache stream, not the main lane's color
+  classifier. Main geometry follows RGB: thin signed carriers stay thin and
+  dense bins widen naturally. Earlier PWV3 luminance/white-center policies are
+  historical; they do not establish exact native BLUE appearance acceptance.
 - `RGB` uses the exact packed PWV5 stream. Each row is one display color plus
   one compact height—not three band layers. PWV5 owns color and distant-scale
   amplitude. Its scrolling geometry uses the same signed min/max trace as
@@ -752,42 +829,45 @@ Settings exposes three persistent waveform displays:
   weights cancel exactly; a zero weight uses the authored row color. Quiet
   greens, blues and every other encoded hue retain their source colors.
   Signed geometry, coverage, LOD and scrolling are unchanged; no recook.
-- `3BAND` uses the exact packed PWV7 display rows as three independent
-  shapes. Empirically calibrated band scales are applied separately and composited as
+- `3BAND` main uses exact packed PWV7 display rows for three-band membership.
+  Empirically calibrated band scales are applied separately and composited as
   blue lows, brown mids, white highs, and the measured cream/pale-blue
-  membership colors. The full-rate rows are preserved; exact layer-height and
-  interpolation parity remain unverified. See the October 1
+  membership colors over its own independent PWV7 contours. Only the main-lane
+  gain changes1.20→1.35; interpolation/detail remain unchanged. The mini instead
+  uses the dedicated PWV6 stacked preview above. Full-rate rows are preserved; historical independent
+  layer-height parity was never established. See the October 1
   [recording verification](archive/waveform-reference-check-2026-10.md).
 
-October30 upstream-reference tuning preserves these main-lane policies. The
-3BAND mini overview now resolves its three resident layer profiles with all seven
+Historical October30 upstream-reference tuning preserved the then-current main
+policies. The3BAND mini then resolved its resident PWV7 layer profiles with all seven
 membership colors, replacing the former single dominant-band color. Source rows,
 main geometry/coverage, clocks and cache formats are unchanged. Before/after
 native drawables at all13 zooms in all three modes are byte-identical for the
 frozen Nuclear main lane. The [reference audit](rbxport-reference-audit-2026-10.md)
 records exact upstream values and why its approximate rendering paths were not
 blindly substituted for the accepted main compositor.
+The November21 dedicated PWV6 stacked mini supersedes that overview policy.
 
 All three streams are imported or derived in one cache preparation pass and
 remain resident as separate native GPU pyramids. Switching the selector is
-immediate and never recooks the track. BLUE and RGB combine their authored
-150 Hz color with the same persisted signed minimum/maximum cells rather than
+immediate and never recooks the track. BLUE/RGB share persisted signed
+minimum/maximum cells rather than
 filling positive and negative envelopes back to zero. That shared geometry
 keeps tonal passages as continuous oscillating traces and lets noisy passages
-widen naturally; the modes differ only in their PWV3/PWV5 color compositor.
+widen naturally; BLUE/RGB differ in palette, not the outer contour. 3BAND keeps
+its own PWV7 layer outlines and details.
 Both use output-footprint-selected extrema. Compact supplements hold signed
 1-ms cells at close zoom; spatial antialiasing resolves their coverage.
-RGB64/128/184 use physical-pixel translation; RGB576/864 use logical-point
-translation. Other RGB stops and3BAND remain continuous. At RGB64–256,
+BLUE/RGB64/128/184 use physical-pixel translation; BLUE/RGB576/864 use
+logical-point translation. Their other stops and every3BAND stop remain continuous. At64–256,
 signed-interval reconstruction retains the center tap’s peaks instead of
 averaging them away. This restores middle-zoom height without gain changes,
-new cache data or changes to other modes/stops. BLUE rounds to physical pixels through 384 points/s, then logical
-points at 576–1500. Audio, seek and grid clocks remain continuous in every mode.
+new cache data. Historical separate BLUE motion is superseded by the common
+RGB motion policy. Audio, seek and grid clocks remain continuous in every mode.
 The minimum signed stroke is one physical pixel before antialiasing, replacing
 the fixed 3.6-point width that made thin carriers visibly thick on Retina.
-3BAND uses the original 150-Hz PWV7 rows and linear per-band interpolation,
-with a one-row sampling offset. It does not borrow the signed contour, force
-paired 75-Hz rows, or add an artificial decay facet.
+3BAND retains original150-Hz PWV7 layer contours, interpolation and one-row
+offset, with main-only gain1.35. Its mini uses independent PWV6 preview rows.
 
 Main-waveform scrubbing is relative and precise:
 
@@ -839,7 +919,7 @@ Files:
 
 - `native/SoundboxDeck.mm` — CoreAudio playback and Metal renderer host.
 - `native/WaveformShader.h` — the included production Metal source literal.
-- `native/SoundboxDeck.h` — stable C ABI.
+- `native/SoundboxDeck.h` — versioned C ABI9, required by the Python backend.
 - `desktop/native_deck.py` — small Qt-facing adapter over the native C ABI.
 - `build_native.sh` / `native/CMakeLists.txt` — arm64 macOS 14+ build.
 
@@ -896,11 +976,14 @@ resolved beneath Rekordbox's `share/` directory for analysis fallback:
 - `ANLZ0000.DAT` / `PCOB`: fallback cue positions and types.
 - `ANLZ0000.EXT` / `PWV3`: approximately 150 Hz BLUE waveform.
 - `ANLZ0000.EXT` / `PWV5`: approximately 150 Hz RGB waveform.
+- `ANLZ0000.EXT` / `PWV4`: optional1200-row native mini BLUE palette.
 - `ANLZ0000.EXT` / `PCO2`: fallback cue comments and explicit RGB colors.
 - `ANLZ0000.2EX` / `PWV7`: approximately 150 Hz 3BAND shapes.
+- `ANLZ0000.2EX` / `PWV6`:1200-row stacked3BAND mini preview.
 
-SoundBox then persists the complete canonical record independently; prepared
-playback does not reopen Rekordbox analysis. Exact normalized grid and cue
+SoundBox then persists the complete canonical record independently. Prepared
+geometry reuses that record; selected playback additionally reads only the bounded
+optional PWV4/PWV6 previews before complete publication. Exact normalized grid and cue
 fingerprints are refreshed into V5 through atomic manifest-only updates until
 a verified source edit supplies a newer revision. Correcting Rekordbox's initial
 automatic beat grid therefore reaches SoundBox on the next live-library
@@ -917,14 +1000,17 @@ authorized compatibility conversion is a distinct recoverable domain.
 
 ## SoundBox-owned caches
 
+Runtime waveform caches use SBA5 only. V4 container reading/conversion belongs
+only to offline test support; it is excluded from the app. Current signed-mip
+and compact imported V5 records remain supported with unchanged rendering math.
+
 All derived caches are disposable accelerators under
 `~/Library/Application Support/LowFreqLabs/Soundbox/`:
 
 | Directory/file | Owner and purpose |
 |---|---|
 | `libcache.json` | Last read-only library snapshot for instant first paint |
-| `track_analysis/*.sba5` | Canonical V5: checksummed Zstandard sections for source identity/provenance/export eligibility, full grid/cues, 150 Hz BLUE/RGB/3BAND streams and overview; compact imported records store one signed 1-ms base, while fallback/legacy records retain spectral analysis and signed-range mips |
-| `track_analysis/*.sba4` | Read-only compatibility input during bounded one-record-at-a-time V4 migration |
+| `track_analysis/*.sba5` | Canonical V5: checksummed Zstandard sections for source identity/provenance/export eligibility, full grid/cues, 150 Hz BLUE/RGB/3BAND streams and overview; compact imported records store one signed 1-ms base, while generated records retain spectral analysis and signed-range mips |
 
 Each V5 record is atomically replaced, keyed by track ID plus audio identity.
 Interactive loads validate only the requested section SHA-256; cache audits
@@ -944,17 +1030,16 @@ deliberately access the source, after which the ordinary verifier can prove the
 new local identity. Healthy exact or
 previously proven identities remain metadata-only checks on later scans.
 Tracks globally removed from Collection are outside this active cache universe:
-the removal drops their exact V4/V5 records, recurring preparation skips them,
+the removal drops their exact V5 records, recurring preparation skips them,
 and an in-flight bulk or interactive cook cannot republish after the Graveyard
 change. Startup also reclaims records left by older builds. Selection-scoped
 restore returns a globally removed track to ordinary bounded preparation.
 The read-only analysis audit uses this same reachable-track boundary, reports
 offline dataless misses as deferred rather than broken, and lists any records
 outside that boundary as orphans without deleting them.
-Deferred/missing sources and invalid or outdated analysis block global V4
-retirement. A full audit must verify current V5 for every active track and find
-no orphan V4 records before reporting safe. V5 checksum failures are invalid
-analysis, never playable V4. Cache verification does not validate every source
+The read-only audit reports deferred/missing sources and invalid current V5
+separately. V5 checksum failures are invalid analysis and never fall back to an
+older container. Cache verification does not validate every source
 audio byte or prove that offline placeholders can be decoded.
 Background late-waveform recooks also defer dataless sources; queued recooks
 recheck after playback/storage waits. Metadata-only cue/grid changes can still
@@ -1067,10 +1152,9 @@ apply Nuclear Bass Face's 2257 samples as a universal constant. Legacy signed
 contours are sampled with the same origin shift until replaced. Imported grid,
 cue timestamps and colors remain unchanged.
 
-V4 stays playable during compatibility migration. A V4 reduction and a fresh
-audio cook use the same extrema routine and must produce byte-identical V5
-waveform sections. The old record is removed only after the new record passes
-schema/source identity, every-section SHA-256, and whole-payload verification.
+Frozen numerical oracles retain the old V4 input codec outside production.
+Their conversion and a fresh audio cook must produce identical V5 waveform
+sections; runtime no longer probes, plays or migrates V4 containers.
 
 The legacy generated RGB fallback retains its earlier filterbank compensation;
 this is separate from the tagged-MP3 source-clock mapping above. Compensation is
@@ -1116,7 +1200,7 @@ The background `WaveformFillWorker`:
   Rekordbox objects or opens EXT/2EX waveform/color analysis just to determine
   grid ownership;
 - uses a 16 MiB worker stack and a 20/25 GiB full-cook pause/resume guard;
-  one-record V4 reductions and compact replacements use the 5/7 GiB migration
+  one-record compact V5 replacements use the 5/7 GiB
   reserve and run before full cooks; each keeps only one replacement in progress;
 - names low disk space in its pause status and exposes the applicable resume
   threshold on hover; status text fits its full message and the pause is restored
@@ -1141,27 +1225,30 @@ the display link skips incomplete grouped uploads, so a long set's first
 visible waveform is already its final silhouette rather than a smaller
 overview that visibly inflates. Selecting another resident mode never
 re-uploads or recooks the payload. Native decode starts
-before those reads. Every stage carries a monotonic track generation;
+before those reads; audible playback waits for complete GUI-accepted waveform
+readiness. Repeated stages reuse only JSON parsing of identical freshly reread
+header bytes within that selected worker; source and section validation remain
+fresh. Every stage carries a monotonic track generation;
 `begin_track(generation)` atomically clears the previous waveform, grid, cues,
 session marker, and detail before the replacement source appears. Late stages
 from an older track are rejected in both Python and native code. No phase
 expands packed cache rows into nested Python lists.
 
-The whole-track overview normalizes every positive amplitude color weight
+The BLUE/RGB whole-track overview normalizes every positive amplitude color weight
 exactly, including quiet tails. Imported PWV5 can round height down to zero
 while preserving valid color; the imported compact overview may contain that
 same zero, so it cannot independently prove silence. When compact color weight
 is zero, BLUE/RGB overview coverage uses the existing high-precision audio
-envelope and retains authored hue. True zero audio stays background; PWV7
-3BAND keeps its independent geometry. Existing nonzero compact shapes, the main
+envelope and retains authored hue. BLUE/RGB true zero audio stays background;
+3BAND's separate PWV6 mini follows its native baseline rule above. Existing nonzero compact shapes, the main
 waveform, clocks, canonical cache bytes and source audio remain unchanged.
 The correction applies to all tracks through the shared runtime compositor,
 without recooking or per-track exceptions.
 
-Legacy V4 records with an audible height and zero RGB are repaired at load by
-borrowing the nearest valid hue. New analysis clamps filterbank group-delay
+Current analysis clamps filterbank group-delay
 sampling to the first valid color rather than writing black leading rows. Time
-before `0:00` is deck background, true silence remains zero-height, and overview,
+before `0:00` is deck background, true signal silence remains zero-height (the
+PWV6 mini-only baseline is paint, not audio amplitude), and overview,
 ultra detail, grid, and cues share one origin.
 
 Exact imported PWV5 also has a separate runtime edge case: a row may contain
@@ -1199,10 +1286,10 @@ export data change. Evidence: `~/Library/Logs/Soundbox/choices-graveyard-wavefor
 The following combines current rendering rules with explicitly labeled historical
 measurements. The compact-cache and source-clock contracts above take precedence.
 
-- BLUE and RGB share persisted signed minimum/maximum detail and a
-  literal-pixel interval trace; only their PWV3/PWV5 color compositors differ.
-  3BAND uses only its three packed PWV7 heights and must never be clipped to
-  the signed audio trace.
+- RGB supplies BLUE/RGB's signed minimum/maximum interval trace and display-
+  contour fallback. 3BAND retains its original independent PWV7 layer geometry,
+  detail and bounded main display gain1.35. Joint encoded region coverage
+  resolves its seven membership colors without changing those attributes.
 - Pyramid levels remain song-anchored. Exact display pyramids retain peak
   geometry and amplitude-weighted color. The higher-rate signed detail uses
   compact runtime ladder `1/2/3/4/6/8/12/16/24/32/48/64`, or the legacy
@@ -1212,10 +1299,12 @@ measurements. The compact-cache and source-clock contracts above take precedence
   shader. A second
   RMS/translucent envelope was rejected because it reads as a ghost waveform
   rather than additional useful detail.
-- Display color remains a compact ~150 Hz mode buffer rather than being
-  duplicated into millions of ultra samples. BLUE/RGB use PWV3/PWV5 directly;
+- Main display color remains a compact ~150 Hz mode buffer rather than being
+  duplicated into millions of ultra samples. RGB uses PWV5; main BLUE classifies
+  that raw resident color field through its native LUT/gradient proxy policy.
   3BAND uses measured low/mid/high PWV7 display layers with `0.40/0.43/0.40`
-  vertical transfers. Its compositor uses the exact seven-color membership
+  transfers to retain its original independent layer shapes and relationships.
+  Its compositor uses the exact seven-color membership
   table instead of alpha-compositing three generic paints. Each pyramid is
   song-anchored, so
   adjacent colors converge instead of alternating at far zoom. For derived
@@ -1228,19 +1317,18 @@ measurements. The compact-cache and source-clock contracts above take precedence
 - `color_model` versions the persisted RGB analysis independently of the V5
   container schema. Old records remain playable during background or selected-track upgrades; each temporary record lives beside
   its target, and SoundBox-owned grid/cue rows survive the upgrade.
-- Derive one footprint-matched LOD and select one peak level. The scrolling
-  RGB 576/864 source footprint is one logical pixel; other detail policies are
+- Derive one footprint-matched LOD and select one peak level. BLUE/RGB
+  use RGB's one-logical-pixel source footprint at576/864; other detail policies are
   described above. High-rate detail never changes authored palette or timing;
   color sampling uses the fixed92pt/s reference independently of geometry LOD.
 - Print height and amplitude-weighted RGB onto a fixed, global song-coordinate
   attribute lattice, then translate those attributes. The lattice stores no
   alpha or vertical coverage, so it is not a pre-rendered waveform texture and
   the final drawable never refilters an already-antialiased edge. Every zoom
-  uses four attributes per physical pixel. RGB 576/864 use logical-point motion;
-  RGB64/128/184 use physical-pixel motion; other RGB stops and3BAND use
-  continuous fractional translation. BLUE rounds only its display offset:
-  physical-pixel increments through 384 points/s, logical points at 576–1500.
-  Its position error is at most half the chosen increment.
+  uses four attributes per physical pixel. BLUE follows RGB:
+  logical-point motion at576/864, physical-pixel motion at64/128/184, and
+  continuous fractional translation at the remaining stops. 3BAND retains its
+  original continuous motion at every stop; its own LOD/reconstruction stays intact.
   RGB384's earlier exact-area compositor with continuous translation was one
   accepted historical combination. The current faint shoulder applies at384
   too; its continuous motion remains. A detail-replacing envelope is a different
@@ -1260,8 +1348,8 @@ measurements. The compact-cache and source-clock contracts above take precedence
   The taps still earn their keep by feeding `profile_coverage` a dense
   profile to integrate; they simply must not buy undisplayable detail.
 - **Select one conservative level for the declared source footprint.** Compact
-  signed mips use integer millisecond divisors; legacy V5 uses its persisted
-  ladder. RGB576/864 use their accepted logical-pixel footprint; other stops
+  signed mips use integer millisecond divisors; current signed-mip V5 uses its
+  persisted ladder. BLUE/RGB576/864 use their accepted logical-pixel footprint; other stops
   use physical pixels. Wide stops use the same footprint as the middle stops;
   the former half-pixel source footprint exposed undisplayable detail.
   Earlier power-of-two PWV alias measurements are historical, not a description
@@ -1272,7 +1360,7 @@ measurements. The compact-cache and source-clock contracts above take precedence
 - **Preserve source cells at close zoom.** BLUE/RGB use held signed extrema;
   3BAND connects the original 150-Hz rows linearly. The former paired-row
   rule, four-pixel close footprint and height compensation are historical.
-- **Close detail uses a physical-pixel source footprint, except RGB576/864's
+- **BLUE/RGB close detail uses a physical-pixel source footprint, except576/864's
   accepted logical-pixel footprint.** One selected signed mip
   feeds the fixed four-attributes-per-pixel song lattice; it does not broaden
   the final spatial integral or apply divisor-dependent height gain.
@@ -1290,11 +1378,13 @@ measurements. The compact-cache and source-clock contracts above take precedence
   frame, or refresh seam. Height and hue move together, while final edge
   antialiasing remains tied to the destination pixel. The scrolling lane uses
   joint signed-interval integration without the overview vividness curve.
-  BLUE composites exact area directly. Every RGB stop retains exact area except
-  for the bounded faint-detail shoulder described below. Historically, boosting 20% coverage to nearly 49%
+  BLUE/RGB retain RGB's exact area and the bounded faint-detail
+  shoulder described below. Historically, boosting20% coverage to nearly49%
   made saturated red/orange edges visibly pulse even at 24 px/s. The small
-  BLUE/3BAND overview retains the continuous cubic vividness curve for true
-  subpixel peaks; RGB overview uses the main lane's bounded faint-only shoulder. This distinction affects only compositing, never height,
+  BLUE overview retains the continuous cubic vividness curve for true
+  subpixel peaks; RGB overview uses the main lane's bounded faint-only shoulder.
+  The dedicated PWV6 mini instead uses its native opaque stacked source image.
+  This distinction affects only compositing, never main height,
   hue, LOD, or detail.
 - Integrate the fixed height/hue profile over exactly one physical pixel before
   final vertical coverage. Every mode and all thirteen zooms use the pixel endpoints plus
@@ -1314,21 +1404,22 @@ measurements. The compact-cache and source-clock contracts above take precedence
   clipped-linear moments integrate PWV5 display channels with premultiplied coverage;
   a horizontally hidden color sample cannot tint a visible RGB edge. RGB blends
   that encoded result with the encoded background and decodes the final opaque
-  pixel once for the sRGB attachment. BLUE retains linear-light integration.
+  pixel once for the sRGB attachment. Main BLUE also resolves encoded gradient
+  colors before final decode. 3BAND integrates exact joint seven-region areas
+  in encoded space; products of average layer coverages invent false colors.
   RGB uses the fixed92pt/s reference color field, including its25% fine-area
   correction, at every zoom. This replaces the historical576/864-specific
   fine/coarse occupancy correction without changing those stops' geometry or
-  motion. No final-pixel blur, per-frame palette gain, new cache format or source
-  read is added. All RGB stops apply a hue-independent
+  motion. This RGB reference policy adds no final-pixel blur, per-frame palette
+  gain, new cache format or source read. All RGB stops apply a hue-independent
   visibility shoulder only when exact coverage c is below0.18, including384:
   c′ = c × (1 + 1.5 × (1−c/0.18)²). It is smooth and monotonic, adds at most
   0.04 coverage, leaves zero empty and joins unmodified exact area at 0.18.
   Premultiplied color scales by c′/c, preserving hue. The prior broad occupied-
   column boost is removed. All source cells, extrema, LOD and colors remain.
-  BLUE evaluates its white/cyan/blue radial transfer from the same local
-  signed center and width. It splits at coverage/radial branch changes and
-  integrates each smooth branch with four-point Gauss-Legendre quadrature in
-  premultiplied linear light; a single coverage-centroid color evaluation is
+  BLUE evaluates its native LUT/three-layer encoded gradient within that same
+  interval. It splits at coverage/gradient branch changes and integrates each
+  smooth branch with four-point Gauss-Legendre quadrature; a single coverage-centroid color evaluation is
   insufficient for the nonlinear field. Averaging color independently from interval
   coverage creates an internal brightness/color tick even when the silhouette
   itself is stationary.
@@ -1354,7 +1445,8 @@ measurements. The compact-cache and source-clock contracts above take precedence
   path may per-tap alpha be averaged or an already-rasterized edge be sampled
   again.
 - The small RGB overview uses the main RGB faint-only shoulder and encoded-space
-  compositing. BLUE/3BAND overviews retain continuous cubic ease-out for thin peaks.
+  compositing. BLUE retains its overview coverage policy;3BAND uses the dedicated
+  native PWV6 stacked source image, including its mini-only baseline floor.
   The scrolling lane uses joint geometric coverage with the explicit RGB column
   policy above; applying overview-wide cubic vividness there made saturated edge
   pixels pulse.
@@ -1569,8 +1661,10 @@ overviews and saved musical/display payloads are unchanged. RGB24/32/48/64 use40
 of measured fine-area contrast correction plus82% encoded contrast against the
 background; RGB92 retains25% occupancy correction without that dimming. Sonny
 rejected the first subtle candidate and approved this visibly darker RGB render.
-The BLUE/3BAND height changes remain installed; the per-zoom RGB color policy is
-historical and must not be reinstated.
+The November21 BLUE common-contour requirement supersedes its6% height change.
+The latest3BAND correction restores its own layer shapes with gain1.35 rather
+than this historical1.20. The per-zoom RGB color policy is also historical and must not be
+reinstated.
 A separate grid-ready signal refreshes edit admission when the manifest arrives
 after audio readiness. Session CUE is disabled during physical Hot/Memory holds.
 

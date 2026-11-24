@@ -60,6 +60,13 @@ replacement and broader metadata remain gated.
 
 ## Waveform values and rendering
 
+This section records the October30 implementation decision, not the current
+palette/mini contract. The accepted November21 follow-ups replace BLUE's radial
+palette and the derived 3BAND overlap mini: BLUE uses native palette families and
+optional PWV4 metadata; 3BAND's mini uses dedicated PWV6 stacked-preview metadata.
+Main 3BAND retains independent PWV7 geometry with gain 1.35 and joint seven-color
+coverage. Current rendering and approximation limits are in [PLAYER](PLAYER.md).
+
 The [upstream canvas renderer](https://github.com/chrisle/rbxport/blob/b739d369665b492534dc2eae0733322c040a26d5/src/canvas/waveform.ts)
 and [theme tokens](https://github.com/chrisle/rbxport/blob/b739d369665b492534dc2eae0733322c040a26d5/src/styles/theme.ts)
 were compared with SoundBox's packed decoder and Metal compositor.
@@ -73,7 +80,7 @@ were compared with SoundBox's packed decoder and Metal compositor.
 | 3BAND overview | Each band's inner/outer membership is retained | Our overview reduced the data to one dominant color. It now resolves all three existing layer profiles and their overlap colors, preserving brown/cream cores instead of flattening them to blue. No cache recook or main-lane change is needed. |
 | Close zoom | Upstream documents conditional attack interpolation and separate PCM windows | These include rendering heuristics. Preserve SoundBox's accepted signed detail, complete physical-pixel profile integration, stable LOD and continuous translation. |
 
-The shared seven-color table is:
+The main waveform's retained seven-color table is:
 
 | Membership | Display RGB |
 |---|---|

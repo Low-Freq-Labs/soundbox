@@ -9,6 +9,7 @@ static inline NSString *soundboxWaveformShaderSource() {
 #include <metal_stdlib>
 using namespace metal;
 struct WaveSample { float height; float r; float g; float b; };
+struct BlueOverviewSample { float outer; float front; float r; float g; float b; };
 struct AudioEnvelopeSample {
     ushort upper;
     ushort lower;
@@ -50,6 +51,8 @@ struct Uniforms { float currentSeconds;
                   uint waveformMode;
                   uint frameTraceMarkerActive;
                   uint frameTraceSequence;
+                  uint blueOverviewCount;
+                  uint threeBandOverviewCount;
                   };
 constant uint kAttributeProfileCapacity = 7u;
 struct Out {
@@ -578,11 +581,109 @@ inline float3 interval_occupancy_color(
     return mix(background, color, occupancy);
 }
 
+// Native BLUE uses spectral ratio palettes and encoded-color gradients.
+// Seven 10-dB anchors express each 61-entry ramp (within one display code).
+// These fields never own geometry, opacity or the playback clock.
+struct BluePalette { float3 outer; float3 inner; float2 radii; };
+constant float3 kBlueOuterPurple[7] = {
+    float3(51.000000, 134.000000, 206.000000),
+    float3(60.000015, 89.000000, 192.000061),
+    float3(67.000008, 70.999969, 198.000122),
+    float3(70.000038, 60.999969, 234.000183),
+    float3(80.000038, 59.999985, 255.000244),
+    float3(80.000038, 59.999985, 255.000244),
+    float3(80.000038, 59.999985, 255.000244)
+};
+constant float3 kBlueOuterCyan[7] = {
+    float3(51.000000, 134.000000, 206.000000),
+    float3(36.000000, 155.999969, 187.000061),
+    float3(35.000015, 185.999969, 200.000092),
+    float3(33.000008, 197.000031, 205.000092),
+    float3(32.000023, 204.000000, 209.000031),
+    float3(27.500015, 206.624969, 209.874969),
+    float3(23.000008, 209.249939, 210.749908)
+};
+constant float3 kBlueInnerPurple[7] = {
+    float3(255.000000, 255.000000, 255.000000),
+    float3(220.000000, 255.000000, 255.000000),
+    float3(91.999969, 133.000031, 255.000000),
+    float3(68.999939, 94.000023, 218.000031),
+    float3(64.999924, 87.000053, 209.000092),
+    float3(63.999939, 94.000023, 212.000122),
+    float3(62.999954, 100.999992, 215.000153)
+};
+constant float3 kBlueInnerCyan[7] = {
+    float3(255.000000, 255.000000, 255.000000),
+    float3(85.000000, 255.000000, 255.000000),
+    float3(61.999973, 210.000000, 210.000000),
+    float3(23.000000, 165.000000, 210.000000),
+    float3(23.000000, 165.000000, 210.000000),
+    float3(23.000000, 165.000000, 210.000000),
+    float3(23.000000, 165.000000, 210.000000)
+};
+
+inline uint blue_db_index(float value) {
+    return uint(clamp(rint(value), 0.0, 60.0));
+}
+inline float blue_db(float numerator, float denominator) {
+    const float epsilon = 1.1920928955078125e-7;
+    if (numerator <= epsilon) return denominator > epsilon ? -60.0 : 0.0;
+    if (denominator <= epsilon) return 60.0;
+    return clamp(20.0 * log10(numerator / denominator), -60.0, 60.0);
+}
+inline float3 blue_lut(constant float3 *table, uint index) {
+    const uint left = min(index / 10u, 5u);
+    return mix(table[left], table[left + 1u], float(index - left * 10u) * 0.1);
+}
+inline float3 blue_high_color(float mid, float high) {
+    const float db = blue_db(mid, high);
+    const float3 greenBlue = blue_lut(kBlueInnerCyan, blue_db_index(db));
+    return float3(blue_lut(kBlueInnerCyan, blue_db_index(db + 5.0)).r,
+                  greenBlue.g, greenBlue.b);
+}
+inline BluePalette native_blue_palette(float3 spectrum) {
+    const float3 levels = max(spectrum, float3(0.0));
+    const float a = levels.r, b = levels.g, c = levels.b;
+    const float total = a + b + c;
+    if (total <= 1.1920928955078125e-7) {
+        // No spectral classification must not hide an audible interval.
+        // A genuinely empty contour still premultiplies this color by zero.
+        const float3 base = float3(51.0,134.0,206.0) / 255.0;
+        return {base, base, float2(0.0)};
+    }
+    const float3 outer = a > b
+        ? blue_lut(kBlueOuterPurple, blue_db_index(blue_db(a,b)))
+        : blue_lut(kBlueOuterCyan, blue_db_index(blue_db(b,a)));
+    float3 inner;
+    if (a > b && b > c) inner = outer;
+    else if (a > b && c > b)
+        inner = blue_lut(kBlueInnerPurple, blue_db_index(blue_db(a,c)));
+    else if (b >= a && b >= c)
+        inner = a+c > 1.1920928955078125e-7
+            ? mix(blue_lut(kBlueOuterCyan, blue_db_index(blue_db(b,a))),
+                  blue_high_color(b,c), c/(a+c)) : outer;
+    else inner = blue_high_color(b,c);
+    return {saturate(floor(outer) / 255.0), saturate(floor(inner) / 255.0),
+            float2((b+c)/total, c/total)};
+}
+inline float3 blue_interval_color(float3 outer, float3 inner, float2 radii,
+        float radial, float antialiasRadius) {
+    const float3 middle = (outer + inner) * 0.5;
+    float3 color = mix(middle, outer, saturate(radial));
+    const float aa = max(antialiasRadius, 1e-6);
+    if (radii.x > 0.0) color = mix(color,
+        mix(inner, middle, saturate(radial / radii.x)),
+        saturate((radii.x + aa - radial)/(2.0*aa)));
+    if (radii.y > 0.0) color = mix(color, inner,
+        saturate((radii.y + aa - radial)/(2.0*aa)));
+    return color;
+}
+
 inline float3 reference_wave_color(
         const device WaveSample *samples,
         const device AudioEnvelopeSample *detail,
         constant Uniforms &u, WaveAttributeClock clock,
-        float secondOffset, float scale) {
+        float secondOffset, float scale, bool rgbOccupancy = true) {
     // Sonny's reference is the 92 pt/s RGB display. Evaluate its palette on
     // the song clock at every zoom; geometry alone chooses a variable LOD.
     // Neither wider peak bins nor close-detail occupancy may brighten/dim it.
@@ -598,7 +699,7 @@ inline float3 reference_wave_color(
     const float weight = neighbors ? (left.colorWeight + 2.0*center.colorWeight + right.colorWeight)*0.25 : center.colorWeight;
     float3 color = recover_rgb_color(weighted,weight,
         linear_wave_color(samples,u.waveMipOffsets[level],u.waveMipCounts[level],clock.waveIndex,local,level));
-    if (u.waveformMode != 2 || u.audioDetailSampleCount == 0 || u.audioDetailMipCount == 0) return color;
+    if (!rgbOccupancy || u.waveformMode != 2 || u.audioDetailSampleCount == 0 || u.audioDetailMipCount == 0) return color;
     const float footprint = u.audioDetailSamplesPerSecond / (referencePixels * scale);
     const uint detailLevel = audio_detail_lod(footprint,u.audioDetailMipDivisors,u.audioDetailMipCount);
     const uint divisor = u.audioDetailMipDivisors[detailLevel];
@@ -621,18 +722,10 @@ inline float3 reference_wave_color(
         display_srgb_to_linear(color),mix(1.0,occupancy,0.25),background));
 }
 
-kernel void wave_attribute_kernel(
-        const device WaveSample *samples [[buffer(0)]],
-        constant Uniforms &u [[buffer(1)]],
-        const device AudioEnvelopeSample *audioDetailSamples [[buffer(4)]],
-        device WaveAttribute *attributes [[buffer(5)]],
-        const device WaveAttributeClock *clocks [[buffer(6)]],
-        uint id [[thread_position_in_grid]]) {
-    if (id >= u.waveAttributeCount
-            || u.sampleCount == 0 || u.waveMipCount == 0) {
-        return;
-    }
-    const WaveAttributeClock clock = clocks[id / kWaveAttributeClockBlock];
+inline WaveAttribute evaluate_wave_attribute(
+        const device WaveSample *samples, constant Uniforms &u,
+        const device AudioEnvelopeSample *audioDetailSamples,
+        WaveAttributeClock clock, uint id, bool audioGeometry, bool displayColor) {
     const float scale = max(1.0, u.drawableScale);
     const float samplesPerPixel =
         max(1.0, u.waveAttributeSamplesPerPixel);
@@ -661,9 +754,7 @@ kernel void wave_attribute_kernel(
             clock.wavePhase + secondOffset * u.samplesPerSecond,
             waveLevel);
     if (sharpWave.valid == 0.0) {
-        attributes[id].colorAndUpper = float4(0.0);
-        attributes[id].lowerAndColorWeight = float4(0.0);
-        return;
+        return {float4(0.0), float4(0.0)};
     }
     // Positive cubic reconstruction removes moving mip-lattice corners at
     // 24-384 px/s. At the close stops sharpWave owns geometry instead:
@@ -745,7 +836,8 @@ kernel void wave_attribute_kernel(
         stableKernel);
     float3 color = weightedColor
         / max(heightWeight, 0.0001);
-    if (u.waveformMode != 3) color = reference_wave_color(samples,audioDetailSamples,u,clock,secondOffset,scale);
+    if (displayColor && u.waveformMode != 3)
+        color = reference_wave_color(samples,audioDetailSamples,u,clock,secondOffset,scale);
     float height = mix(
         sharpWave.height, stableWave.height, stableKernel);
     float upperHeight = height;
@@ -757,7 +849,7 @@ kernel void wave_attribute_kernel(
     // BLUE and RGB use close-resolution audio geometry together with their
     // authored PWV3/PWV5 amplitude and color. 3BAND remains three native
     // PWV7 layers and bypasses the audio contour.
-    if (u.waveformMode != 3
+    if (audioGeometry && u.waveformMode != 3
             && u.audioDetailSampleCount > 0
             && u.audioDetailMipCount > 0) {
         // BLUE and RGB both use the literal signed min/max trace at close
@@ -890,17 +982,13 @@ kernel void wave_attribute_kernel(
 
         }
     }
-    // Main-lane display headroom is independent of saved/overview amplitudes.
-    // Retain PWV7's three independent layers and signed BLUE zero crossings.
+    // Thicken only the main PWV7 display layers. Their relative heights,
+    // reconstruction and independent contour remain native; caches stay intact.
     if (u.waveformMode == 3) {
-        const float3 bands = min(color * height * 1.20, float3(1.0));
+        const float3 bands = min(color * height * 1.35, float3(1.0));
         height = max(max(bands.r, bands.g), bands.b);
         color = bands / max(height, 0.0001);
         upperHeight = lowerHeight = height;
-    } else if (u.waveformMode == 1) {
-        upperHeight = clamp(upperHeight * 1.06, -1.0, 1.0);
-        lowerHeight = clamp(lowerHeight * 1.06, -1.0, 1.0);
-        height = max(abs(upperHeight), abs(lowerHeight));
     }
     // Store premultiplied RGB on the fixed lattice. Interpolating straight
     // color and height separately, then multiplying them in the fragment,
@@ -908,10 +996,48 @@ kernel void wave_attribute_kernel(
     // with playback phase. Preserve the SAME weight alongside RGB: deriving
     // it again from interpolated signed bounds shrinks it at zero crossings
     // and where the dominant boundary changes, spuriously whitening colors.
-    attributes[id].colorAndUpper =
-        float4(color * height, upperHeight);
-    attributes[id].lowerAndColorWeight =
-        float4(lowerHeight, height, 0.0, 0.0);
+    return {float4(color * height, upperHeight),
+        float4(lowerHeight, height, 0.0, 0.0)};
+}
+
+kernel void wave_attribute_kernel(
+        const device WaveSample *samples [[buffer(0)]],
+        constant Uniforms &u [[buffer(1)]],
+        const device AudioEnvelopeSample *audioDetailSamples [[buffer(4)]],
+        device WaveAttribute *attributes [[buffer(5)]],
+        const device WaveAttributeClock *clocks [[buffer(6)]],
+        const device WaveSample *geometrySamples [[buffer(7)]],
+        constant Uniforms &geometryUniforms [[buffer(8)]],
+        device float4 *blueInnerAttributes [[buffer(9)]],
+        uint id [[thread_position_in_grid]]) {
+    if (id >= u.waveAttributeCount
+            || u.sampleCount == 0 || u.waveMipCount == 0) return;
+    const WaveAttributeClock clock = clocks[id / kWaveAttributeClockBlock];
+    // PWV7 owns all three independent 3BAND contours, not RGB's audio trace.
+    if (u.waveformMode == 3) {
+        attributes[id] = evaluate_wave_attribute(
+            samples, u, audioDetailSamples, clock, id, false, true);
+        return;
+    }
+    // BLUE and RGB share the accepted RGB contour and song lattice.
+    WaveAttribute geometry = evaluate_wave_attribute(
+        geometrySamples, geometryUniforms, audioDetailSamples, clock, id, true,
+        u.waveformMode == 0 || u.waveformMode == 2);
+    if (u.waveformMode == 1) {
+        const float scale = max(1.0, u.drawableScale);
+        const float secondOffset = float(id % kWaveAttributeClockBlock)
+            / max(1.0, u.pixelsPerSecond * scale * max(1.0, u.waveAttributeSamplesPerPixel));
+        // Reuse the accepted, resident song-color field. PWV5 ratios are
+        // display proxies for the native filters; no extra audio DSP is needed.
+        const BluePalette palette = native_blue_palette(reference_wave_color(
+            geometrySamples, audioDetailSamples, geometryUniforms,
+            clock, secondOffset, scale, false));
+        const float weight = geometry.lowerAndColorWeight.y;
+        geometry.colorAndUpper.rgb = palette.outer * weight;
+        geometry.lowerAndColorWeight.zw = palette.radii * weight;
+        blueInnerAttributes[id] = float4(palette.inner * weight, weight);
+    }
+    attributes[id] = geometry;
 }
 
 // Eight midpoint taps per physical pixel, at the footprint-matched LOD.
@@ -1079,6 +1205,127 @@ inline CoverageMoments clipped_linear_coverage_moments(
     return result;
 }
 
+// Exact area of a linear layer through one finite vertical pixel. Keeping
+// this separate protects the established RGB/BLUE interval arithmetic.
+inline float mean_clamped_linear(float first, float last) {
+    const float lo = min(first,last), hi = max(first,last);
+    if (hi <= 0.0) return 0.0;
+    if (lo >= 1.0) return 1.0;
+    if (hi-lo <= 1e-7) return saturate((first+last)*0.5);
+    const float begin = max(lo,0.0), end = min(hi,1.0);
+    const float linearArea = max(0.0,end-begin)*(end+begin)*0.5;
+    return saturate((linearArea+max(0.0,hi-max(lo,1.0)))/(hi-lo));
+}
+inline float three_band_layer_area(float first, float last,
+        float distance, float heightScale, float antialias) {
+    const float scale = max(heightScale,1e-5);
+    const float width = max(2.0*antialias/scale,1e-6);
+    const float bottom = (distance-antialias)/scale;
+    first=max(first,0.0); last=max(last,0.0);
+    return max(0.0,
+        mean_clamped_linear((first-bottom)/width,(last-bottom)/width)
+        - mean_clamped_linear((-first-bottom)/width,(-last-bottom)/width));
+}
+inline float3 three_band_membership_color(uint membership) {
+    switch (membership) {
+        case 1u: return float3(0.0,85.0,225.0)/255.0;
+        case 2u: return float3(255.0,166.0,0.0)/255.0;
+        case 3u: return float3(180.0,105.0,10.0)/255.0;
+        case 4u: return float3(1.0);
+        case 5u: return float3(210.0,220.0,250.0)/255.0;
+        case 6u: return float3(255.0,240.0,215.0)/255.0;
+        case 7u: return float3(245.0,235.0,215.0)/255.0;
+        default: return float3(0.0);
+    }
+}
+inline IntervalSurface resolve_three_band_surface(
+        thread const float *lows, thread const float *mids,
+        thread const float *highs, thread const float *positions,
+        uint count, float distance, float heightScale, float antialias) {
+    IntervalSurface result{0.0,float3(0.0)};
+    if (count < 2 || count > kAttributeProfileCapacity) return result;
+    float3 smallest=float3(INFINITY), largest=float3(0.0);
+    for (uint i=0;i<count;++i) {
+        const float3 value=max(float3(lows[i],mids[i],highs[i]),float3(0.0));
+        smallest=min(smallest,value); largest=max(largest,value);
+    }
+    const bool3 full=smallest > 0.0 && smallest*heightScale >= distance+antialias;
+    const bool3 empty=largest <= 0.0 || largest*heightScale <= distance-antialias;
+    if (all(full || empty)) {
+        const uint membership=(full.r?1u:0u)|(full.g?2u:0u)|(full.b?4u:0u);
+        result.coverage=membership?1.0:0.0;
+        result.premultipliedColor=three_band_membership_color(membership);
+        return result;
+    }
+    float areas[7]={0.0,0.0,0.0,0.0,0.0,0.0,0.0};
+    float totalSpan=0.0;
+    for (uint i=0;i+1<count;++i) {
+        const float span=max(0.0,positions[i+1]-positions[i]);
+        if (span<=0.0) continue;
+        totalSpan+=span;
+        const float3 first=max(float3(lows[i],mids[i],highs[i]),float3(0.0));
+        const float3 last=max(float3(lows[i+1],mids[i+1],highs[i+1]),float3(0.0));
+        // Every pair crossing partitions the minima into linear pieces.
+        // Intersections are areas of min(layer heights), not products of
+        // independently averaged coverages, which invent false overlap colors.
+        float points[5]={0.0,1.0,1.0,1.0,1.0}; uint pointCount=2;
+        for (uint a=0;a<3;++a) for (uint b=a+1;b<3;++b) {
+            const float start=first[a]-first[b];
+            const float slope=(last[a]-last[b])-start;
+            if (abs(slope)>1e-7) {
+                const float crossing=-start/slope;
+                if (crossing>0.0 && crossing<1.0) points[pointCount++]=crossing;
+            }
+        }
+        for (uint n=1;n<pointCount;++n) {
+            const float value=points[n];uint insertion=n;
+            while (insertion>0 && points[insertion-1]>value) {
+                points[insertion]=points[insertion-1];--insertion;
+            }
+            points[insertion]=value;
+        }
+        for (uint n=0;n+1<pointCount;++n) {
+            const float pieceSpan=(points[n+1]-points[n])*span;
+            if (pieceSpan<=0.0) continue;
+            const float3 begin=mix(first,last,points[n]);
+            const float3 end=mix(first,last,points[n+1]);
+            for (uint membership=1;membership<8;++membership) {
+                float h0=INFINITY,h1=INFINITY;
+                for (uint channel=0;channel<3;++channel) if (membership&(1u<<channel)) {
+                    h0=min(h0,begin[channel]);h1=min(h1,end[channel]);
+                }
+                areas[membership-1]+=pieceSpan*three_band_layer_area(
+                    h0,h1,distance,heightScale,antialias);
+            }
+        }
+    }
+    const float inverse=1.0/max(totalSpan,1e-6);
+    for (uint i=0;i<7;++i) areas[i]*=inverse;
+    const float low=areas[0],mid=areas[1],lowMid=areas[2],high=areas[3];
+    const float lowHigh=areas[4],midHigh=areas[5],allBands=areas[6];
+    result.coverage=saturate(low+mid+high-lowMid-lowHigh-midHigh+allBands);
+    const float3 lowColor=three_band_membership_color(1u);
+    const float3 midColor=three_band_membership_color(2u);
+    const float3 highColor=three_band_membership_color(4u);
+    const float3 lowMidColor=three_band_membership_color(3u);
+    const float3 lowHighColor=three_band_membership_color(5u);
+    const float3 midHighColor=three_band_membership_color(6u);
+    result.premultipliedColor=clamp(
+        low*lowColor+mid*midColor+high*highColor
+        +lowMid*(lowMidColor-lowColor-midColor)
+        +lowHigh*(lowHighColor-lowColor-highColor)
+        +midHigh*(midHighColor-midColor-highColor)
+        +allBands*(three_band_membership_color(7u)-lowMidColor-lowHighColor-midHighColor
+            +lowColor+midColor+highColor),float3(0.0),float3(result.coverage));
+    return result;
+}
+
+inline float4 linear_blue_inner(const device float4 *values, uint count, float position) {
+    const float bounded = clamp(position, 0.0, float(count - 1));
+    const uint left = uint(floor(bounded));
+    return mix(values[left], values[min(left+1u,count-1u)], bounded-float(left));
+}
+
 inline IntervalSurface resolve_interval_surface(
         thread const float *minimums,
         thread const float *maximums,
@@ -1086,9 +1333,12 @@ inline IntervalSurface resolve_interval_surface(
         thread const float *positions,
         uint count, float signedPosition,
         float heightScale, float antialias,
-        bool blueMode) {
+        bool blueMode,
+        thread const float3 *blueInnerColors = nullptr,
+        thread const float2 *blueRadii = nullptr) {
     IntervalSurface result{0.0, float3(0.0)};
-    if (count < 2 || count > kAttributeProfileCapacity) {
+    if (count < 2 || count > kAttributeProfileCapacity
+            || (blueMode && (blueInnerColors == nullptr || blueRadii == nullptr))) {
         return result;
     }
     // Full minimum stroke is one physical pixel (two AA half-widths),
@@ -1097,10 +1347,7 @@ inline IntervalSurface resolve_interval_surface(
         antialias / max(heightScale, 1e-5);
     const float band =
         max(antialias / max(heightScale, 1e-5), 1e-6);
-    const float3 whiteLinear = display_srgb_to_linear(
-        float3(237.0 / 255.0, 1.0, 1.0));
-    const float3 cyanLinear = display_srgb_to_linear(
-        float3(0.0, 1.0, 1.0));
+
     float totalSpan = 0.0;
     for (uint segment = 0; segment + 1 < count; ++segment) {
         const float segmentSpan =
@@ -1127,19 +1374,15 @@ inline IntervalSurface resolve_interval_surface(
         const float lower1 = center1 - halfWidth1;
         const float upper0 = center0 + halfWidth0;
         const float upper1 = center1 + halfWidth1;
-        // RGB integrates authored display channels before decoding the final
-        // opaque pixel. BLUE keeps its existing linear-light radial field.
-        const float3 color0 = blueMode
-            ? display_srgb_to_linear(saturate(encodedColors[segment]))
-            : saturate(encodedColors[segment]);
-        const float3 color1 = blueMode
-            ? display_srgb_to_linear(saturate(encodedColors[segment + 1]))
-            : saturate(encodedColors[segment + 1]);
+        // RGB and BLUE integrate display channels before the final decode.
+        // Independent 3BAND layers use their own fragment path below.
+        const float3 color0 = saturate(encodedColors[segment]);
+        const float3 color1 = saturate(encodedColors[segment + 1]);
 
         // Split at every change in coverage or BLUE's radial/color branch.
         // The color integral must follow the visible part of the pixel, not
         // evaluate a nonlinear field only at its coverage centroid.
-        float points[12] = {0.0, 1.0};
+        float points[16] = {0.0, 1.0};
         uint pointCount = 2;
         const float centerSlope = center1 - center0;
         if (abs(centerSlope) > 1e-7) {
@@ -1147,17 +1390,22 @@ inline IntervalSurface resolve_interval_surface(
             if (crossing > 0.0 && crossing < 1.0) points[pointCount++] = crossing;
         }
         if (blueMode) {
-            const float starts[7] = {
-                lower0 - band, lower0, lower0 + band,
-                upper0 - band, upper0, upper0 + band, halfWidth0};
-            const float ends[7] = {
-                lower1 - band, lower1, lower1 + band,
-                upper1 - band, upper1, upper1 + band, halfWidth1};
-            for (uint cut = 0; cut < 7; ++cut) {
+            const float2 bands0 = blueMode ? blueRadii[segment] : float2(0.0);
+            const float2 bands1 = blueMode ? blueRadii[segment+1] : float2(0.0);
+            const float starts[10] = {
+                lower0-band, lower0, lower0+band,
+                upper0-band, upper0, upper0+band,
+                center0-halfWidth0*bands0.x, center0+halfWidth0*bands0.x,
+                center0-halfWidth0*bands0.y, center0+halfWidth0*bands0.y};
+            const float ends[10] = {
+                lower1-band, lower1, lower1+band,
+                upper1-band, upper1, upper1+band,
+                center1-halfWidth1*bands1.x, center1+halfWidth1*bands1.x,
+                center1-halfWidth1*bands1.y, center1+halfWidth1*bands1.y};
+            for (uint cut = 0; cut < (blueMode ? 10u : 6u); ++cut) {
                 const float slope = ends[cut] - starts[cut];
                 if (abs(slope) <= 1e-7) continue;
-                const float target = cut == 6 ? 0.28 : signedPosition;
-                const float crossing = (target - starts[cut]) / slope;
+                const float crossing = (signedPosition - starts[cut]) / slope;
                 if (crossing > 0.0 && crossing < 1.0) points[pointCount++] = crossing;
             }
         }
@@ -1217,14 +1465,13 @@ inline IntervalSurface resolve_interval_surface(
                 const float halfWidth = mix(halfWidth0, halfWidth1, position);
                 const float radial = saturate(
                     abs(signedPosition - center) / max(halfWidth, 1e-5));
-                const float whiteStrength = smoothstep(0.0, 0.28, halfWidth);
-                const float3 centerLinear = mix(
-                    cyanLinear, whiteLinear, whiteStrength);
-                const float radialBlend = smoothstep(0.0, 1.0, radial);
-                const float3 edgeLinear = mix(color0, color1, position);
                 const float coverage = saturate(mix(value0, value1, position));
-                result.premultipliedColor += mix(
-                    centerLinear, edgeLinear, radialBlend)
+                const float3 encoded = blue_interval_color(
+                    mix(color0, color1, position),
+                    mix(blueInnerColors[segment], blueInnerColors[segment+1], position),
+                    mix(blueRadii[segment], blueRadii[segment+1], position),
+                    radial, band/max(halfWidth,1e-5));
+                result.premultipliedColor += encoded
                     * (coverage * weights[tap] * halfSpan * segmentSpan);
             }
         }
@@ -1426,50 +1673,68 @@ inline WaveSurface overview_wave_surface(
     return surface;
 }
 
-// The overview retains all three PWV7 layer heights. Its palette is the
-// same seven membership colors as the main lane and pinned rbxport's
-// src/canvas/waveform.ts; choosing only the dominant band loses the inner
-// brown/cream stretches even though their original data is resident.
+// Native3BAND preview is a static1200x25 encoded, premultiplied image.
+// Its source-row23 baseline is intentional; it never affects main silence.
+inline float4 three_band_preview_image(const device uchar4 *pixels,
+        uint count,float x,float y) {
+    if (y<0.0 || y>=25.0) return float4(0.0);
+    const float column=clamp(x*float(count)-0.5,0.0,float(count-1));
+    const float row=clamp(y-0.5,0.0,24.0);
+    const uint x0=uint(floor(column)),x1=min(x0+1u,count-1u);
+    const uint y0=uint(floor(row)),y1=min(y0+1u,24u);
+    return mix(mix(float4(pixels[y0*count+x0]),float4(pixels[y0*count+x1]),fract(column)),
+               mix(float4(pixels[y1*count+x0]),float4(pixels[y1*count+x1]),fract(column)),fract(row))/255.0;
+}
 inline float4 three_band_overview_fragment(
         const device WaveSample *samples, constant Uniforms &u,
-        float position, float footprint, float distance, float antialias,
+        float position, float footprint, float y, float antialias,
         float3 background) {
-    const uint anchor = min(uint(floor(position)), u.sampleCount - 1);
-    const float phase = position - floor(position);
-    const uint level = biased_lod(footprint, u.waveMipCount);
-    float lows[kIntegrationTaps], mids[kIntegrationTaps], highs[kIntegrationTaps];
-    uint count = 0;
-    float3 peaks = float3(0.0);
-    for (uint tap = 0; tap < kIntegrationTaps; ++tap) {
-        const WaveTap sample = wave_tap(
-            samples, u.waveMipOffsets[level], u.waveMipCounts[level],
-            anchor, phase + integration_offset(tap, kIntegrationTaps) * footprint,
-            level);
-        if (sample.valid == 0.0) continue;
-        // Three-band pyramid colors are premultiplied absolute layer heights.
-        const float3 bands = max(sample.weightedColor, float3(0.0));
-        lows[count] = bands.r; mids[count] = bands.g; highs[count] = bands.b;
-        peaks = max(peaks, bands); ++count;
-    }
-    if (count < 2 || max(peaks.r, max(peaks.g, peaks.b)) == 0.0) {
-        return float4(background, 1.0);
-    }
-    const float low = peaks.r > 0.0 ? profile_coverage(lows, count, distance, 11.0, antialias) : 0.0;
-    const float mid = peaks.g > 0.0 ? profile_coverage(mids, count, distance, 11.0, antialias) : 0.0;
-    const float high = peaks.b > 0.0 ? profile_coverage(highs, count, distance, 11.0, antialias) : 0.0;
-    const float none = (1.0-low) * (1.0-mid) * (1.0-high);
-    const float alpha = 1.0-none;
-    if (alpha <= 0.0) return float4(background, 1.0);
-    const float3 color = (
-        low*(1.0-mid)*(1.0-high)*float3(0.0,85.0,225.0)
-        + (1.0-low)*mid*(1.0-high)*float3(255.0,166.0,0.0)
-        + low*mid*(1.0-high)*float3(180.0,105.0,10.0)
-        + (1.0-low)*(1.0-mid)*high*float3(255.0)
-        + low*(1.0-mid)*high*float3(210.0,220.0,250.0)
-        + (1.0-low)*mid*high*float3(255.0,240.0,215.0)
-        + low*mid*high*float3(245.0,235.0,215.0)) / (255.0*alpha);
-    return float4(mix(background, display_srgb_to_linear(color),
-                      vivid_wave_coverage(alpha)), 1.0);
+    // Missing native PWV6 uses resident detail without late I/O or repaint.
+    // This derived fallback keeps the same stacked layout, not false overlaps.
+    const uint anchor=min(uint(floor(position)),u.sampleCount-1);
+    const uint level=biased_lod(footprint,u.waveMipCount);
+    const WaveTap sample=wave_tap(samples,u.waveMipOffsets[level],u.waveMipCounts[level],
+        anchor,position-floor(position),level);
+    const float3 raw=max(sample.weightedColor,float3(0.0))*float3(160.0,64.0/0.43,160.0);
+    const float low=1.2*raw.r;
+    const float mid=low+0.6*raw.g;
+    const float high=mid+76.8*(1.0-cos(M_PI_F*min(raw.b,127.0)/128.0));
+    const float3 tops=clamp(24.0*(1.0-float3(high,mid,low)/128.0),float3(0.0),float3(23.0));
+    if (y<0.0 || y>=25.0) return float4(display_srgb_to_linear(background),1.0);
+    float3 color=background;
+    const float3 coverage=saturate((y-tops+antialias)/max(2.0*antialias,1e-6))
+        *saturate((24.0-y+antialias)/max(2.0*antialias,1e-6));
+    color=mix(color,float3(1.0),coverage.r);
+    color=mix(color,float3(255.0,166.0,0.0)/255.0,coverage.g);
+    color=mix(color,float3(0.0,85.0,225.0)/255.0,coverage.b);
+    return float4(display_srgb_to_linear(color),1.0);
+}
+
+constant float3 kBlueOverviewPalette[8] = {
+    float3(16,96,152), float3(16,128,184), float3(8,144,248), float3(16,184,232),
+    float3(120,192,224), float3(144,192,248), float3(144,192,248), float3(208,232,248)
+};
+inline BlueOverviewSample blue_overview_sample(const device BlueOverviewSample *samples,
+        uint count, float position) {
+    const float point = clamp(position * float(count) - 0.5, 0.0, float(count-1));
+    const uint left = uint(floor(point));
+    const BlueOverviewSample a = samples[left], b = samples[min(left+1u,count-1u)];
+    const float phase = point - float(left);
+    return {mix(a.outer,b.outer,phase), mix(a.front,b.front,phase),
+        mix(a.r,b.r,phase), mix(a.g,b.g,phase), mix(a.b,b.b,phase)};
+}
+inline float3 native_blue_overview_color(BlueOverviewSample sample,
+        float distance, float antialias, float3 background) {
+    // Native preview paints a white underlayer, then its independent blue
+    // palette with half-opacity tips and an opaque center. All of this is
+    // color: the existing overview surface still owns coverage and height.
+    const float radial = distance / 11.0;
+    const float band = max(antialias / 11.0, 1e-6);
+    const float front = sample.front > 0.0
+        ? saturate((sample.front+band-radial)/(2.0*band)) : 0.0;
+    const float3 under = mix(background, float3(1.0), front*0.5);
+    const float strength = 1.0 - 0.5 * saturate(radial/max(sample.outer,1e-5));
+    return mix(under, float3(sample.r,sample.g,sample.b), strength);
 }
 
 fragment float4 wave_surface_fragment(
@@ -1477,7 +1742,10 @@ fragment float4 wave_surface_fragment(
         const device WaveSample *samples [[buffer(0)]],
         constant Uniforms &u [[buffer(1)]],
         const device AudioEnvelopeSample *audioDetailSamples [[buffer(4)]],
-        const device WaveAttribute *attributes [[buffer(5)]]) {
+        const device WaveAttribute *attributes [[buffer(5)]],
+        const device BlueOverviewSample *blueOverview [[buffer(6)]],
+        const device float4 *blueInnerAttributes [[buffer(7)]],
+        const device uchar4 *threeBandOverviewImage [[buffer(8)]]) {
     const float scale = max(1.0, u.drawableScale);
     const float xPoints = in.position.x / scale;
     const float yPoints = in.position.y / scale;
@@ -1535,8 +1803,13 @@ fragment float4 wave_surface_fragment(
             / max(1.0, float(u.drawableWidthPixels));
         const float distance = abs(yPoints - 14.0);
         if (u.threeBandActive != 0) {
+            if (u.threeBandOverviewCount>0) {
+                const float4 color=three_band_preview_image(threeBandOverviewImage,
+                    u.threeBandOverviewCount,xPoints/max(u.widthPoints,1.0),yPoints-1.0);
+                return float4(display_srgb_to_linear(encodedBackground*(1.0-color.a)+color.rgb),1.0);
+            }
             return three_band_overview_fragment(samples,u,position,footprint,
-                                                distance,antialias,background);
+                                                yPoints-1.0,antialias,encodedBackground);
         }
         const WaveSurface surface = overview_wave_surface(
             samples, audioDetailSamples, u, position, footprint,
@@ -1551,6 +1824,24 @@ fragment float4 wave_surface_fragment(
         const float3 encodedColor =
             surface.weightedColor
             / surface.colorWeight;
+        if (u.waveformMode == 1) {
+            BlueOverviewSample palette;
+            if (u.blueOverviewCount > 0) {
+                palette = blue_overview_sample(blueOverview, u.blueOverviewCount,
+                    xPoints / max(u.widthPoints,1.0));
+            } else {
+                // Non-native/absent previews retain a complete resident palette.
+                // They never trigger a late color promotion or another analysis.
+                const uint index = min(7u, uint(round(
+                    saturate((encodedColor.g-0.07)/0.78)*7.0)));
+                const float3 color = kBlueOverviewPalette[index] / 255.0;
+                palette = {1.0, 0.0, color.r, color.g, color.b};
+            }
+            const float3 color = native_blue_overview_color(
+                palette, distance, antialias, encodedBackground);
+            return float4(display_srgb_to_linear(mix(encodedBackground, color,
+                vivid_wave_coverage(surface.coverage))), 1.0);
+        }
         if (u.waveformMode == 2) {
             // Match the main RGB lane: help only faint coverage and blend in
             // display space. The old full-range cubic + linear-light blend
@@ -1583,8 +1874,8 @@ fragment float4 wave_surface_fragment(
         // Height and hue live on one fixed, oversampled global song
         // lattice. Interpolate those attributes first, then perform vertical
         // antialiasing once at the drawable. Unlike a translated RGBA
-        // waveform this never refilters coverage. BLUE uses a pixel-aligned
-        // display offset; RGB and 3BAND stay continuous.
+        // waveform this never refilters coverage. BLUE follows RGB's accepted
+        // display phase; independent 3BAND layers retain continuous motion.
         const float samplesPerPixel =
             max(1.0, u.waveAttributeSamplesPerPixel);
         const float tileX =
@@ -1629,8 +1920,12 @@ fragment float4 wave_surface_fragment(
         float blueMaximums[kAttributeProfileCapacity];
         float3 attributeColors[kAttributeProfileCapacity];
         float3 intervalEncodedColors[kAttributeProfileCapacity];
+        float3 blueInnerColors[kAttributeProfileCapacity];
+        float2 blueRadii[kAttributeProfileCapacity];
         float3 weightedColor = float3(0.0);
         float colorWeight = 0.0;
+        const float signedPosition =
+            (waveCenter - yPoints) / max(heightScale, 1e-5);
         for (uint i = 0; i < profileCount; ++i) {
             profilePositions[i] =
                 (tilePositions[i] - leftTile)
@@ -1639,18 +1934,14 @@ fragment float4 wave_surface_fragment(
                 attributes, u.waveAttributeCount, tilePositions[i]);
             const float upperHeight = attribute.colorAndUpper.a;
             const float lowerHeight = attribute.lowerAndColorWeight.x;
-            const float outerHeight = u.waveformMode != 3
-                ? max(abs(upperHeight), abs(lowerHeight))
-                : max(upperHeight, lowerHeight);
+            const float outerHeight = max(abs(upperHeight), abs(lowerHeight));
             const float sideHeight =
                 yPoints <= waveCenter ? upperHeight : lowerHeight;
             heights[i] = sideHeight;
             outerHeights[i] = outerHeight;
             blueMinimums[i] = lowerHeight;
             blueMaximums[i] = upperHeight;
-            // In 3BAND the premultiplied RGB attributes are the three absolute
-            // PWV7 layer heights. Do not derive ratios from one shared outer
-            // silhouette: each Pioneer band reaches its own vertical extent.
+            // Keep each native PWV7 layer's height for independent coverage.
             lowHeights[i] = attribute.colorAndUpper.r;
             midHeights[i] = attribute.colorAndUpper.g;
             highHeights[i] = attribute.colorAndUpper.b;
@@ -1658,6 +1949,15 @@ fragment float4 wave_surface_fragment(
             intervalEncodedColors[i] =
                 attribute.colorAndUpper.rgb
                     / max(attribute.lowerAndColorWeight.y, 0.0001);
+            if (u.waveformMode == 1) {
+                blueInnerColors[i] = linear_blue_inner(
+                    blueInnerAttributes, u.waveAttributeCount, tilePositions[i]).rgb
+                    / max(attribute.lowerAndColorWeight.y, 0.0001);
+                blueRadii[i] = attribute.lowerAndColorWeight.zw
+                    / max(attribute.lowerAndColorWeight.y, 0.0001);
+            }
+
+
         }
         for (uint i = 0; i + 1 < profileCount; ++i) {
             const float span =
@@ -1670,14 +1970,13 @@ fragment float4 wave_surface_fragment(
                 * (0.5 * span);
         }
         if (u.waveformMode == 1 || u.waveformMode == 2) {
-            const float signedPosition =
-                (waveCenter - yPoints) / max(heightScale, 1e-5);
             IntervalSurface interval = resolve_interval_surface(
                 blueMinimums, blueMaximums, intervalEncodedColors,
                 profilePositions, profileCount,
                 signedPosition, heightScale, antialias,
-                u.waveformMode == 1);
-            if (u.waveformMode == 2 && interval.coverage > 0.0
+                u.waveformMode == 1,
+                blueInnerColors, blueRadii);
+            if (interval.coverage > 0.0
                     && interval.coverage < 0.18) {
                 // Help only genuinely faint subpixel detail, regardless of hue.
                 // The smooth, monotonic shoulder joins exact area at 18%:
@@ -1691,20 +1990,12 @@ fragment float4 wave_surface_fragment(
                 discard_fragment();
             }
             // Visible color comes from the pointwise interval intersection.
-            // Preserve the joint integral and its conditional color. Only faint
-            // RGB detail outside 384 receives the bounded shoulder above.
-            if (u.waveformMode == 2) {
-                // Match the accepted B preview: retain both visibility lifts,
-                // blend RGB edges in display space, then decode once for the
-                // sRGB attachment. Geometry, BLUE and the overview stay intact.
-                return float4(display_srgb_to_linear(
-                    encodedBackground * (1.0 - interval.coverage)
-                        + interval.premultipliedColor), 1.0);
-            }
-            return float4(
-                background * (1.0 - interval.coverage)
-                    + interval.premultipliedColor,
-                1.0);
+            // Preserve the joint integral and conditional color, including the
+            // shared faint-only visibility shoulder at every zoom.
+            // Blend display colors once, then decode for the sRGB attachment.
+            return float4(display_srgb_to_linear(
+                encodedBackground * (1.0 - interval.coverage)
+                    + interval.premultipliedColor), 1.0);
         }
         const float coverage = positioned_profile_coverage(
             heights, profilePositions, profileCount,
@@ -1713,58 +2004,12 @@ fragment float4 wave_surface_fragment(
             discard_fragment();
         }
         if (u.threeBandActive != 0) {
-            const float midCoverage = positioned_profile_coverage(
-                midHeights, profilePositions, profileCount,
-                distance, heightScale, antialias);
-            const float highCoverage = positioned_profile_coverage(
-                highHeights, profilePositions, profileCount,
-                distance, heightScale, antialias);
-            const float lowCoverage = positioned_profile_coverage(
-                lowHeights, profilePositions, profileCount,
-                distance, heightScale, antialias);
-            const float low = saturate(lowCoverage);
-            const float mid = saturate(midCoverage);
-            const float high = saturate(highCoverage);
-            const float none = (1.0 - low) * (1.0 - mid) * (1.0 - high);
-            const float alpha = 1.0 - none;
-            if (alpha <= 0.0) {
-                discard_fragment();
-            }
-            const float3 lowColor =
-                float3(0.0, 85.0 / 255.0, 225.0 / 255.0);
-            const float3 midColor =
-                float3(1.0, 166.0 / 255.0, 0.0);
-            const float3 lowMidColor =
-                float3(180.0 / 255.0, 105.0 / 255.0, 10.0 / 255.0);
-            const float3 highColor = float3(1.0);
-            const float3 lowHighColor =
-                float3(210.0 / 255.0, 220.0 / 255.0, 250.0 / 255.0);
-            const float3 midHighColor =
-                float3(1.0, 240.0 / 255.0, 215.0 / 255.0);
-            const float3 allColor =
-                float3(245.0 / 255.0, 235.0 / 255.0, 215.0 / 255.0);
-            // Rekordbox uses a seven-color membership palette, not alpha-
-            // composited blue/orange/white paint. The product weights extend
-            // that exact binary table continuously through antialiased edges.
-            const float lowOnly = low * (1.0 - mid) * (1.0 - high);
-            const float midOnly = (1.0 - low) * mid * (1.0 - high);
-            const float lowMid = low * mid * (1.0 - high);
-            const float highOnly = (1.0 - low) * (1.0 - mid) * high;
-            const float lowHigh = low * (1.0 - mid) * high;
-            const float midHigh = (1.0 - low) * mid * high;
-            const float all = low * mid * high;
-            const float3 displayColor = (
-                lowOnly * lowColor
-                + midOnly * midColor
-                + lowMid * lowMidColor
-                + highOnly * highColor
-                + lowHigh * lowHighColor
-                + midHigh * midHighColor
-                + all * allColor) / max(alpha, 0.0001);
-            return float4(mix(
-                background,
-                display_srgb_to_linear(displayColor),
-                alpha), 1.0);
+            const IntervalSurface surface=resolve_three_band_surface(
+                lowHeights,midHeights,highHeights,profilePositions,profileCount,
+                distance,heightScale,antialias);
+            if (surface.coverage<=0.0) discard_fragment();
+            return float4(display_srgb_to_linear(encodedBackground*(1.0-surface.coverage)
+                +surface.premultipliedColor),1.0);
         }
         const float3 encodedColor =
             weightedColor / max(colorWeight, 0.0001);

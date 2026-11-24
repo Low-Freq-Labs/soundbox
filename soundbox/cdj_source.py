@@ -78,13 +78,12 @@ def capture_metadata(library, tracks, *, titles=None, artists=None, playlists=No
         raise ValueError('Selected logical tracks share an ambiguous native identity')
     if any(track.imported or not track.source_uuid for track in tracks):
         raise ValueError('CDJ export requires native analysis and identity for every selected track')
-    from pyrekordbox import Rekordbox6Database
+    from .native_snapshot import native_snapshot
     source = Path(library.source).expanduser().resolve(strict=True)
     with tempfile.TemporaryDirectory(prefix='soundbox-cdj-db-') as directory:
         copy = Path(directory) / 'master.db'
         rekordbox_db._copy_stable_snapshot(source, copy)
-        db = Rekordbox6Database(path=str(copy))
-        try:
+        with native_snapshot(copy) as db:
             properties = list(db.get_property())
             if len(properties) != 1 or str(properties[0].DBID) != library.source_library_id:
                 raise ValueError('Source library identity changed; reload before exporting')
@@ -196,5 +195,3 @@ def capture_metadata(library, tracks, *, titles=None, artists=None, playlists=No
             # data so a second fresh capture detects every rendered input.
             digest = hashlib.sha256(json.dumps([proofs,playlist_proofs,tags], sort_keys=True, separators=(',', ':')).encode()).hexdigest()
             return dict(db_id=db_id, tracks=result, track_extras=extras, my_tags=tags, source_revision=digest)
-        finally:
-            db.close()

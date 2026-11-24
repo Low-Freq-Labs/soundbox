@@ -1,5 +1,7 @@
 """Leaf-name migration preserves foreign, changed and cancelled playlist files."""
 import hashlib
+from copy import deepcopy
+from pathlib import Path
 from threading import Event
 import unittest
 from unittest import mock
@@ -8,6 +10,71 @@ from soundbox import engine, manifest, sync
 from soundbox.library import Playlist
 from soundbox.playlist_retirement import PENDING_RETIREMENT, legacy_flat_playlists
 from tests import test_sync as fixture
+
+
+class PendingRetirementLookup(unittest.TestCase):
+    @staticmethod
+    def row(path, source='A'):
+        return dict(kind='playlist', owned=True, source=source, playlists=[source],
+                    size=42, sha256='a'*64, **{PENDING_RETIREMENT: dict(
+                        source=source, path=path, size=42, sha256='a'*64)})
+
+    def test_first_valid_pending_proof_keeps_manifest_order_and_does_not_mutate_inputs(self):
+        first = self.row('Playlists/First.m3u8')
+        second = self.row('Playlists/Second.m3u8')
+        other = self.row('Playlists/Other.m3u8', 'B')
+        bad = self.row('Playlists/Bad.m3u8');bad['owned'] = False
+        current = dict(files={'/Music/one.mp3': dict(kind='audio'), '/bad': None,
+            '/Playlists/Bad.m3u8': bad, '/Playlists/First.m3u8': first,
+            '/Playlists/Other.m3u8': other, '/Playlists/Second.m3u8': second})
+        selected = [Playlist('New B', [], [], 'B'), Playlist('New A', [], [], 'A')]
+        before = deepcopy((current, selected))
+        result = legacy_flat_playlists(current, selected)
+        self.assertEqual(list(result), ['B', 'A'])
+        self.assertEqual(result['A'], (Path('Playlists/First.m3u8'), first))
+        self.assertEqual(result['B'], (Path('Playlists/Other.m3u8'), other))
+        self.assertIsNot(result['A'][1], first)
+        self.assertEqual((current, selected), before)
+
+    def test_malformed_foreign_and_unsafe_pending_rows_preserve_full_legacy_fallback(self):
+        selected = Playlist('New', [], [], 'A')
+        fallback = dict(kind='playlist', owned=True, source='A', playlists=['A'])
+        current = dict(files={'/Playlists/Folder - Old.m3u8': fallback},
+                       playlists={'A': dict(name='Old', folder_path=['Folder'])})
+        bad = [self.row('Playlists/Foreign.m3u8', 'B'), self.row('/Playlists/Absolute.m3u8'),
+               self.row('Playlists/../Outside.m3u8'), self.row('Playlists/Mismatched.m3u8'),
+               self.row('Playlists/WrongHash.m3u8'), self.row('Playlists/Shared.m3u8'),
+               self.row('Playlists/New.m3u8')]
+        bad[4][PENDING_RETIREMENT]['sha256'] = 'b'*64
+        bad[5]['playlists'].append('foreign')
+        for index, row in enumerate(bad):
+            key = '/' + row[PENDING_RETIREMENT]['path']
+            current['files']['/mismatched-key' if index == 3 else key] = row
+        current['files']['/malformed'] = {PENDING_RETIREMENT: {'unknown': 'proof'}}
+        current['files']['/non-dict-proof'] = {PENDING_RETIREMENT: []}
+        before = deepcopy(current)
+        self.assertEqual(legacy_flat_playlists(current, [selected]),
+                         {'A': (Path('Playlists/Folder - Old.m3u8'), fallback)})
+        self.assertEqual(current, before)
+
+    def test_manifest_rows_are_traversed_once_for_many_selected_playlists(self):
+        class CountedFiles(dict):
+            visits = 0
+            def items(self):
+                for item in super().items():
+                    self.visits += 1
+                    yield item
+        files = CountedFiles({f'/Music/{i}.mp3': dict(kind='audio') for i in range(1000)})
+        selected = [Playlist(f'New{i}', [], [], str(i)) for i in range(100)]
+        self.assertEqual(legacy_flat_playlists({'files': files}, selected), {})
+        self.assertEqual(files.visits, len(files))
+
+    def test_empty_selection_does_not_enumerate_manifest_files(self):
+        class UnreadFiles(dict):
+            def items(self):raise AssertionError('Empty selection walked manifest files')
+        for selected in ([], ()):
+            with self.subTest(selected=selected):
+                self.assertEqual(legacy_flat_playlists({'files': UnreadFiles()}, selected), {})
 
 
 class RockboxPlaylistNameMigration(unittest.TestCase):

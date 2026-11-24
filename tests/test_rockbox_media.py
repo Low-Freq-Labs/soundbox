@@ -207,8 +207,11 @@ class RockboxAudioDerivative(unittest.TestCase):
             with mock.patch.object(
                     cache, "plan", side_effect=AssertionError("no rebuild")), \
                     mock.patch(
-                        "soundbox.rockbox_media._has_purchase_receipt",
-                        side_effect=AssertionError("no tag scan"),
+                        "soundbox.rockbox_media.mutagen.File",
+                        side_effect=AssertionError("no container tag scan"),
+                    ), mock.patch(
+                        "soundbox.rockbox_media._riff_info_values",
+                        side_effect=AssertionError("no WAVE tag scan"),
                     ), mock.patch(
                         "soundbox.rockbox_media._embedded_picture_count",
                         side_effect=AssertionError("no art scan"),

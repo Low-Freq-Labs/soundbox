@@ -138,6 +138,7 @@ class PilotGridStore:
         self.completed = self.root / 'grid-completed.json'
         self.database = Path(authority.database)
         self.lease = _GridLease(authority, self.root, self)
+        self._record_proof: tuple[bytes, str] | None = None
 
     def _paths(self, track):
         return prep_read.analysis_paths(self.database, track, self.authority.pilot_track_id,
@@ -398,33 +399,47 @@ class PilotGridStore:
                 raise ValueError('Mismatched grid payload generation')
             track = _decode_row(record['track_before'])
             paths = self._paths(track)
+            # The decision is independently checked above; it does not change
+            # the pure before-to-after grid transformation. Retain one proof,
+            # never a plan, payload, connection or live-source observation.
+            key = (_json(asdict(self.authority)),
+                   _sha(_json({k: v for k, v in record.items() if k != 'decision'})))
+            reconstruct = key != self._record_proof
+            before = {}
             for role in ('DAT', 'EXT'):
                 if record['files'][role]['path'] != str(paths[role]):
                     raise ValueError('Redirected grid recovery destination')
                 for side in ('before', 'after'):
                     p = self.payloads / (side + '.' + role)
                     _regular(p)
-                    if _sha(p.read_bytes()) != record['files'][role][side]:
+                    raw = p.read_bytes()
+                    if _sha(raw) != record['files'][role][side]:
                         raise ValueError('Grid backup hash mismatch')
-            snap = GridSnapshot(track, (self.payloads / 'before.DAT').read_bytes(),
-                                 (self.payloads / 'before.EXT').read_bytes(),
-                                 _decode_row(record['content_file_before'])
-                                 if 'content_file_before' in record else None)
-            candidate = plan_grid_edit(snap, _decode_row(record['counter_before']),
-                                       GridEdit(**record['request']), timestamp=record['timestamp'],
-                                       exact_end_ms=self._exact_end(record))
-            after_track = candidate.changes[0].after if candidate.changes else track
-            after_counter = (candidate.changes[1].after if candidate.changes
-                             else _decode_row(record['counter_before']))
-            if (_encode_row(after_track) != record['track_after']
-                    or _encode_row(after_counter) != record['counter_after']
-                    or _sha(candidate.dat) != record['files']['DAT']['after']
-                    or _sha(candidate.ext) != record['files']['EXT']['after']):
-                raise ValueError('Grid journal does not match its pure plan')
-            file_delta = next((d for d in candidate.changes if d.table == 'contentFile'), None)
-            if snap.content_file is not None and _encode_row(
-                    file_delta.after if file_delta else snap.content_file) != record.get('content_file_after'):
-                raise ValueError('Grid analysis-file metadata does not match its pure plan')
+                    if reconstruct and side == 'before':before[role] = raw
+                    del raw
+            # Endpoint acquisition is a fresh source proof, even on a pure-plan
+            # hit. All four archived payloads were also freshly read and hashed.
+            exact_end = self._exact_end(record)
+            if reconstruct:
+                snap = GridSnapshot(track, before['DAT'], before['EXT'],
+                                     _decode_row(record['content_file_before'])
+                                     if 'content_file_before' in record else None)
+                candidate = plan_grid_edit(snap, _decode_row(record['counter_before']),
+                                           GridEdit(**record['request']), timestamp=record['timestamp'],
+                                           exact_end_ms=exact_end)
+                after_track = candidate.changes[0].after if candidate.changes else track
+                after_counter = (candidate.changes[1].after if candidate.changes
+                                 else _decode_row(record['counter_before']))
+                if (_encode_row(after_track) != record['track_after']
+                        or _encode_row(after_counter) != record['counter_after']
+                        or _sha(candidate.dat) != record['files']['DAT']['after']
+                        or _sha(candidate.ext) != record['files']['EXT']['after']):
+                    raise ValueError('Grid journal does not match its pure plan')
+                file_delta = next((d for d in candidate.changes if d.table == 'contentFile'), None)
+                if snap.content_file is not None and _encode_row(
+                        file_delta.after if file_delta else snap.content_file) != record.get('content_file_after'):
+                    raise ValueError('Grid analysis-file metadata does not match its pure plan')
+                self._record_proof = key
             return record
         except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
             raise RecoveryRequired('Grid recovery evidence is damaged; preserve it') from exc

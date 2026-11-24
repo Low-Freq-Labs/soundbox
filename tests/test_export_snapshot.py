@@ -8,7 +8,7 @@ from unittest import mock
 from types import SimpleNamespace
 
 from soundbox import cdj_export, sync
-from soundbox.export_snapshot import capture_export
+from soundbox.export_snapshot import capture_export, source_paths
 from soundbox.library import Library, Playlist, Track
 from soundbox.metadata import ArtistRegistry
 from soundbox.stock_ipod import commit_stock_ipod_sync, plan_stock_ipod_sync
@@ -31,6 +31,40 @@ class ExportSnapshotTests(unittest.TestCase):
                                [self.selected, self.unselected], '/library/master.db',
                                source_kind='rekordbox-db', source_library_id='library-id',
                                artist_registry=ArtistRegistry({'artist': 'Artist'}, {'artist'}))
+
+    def test_full_overlap_paths_preserve_path_equality_order_and_lexical_aliases_without_io(self):
+        self.library.export_source_paths = (Path('/retained/../source.wav'), Path('/source/a.wav'))
+        self.library.hidden_ids.add('other')
+        self.a.source_analysis_path = '/shared//analysis/./ANLZ.DAT'
+        self.b.source_analysis_path = '/shared/analysis/ANLZ.DAT'
+        self.other.source_native_path = '/source/a.wav'
+        standalone = Track('standalone', 'Only', 'Other', 'file:///standalone/audio.wav',
+                           source_analysis_path='relative/./ANLZ.DAT',
+                           source_native_path='//distinct-root/native.wav')
+        expected = (Path('/retained/../source.wav'), Path('/source/a.wav'),
+                    Path('/library/master.db'), Path('/shared/analysis/ANLZ.DAT'),
+                    Path('/source/b.wav'), Path('/other/source.wav'), Path('/other/ANLZ0000.DAT'),
+                    Path('/standalone/audio.wav'), Path('relative/ANLZ.DAT'),
+                    Path('//distinct-root/native.wav'))
+        with (mock.patch.object(Path, 'resolve', side_effect=AssertionError('Resolved a source path')),
+              mock.patch.object(Path, 'stat', side_effect=AssertionError('Inspected a source path')),
+              mock.patch.object(Path, 'open', side_effect=AssertionError('Opened a source path'))):
+            self.assertEqual(source_paths(self.library, (standalone, self.a)), expected)
+            self.assertEqual(capture_export(self.library, [self.selected], standalone=[standalone]).sources,
+                             expected)
+
+    def test_overlap_capture_observes_every_current_path_without_reusing_earlier_values(self):
+        first = source_paths(self.library)
+        self.library.source = '/new/library.db'
+        self.other.location_uri = 'file:///new/hidden.wav'
+        self.other.source_analysis_path = '/new/ANLZ.DAT'
+        self.other.source_native_path = '/new/original.wav'
+        self.library.hidden_ids.add('other')
+        second = source_paths(self.library)
+        self.assertEqual(second, (Path('/new/library.db'), Path('/source/a.wav'), Path('/source/b.wav'),
+                                  Path('/new/hidden.wav'), Path('/new/ANLZ.DAT'), Path('/new/original.wav')))
+        self.assertEqual(first, (Path('/library/master.db'), Path('/source/a.wav'), Path('/source/b.wav'),
+                                Path('/other/source.wav'), Path('/other/ANLZ0000.DAT')))
 
     def test_selected_data_detaches_before_dispatch_and_each_materialization_is_independent(self):
         titles = {'a': 'Saved title', 'other': 'Unselected override'}

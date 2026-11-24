@@ -2,8 +2,11 @@
 
 Production Rust helper modules, compiled into the standalone `soundbox-cdj` binary/library.
 
-Start with `main.rs` for commands and `lib.rs` for shared renderer entry points.
-Inspect neighboring modules for catalog merge/settings/analysis behavior before extending a command.
+- [main.rs](main.rs): command dispatch and inspection; [lib.rs](lib.rs): shared requests and metadata completion.
+- [merge.rs](merge.rs) / [upgrade.rs](upgrade.rs): catalog reconciliation; [preferences.rs](preferences.rs): player settings.
+- [analysis.rs](analysis.rs) / [saved_analysis.rs](saved_analysis.rs): captured-input analysis/packet helpers.
+- [component_tempo.rs](component_tempo.rs) / [whole_tempo.rs](whole_tempo.rs): tempo policies shared with analysis.
+
 Inputs are explicit disposable local workspaces; Python owns source capture and USB publication.
 Preserve unknown native fields and each catalog's unrelated baseline.
 

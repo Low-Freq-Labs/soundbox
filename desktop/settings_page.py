@@ -496,34 +496,60 @@ class SettingsPageMixin:
             return
         old_items=[g.topLevelItem(i) for i in range(g.topLevelItemCount())]
         old_keys=[tuple(item.data(0,_GRAVE_ROLE)) for item in old_items]
-        selected={tuple(item.data(0,_GRAVE_ROLE)) for item in g.selectedItems()}
-        current=g.currentItem();current_key=tuple(current.data(0,_GRAVE_ROLE)) if current else None
-        current_at=old_items.index(current) if current in old_items else 0
-        first=g.itemAt(1,1);first_at=old_items.index(first) if first in old_items else 0
-        offset=g.visualItemRect(first).top() if first else 0
-        scroll=g.verticalScrollBar().value();horizontal=g.horizontalScrollBar().value()
         by_pid = {p.pid: p.name for p in (self.lib.playlists if self.lib else [])}
         controller=getattr(self,'graveyard_controller',None)
 
         def title_of(tid):
+            title = self.titles.get(tid)
+            if title:
+                return title
             t = self.lib.tracks_by_id.get(tid) if self.lib else None
+            if t is not None:
+                return t.name
             info=controller.info(tid) if controller else None
-            return self.titles.get(tid) or (t.name if t else info.get('title') if info else f"track {tid}")
+            return info.get('title') if info else f"track {tid}"
 
-        g.setSortingEnabled(False)
-        g.clear()
+        rows=[]
         for tid in sorted(self.hidden):
             if tid in self.settings.get('graveyard_disposals',{}):continue
-            it = QTreeWidgetItem([title_of(tid), self.hidden_dates.get(tid, "")])
-            it.setData(0, _GRAVE_ROLE, ("del", tid, None))
-            g.addTopLevelItem(it)
+            rows.append((("del",tid,None),title_of(tid),self.hidden_dates.get(tid,"")))
         for pid, bag in self.removals.items():
             pname = by_pid.get(pid, "?")
             for tid, date in bag.items():
                 if tid in self.settings.get('graveyard_disposals',{}):continue
-                it = QTreeWidgetItem([f"{title_of(tid)}   (from {pname})", date or ""])
-                it.setData(0, _GRAVE_ROLE, ("rem", tid, pid))
-                g.addTopLevelItem(it)
+                rows.append((("rem",tid,pid),f"{title_of(tid)}   (from {pname})",date or ""))
+        repository=getattr(self,'_state_repository',None)
+        source=((str(self.lib.source),self.lib.source_kind,self.lib.source_library_id) if self.lib else None,
+                controller,getattr(controller,'_generation',None),repository,
+                getattr(repository,'generation',None),getattr(getattr(repository,'area',None),'generation',None))
+        paths=controller.prepared_paths() if controller and hasattr(controller,'prepared_paths') else {}
+        wanted={key:(title,date) for key,title,date in rows}
+        painted={key:(item.text(0),item.text(1)) for key,item in zip(old_keys,old_items)}
+        if (getattr(g,'_grave_source',None)==source and len(old_items)==len(rows)
+                and len(painted)==len(rows) and painted==wanted):
+            # Compare fresh display values, not cached mutable inputs. Keeping
+            # exact unchanged items also keeps native selection/focus/viewport.
+            for key,item in zip(old_keys,old_items):
+                path=paths.get(key[1],'')
+                if item.toolTip(0)!=path:item.setToolTip(0,path)
+            self._filter_graveyard()
+            if controller:controller.schedule()
+            return
+        selected={tuple(item.data(0,_GRAVE_ROLE)) for item in g.selectedItems()}
+        current=g.currentItem();current_key=tuple(current.data(0,_GRAVE_ROLE)) if current else None
+        column=g.currentColumn()
+        current_at=old_items.index(current) if current in old_items else 0
+        first=g.itemAt(1,1);first_at=old_items.index(first) if first in old_items else 0
+        offset=g.visualItemRect(first).top() if first else 0
+        scroll=g.verticalScrollBar().value();horizontal=g.horizontalScrollBar().value()
+        g.setSortingEnabled(False)
+        g.clear()
+        for key,title,date in rows:
+            item=QTreeWidgetItem([title,date])
+            item.setData(0,_GRAVE_ROLE,key)
+            item.setToolTip(0,paths.get(key[1],''))
+            g.addTopLevelItem(item)
+        g._grave_source=source
         g.setSortingEnabled(True)
         self._filter_graveyard()
         new_items=[g.topLevelItem(i) for i in range(g.topLevelItemCount())]
@@ -531,7 +557,7 @@ class SettingsPageMixin:
         current=by_key.get(current_key)
         if current is None and new_items:
             current=new_items[min(current_at,len(new_items)-1)]
-        if current is not None:g.setCurrentItem(current)
+        if current is not None:g.setCurrentItem(current,max(0,column))
         for item in new_items:item.setSelected(tuple(item.data(0,_GRAVE_ROLE)) in selected and not item.isHidden())
         anchors=old_keys[first_at:]+list(reversed(old_keys[:first_at]))
         anchor=next((by_key[key] for key in anchors if key in by_key and not by_key[key].isHidden()),None)
@@ -554,13 +580,16 @@ class SettingsPageMixin:
         for i in range(g.topLevelItemCount()):
             item=g.topLevelItem(i);data=item.data(0,_GRAVE_ROLE)
             if not data:continue
+            if not terms:
+                item.setHidden(False)
+                continue
             tid=data[1];row=controller.info(tid) if controller else None
             if row is None:
                 track=self.lib.tracks_by_id.get(tid) if self.lib else None
                 row=dict(title=item.text(0),artist=self.overrides.get(tid) or (track.artist if track else ''),
                     bpm=track.bpm if track else '',key=track.key if track else '',
                     genre=track.genre if track else '',format=track.path.suffix.lstrip('.') if track else '')
-            hidden=bool(terms) and not row_matches(row,terms)
+            hidden=not row_matches(row,terms)
             if hidden:item.setSelected(False)
             item.setHidden(hidden)
         if controller:controller.selection_changed()
@@ -634,6 +663,7 @@ class SettingsPageMixin:
         from PySide6.QtCore import QCoreApplication, QEvent, QEventLoop, QThread, QTimer
         from .workers import _running
         if (self._state_maintenance or self._state_publication or self._backup_worker is not None
+                or getattr(getattr(self, '_art_requests', None), 'manual_pending', lambda:False)()
                 or getattr(getattr(self,'_state_committer',None),'pending',False)
                 or getattr(getattr(self,'prep_controller',None),'admission_pending',False)
                 or getattr(getattr(self,'prep_controller',None),'admission_error','')

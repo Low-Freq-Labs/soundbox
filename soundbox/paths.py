@@ -7,10 +7,22 @@ part to unit-test, which is why they live on their own.
 from __future__ import annotations
 
 import os
+from collections.abc import Iterable
 from pathlib import Path
 import re
 import unicodedata
 from urllib.parse import unquote, urlparse
+
+
+def top_level_paths(paths: Iterable[Path]) -> list[Path]:
+    """Keep first selected occurrences, excluding selected descendants.
+
+    Pure lexical Path comparisons preserve order and root/case semantics. The
+    caller still owns every filesystem, mount and destructive-action guard.
+    """
+    selected = dict.fromkeys(paths)
+    return [path for path in selected
+            if not any(parent in selected for parent in path.parents)]
 
 
 def file_landed_time(path: str | Path) -> float:

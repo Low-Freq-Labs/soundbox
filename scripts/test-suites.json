@@ -122,6 +122,8 @@
       ],
       "recovery": [
         "test_encrypted_backup",
+        "test_native_cipher",
+        "test_native_snapshot",
         "test_locator_store",
         "test_native_node_move",
         "test_native_tag_order_writer",
@@ -245,6 +247,7 @@
         "test_playlist_fresh_transition",
         "test_playlist_name_migration",
         "test_playlist_presentation",
+        "test_playlist_track_order",
         "test_playlist_reference",
         "test_playlist_removal_overlay",
         "test_playlist_roundtrip_edges",
@@ -268,6 +271,7 @@
         "test_normalized_playlist_creation",
         "test_normalized_smart_creation",
         "test_playlist_pilot",
+        "test_playlist_membership_replay",
         "test_playlist_transaction",
         "test_playlist_transition_proof",
         "test_playlist_tree_delete",
@@ -319,6 +323,7 @@
         "test_native_deck.NativeDeckContract.test_load_play_seek_ramp_and_teardown_leave_source_untouched"
       ],
       "integration": [
+        "test_autoplay_candidates",
         "test_beat_jump_hold",
         "test_decode_wake",
         "test_keyboard_lookup",
@@ -367,6 +372,8 @@
       ],
       "integration": [
         "test_anlz_bridge",
+        "test_blue_preview",
+        "test_three_band_preview",
         "test_native_deck.NativeDeckContract.test_24_band_master_does_not_override_dedicated_rgb",
         "test_native_deck.NativeDeckContract.test_audio_detail_upgrades_resolution_without_replacing_rgb_surface",
         "test_native_deck.NativeDeckContract.test_blue_rgb_and_three_band_streams_switch_without_recooking",
@@ -374,6 +381,7 @@
         "test_native_deck.NativeDeckContract.test_complete_analysis_commits_overview_and_ultra_as_one_surface",
         "test_native_deck.NativeDeckContract.test_detail_zoom_wakes_one_static_frame_then_sleeps",
         "test_native_deck.NativeDeckContract.test_display_link_holds_screen_cadence_during_playback",
+        "test_native_deck.NativeDeckContract.test_three_band_joint_palette_keeps_the_full_width_retina_display_budget",
         "test_native_deck.NativeDeckContract.test_display_link_sleeps_while_the_deck_is_static",
         "test_native_deck.NativeDeckContract.test_each_waveform_mode_keeps_its_palette_across_all_thirteen_zooms",
         "test_native_deck.NativeDeckContract.test_frame_trace_refuses_file_io_until_playback_stops",
@@ -408,6 +416,7 @@
         "test_waveform_allocation",
         "test_waveform_detail",
         "test_waveform_gpu_math",
+        "test_waveform_mode_geometry",
         "test_waveform_motion_phase",
         "test_waveform_preview",
         "test_waveform_sections"
@@ -461,11 +470,13 @@
         "test_artwork_selection"
       ],
       "integration": [
+        "test_artwork_requests",
         "test_art_review_scan",
         "test_artist_profile_action",
         "test_artreview",
         "test_catalog_thumbnails",
         "test_ipod_artwork_ui",
+        "test_review_cover_preparation",
         "test_stock_artwork",
         "test_stock_artwork_classic",
         "test_stock_artwork_shared",
@@ -693,7 +704,8 @@
         "test_state_commit",
         "test_state_maintenance_admission",
         "test_state_maintenance_cancellation",
-        "test_state_patch_grouping"
+        "test_state_patch_grouping",
+        "test_state_prep_patch"
       ]
     },
     "ui": {

@@ -285,8 +285,7 @@ class LiveTagStore:
             os.close(fd)
 
     def _connect(self):
-        from pyrekordbox.db6.database import BLOB
-        from pyrekordbox.utils import deobfuscate
+        from .native_cipher import key_connection
         from sqlcipher3 import dbapi2 as sqlcipher
         self._guard()
         hot = self.database.with_name('master.db-journal')
@@ -296,8 +295,7 @@ class LiveTagStore:
         conn = sqlcipher.connect(f'{self.database.as_uri()}?mode=rw', uri=True,
                                  isolation_level=None, timeout=0.5)
         try:
-            key = deobfuscate(BLOB)
-            conn.execute("PRAGMA key='" + key.replace("'", "''") + "'")
+            key_connection(conn)
             conn.execute('PRAGMA trusted_schema=OFF')
             conn.execute('PRAGMA synchronous=FULL')
             identity = _identity(conn)

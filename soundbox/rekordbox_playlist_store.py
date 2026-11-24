@@ -12,6 +12,7 @@ from copy import deepcopy
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import sqlite3
@@ -21,6 +22,7 @@ import tempfile
 
 from . import rekordbox_playlist_plan as planner, rekordbox_playlist_xml as xml
 from . import rekordbox_playlist_move as move_plan,rekordbox_playlist_create as create_plan
+from . import playlist_membership_replay as membership_replay
 from .rekordbox_cue_store import CueWriteAuthority, PilotCueStore
 from .rekordbox_tags import NATIVE_VERSION, _schema
 from .rekordbox_write import (
@@ -33,6 +35,8 @@ FORMAT = 'soundbox-native-playlists-v1'
 PAYLOADS = ('before.db','after.db','before.xml','after.xml')
 MAX_BATCH_COMMANDS = 64
 MAX_TREE_DELETE_COMMANDS = 256
+_CANONICAL_UUID = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
+
 SMART_CREATE_PROFILE = 'rekordbox-6.8.7.0303-mytag-smart-create-v1'
 SMART_APPEND_CREATE_PROFILE = 'rekordbox-6.8.7.0303-mytag-smart-append-create-v1'
 SMART_NORMALIZED_CREATE_PROFILE = 'rekordbox-6.8.7.0303-local-normalized-smart-create-v1'
@@ -47,6 +51,16 @@ SMART_REORDER_PROFILE = 'rekordbox-6.8.7.0303-local-mixed-sibling-reorder-v1'
 SMART_MOVE_PROFILE = 'rekordbox-6.8.7.0303-local-smart-cross-parent-move-v1'
 NODE_MOVE_PROFILE = 'rekordbox-6.8.7.0303-local-node-placement-v1'
 MOVE_OPERATIONS = frozenset(('move_smart','move'))
+
+
+def _canonical_uuid(value):
+    """Preserve UUID parse equality; canonical plain text needs no allocation."""
+    if type(value) is str:
+        return _CANONICAL_UUID.fullmatch(value) is not None
+    try:
+        return str(UUID(value)) == value
+    except (ValueError, TypeError, AttributeError):
+        return False
 
 
 def command_requests(request):
@@ -117,8 +131,10 @@ def renew_tree_delete_request(request, current, *, operation_id=None):
     return result
 
 
-def batch_for(catalog,requests):
+def batch_for(catalog,requests,*,plan_encoding=None):
     request=dict(operation_id=uuid4().hex,operation='batch',revision=catalog['revision'],requests=deepcopy(requests))
+    if plan_encoding is not None:
+        request['plan_encoding'] = plan_encoding
     validate_request(request)
     # Independent native XML clocks must advance even when create+append are
     # captured in one GUI millisecond. Capture this BEFORE durable admission;
@@ -794,6 +810,7 @@ class PlaylistStore:
             self._check_scope(request)
             before_xml=self.xml.read_bytes()
             with encrypted_backup(self.database) as before:
+                before_sha=_sha(before)
                 conn=_connect(before,readonly=True)
                 try:
                     if _identity(conn)!=(self.authority.library_id,'6000') or _schema(conn)!=self.authority.schema_sha256:
@@ -808,18 +825,42 @@ class PlaylistStore:
                 finally:conn.close()
                 if not plan['changes']:
                     return plan['catalog'],(request['revision'],plan['catalog']['revision'])
+                if _sha(before)!=before_sha:
+                    raise RecoveryRequired('Playlist planning backup changed during verification')
                 archive.mkdir(mode=0o700);copy_state(before,archive/'before.db')
+                if _sha(archive/'before.db')!=before_sha:
+                    raise RecoveryRequired('Playlist recovery transfer differs from verified payload')
                 atomic_bytes(archive/'before.xml',before_xml)
                 with tempfile.TemporaryDirectory(prefix='soundbox-playlist-after-') as area:
                     after=Path(area).resolve()/'after.db';shutil.copyfile(before,after)
+                    if _sha(after)!=before_sha:
+                        raise RecoveryRequired('Playlist recovery transfer differs from verified payload')
                     conn=_connect(after)
                     try:
                         conn.execute('BEGIN IMMEDIATE');conn.set_authorizer(authorizer)
-                        apply_changes(conn,plan['changes']);conn.set_authorizer(None);conn.commit();_integrity(conn)
+                        apply_changes(conn,plan['changes']);conn.set_authorizer(None);conn.commit()
                         if prove_transition:expected_revision=catalog(conn)['revision']
                     finally:conn.close()
+                    # Closing the writer first folds any private WAL. Bracket
+                    # the integrity proof around the actual standalone bytes
+                    # that will be archived, never a pre-checkpoint main file.
+                    after_sha=_sha(after)
+                    conn=_connect(after,readonly=True)
+                    try:_integrity(conn)
+                    finally:conn.close()
+                    if _sha(after)!=after_sha:
+                        raise RecoveryRequired('Playlist recovery transfer differs from verified payload')
                     copy_state(after,archive/'after.db')
                 atomic_bytes(archive/'after.xml',plan['xml'])
+            # Seed only from the exact private bytes proved above, checking
+            # every archive transfer before any source connection/publication.
+            # Later guards still hash all payloads and check live authority,
+            # paths, app absence and SQL; cold recovery reconstructs normally.
+            payload_sha256={'before.db':before_sha,'after.db':after_sha,
+                'before.xml':hashlib.sha256(before_xml).hexdigest(),
+                'after.xml':hashlib.sha256(plan['xml']).hexdigest()}
+            if any(_sha(archive/name)!=digest for name,digest in payload_sha256.items()):
+                raise RecoveryRequired('Playlist recovery transfer differs from verified payload')
             info=self.database.stat()
             record=dict(format=FORMAT,source=str(self.database),source_file_id=[info.st_dev,info.st_ino],
                 library_id=self.authority.library_id,schema_sha256=self.authority.schema_sha256,
@@ -827,8 +868,9 @@ class PlaylistStore:
                 changes=plan['changes'],retain_full_backups=self.authority.retain_full_backups,
                 retention_predecessor_sha256=(_sha(self.root/'playlist-latest.json')
                     if (self.root/'playlist-latest.json').exists() else None),
-                payload_sha256={name:_sha(archive/name) for name in PAYLOADS})
+                payload_sha256=payload_sha256)
             atomic_bytes(archive/'operation.json',_json(record));sync_dir(archive);sync_dir(self.root)
+            self._verified_recovery_record_key=(hashlib.sha256(_json(record)).hexdigest(),self.authority)
             conn=None;journal_started=False
             try:
                 _fault('archive-prepared')
@@ -1080,7 +1122,11 @@ class PlaylistStore:
                 children=[{**child,'operation_id':uuid4().hex,'revision':current['revision'],
                            'timestamp':stamp,'survivor_timestamp':stamp,'xml_timestamp':clock}
                           for child in request['requests']]
-                return batch_for(current,children)
+                renewed = batch_for(current,children)
+                if 'plan_encoding' in request:
+                    renewed['plan_encoding'] = request['plan_encoding']
+                    validate_request(renewed)
+                return renewed
             renewed={**request,'operation_id':uuid4().hex,'revision':current['revision'],
                      'timestamp':stamp,'survivor_timestamp':stamp,'xml_timestamp':clock}
             if request['operation']=='reorder_smart':
@@ -1262,6 +1308,8 @@ def _build_plan(conn, request, before_xml):
         raise ConflictError('Native playlist batch baseline changed; refresh and retry')
     if request['operation'] == 'delete_tree' and tree_bindings(original, request['playlist_id']) != request['descendants']:
         raise ConflictError('Playlist deletion descendants changed; the captured tree is preserved')
+    if 'plan_encoding' in request:
+        return _membership_replay_plan(conn, request, before_xml, original)
     current=deepcopy(original);counter=row(conn,'agentRegistry','localUpdateCount')
     # Reconstruct this private batch by exact row identity. Dict insertion order
     # matches append/replacement/deletion order in the catalog lists. Retain the
@@ -1301,6 +1349,37 @@ def _build_plan(conn, request, before_xml):
             if by_id is not None:current[field]=list(by_id.values())
     current['revision']=planner.revision(current['nodes'],current['members'])
     return dict(changes=changes,xml=payload,catalog=current)
+
+
+def _membership_replay_plan(conn, request, before_xml, original):
+    """Compact accepted children without changing their final native effects."""
+    remove, append = request['requests']
+    counter = row(conn, 'agentRegistry', 'localUpdateCount')
+    # Reuse the ordinary child guards and lexical XML transitions. One selected
+    # occurrence per probe bounds validation; compose checks every content pin,
+    # occurrence and native history before deriving the complete final rows.
+    payload = before_xml
+    for command in (remove, append):
+        probe = {**command, 'tracks': command['tracks'][:1]}
+        payload = _single_plan(conn, probe, payload,
+                               current=original, counter=counter)['xml']
+    identity = remove['playlist_id']
+    target = next(node for node in original['nodes'] if node['ID'] == identity)
+    members = [member for member in original['members'] if member['PlaylistID'] == identity]
+    contents = {track_id: row(conn, 'djmdContent', track_id)
+                for track_id in {track['track_id'] for track in remove['tracks']}}
+    occupied = {value for member in original['members'] for value in (member['ID'], member['UUID'])}
+    result = membership_replay.compose(target, members, counter, remove, append, contents, occupied)
+    final = {member['ID']: member for member in result['members']}
+    # Match the original batch's stable catalog insertion order as well as its
+    # complete row values. Existing tombstones retain their catalog positions.
+    values = [deepcopy(member) if member['PlaylistID'] != identity else final[member['ID']]
+              for member in original['members']
+              if member['PlaylistID'] != identity or member['ID'] in final]
+    values.extend(final[track['id']] for track in append['tracks'])
+    nodes = deepcopy(original['nodes'])
+    current = dict(nodes=nodes, members=values, revision=planner.revision(nodes, values))
+    return dict(changes=result['changes'], xml=payload, catalog=current)
 
 
 def _normalized_creation_plan(conn,request,before_xml,*,current=None,counter=None):
@@ -2337,7 +2416,10 @@ def validate_request(request):
                 raise WriteProofError('Tree deletion must remove selected descendants before their parents')
         return
     if isinstance(request,dict) and request.get('operation')=='batch':
-        if (set(request)!={'operation_id','operation','revision','requests'}
+        fields = {'operation_id','operation','revision','requests'}
+        if 'plan_encoding' in request:
+            fields.add('plan_encoding')
+        if (set(request)!=fields
                 or not isinstance(request['requests'],list) or not 1<=len(request['requests'])<=MAX_BATCH_COMMANDS):
             raise WriteProofError('Invalid native playlist command batch')
         for field,length in (('operation_id',32),('revision',64)):
@@ -2355,6 +2437,8 @@ def validate_request(request):
             ids.add(child['operation_id'])
             selected+=len(child['tracks'])
         if selected>16384:raise WriteProofError('Native playlist batch selection is too large')
+        if 'plan_encoding' in request:
+            membership_replay.validate(request)
         return
     fields={'operation_id','operation','playlist_id','playlist_uuid','revision','name','parent','tracks',
             'timestamp','survivor_timestamp','xml_timestamp','folder','allow_duplicate'}
@@ -2389,7 +2473,7 @@ def validate_request(request):
             raise WriteProofError('Invalid native playlist target identity')
     try:
         for key in (('playlist_uuid','anchor_uuid') if request['operation'] in ('reorder','reorder_smart') else ('playlist_uuid',)):
-            if str(UUID(request[key]))!=request[key]:raise ValueError('UUID')
+            if not _canonical_uuid(request[key]):raise ValueError('UUID')
     except (ValueError,TypeError,AttributeError) as exc:
         raise WriteProofError('Invalid native playlist UUID') from exc
     if (request['operation'] not in ('create','create_normalized','create_folder_normalized','rename','delete','append','remove','reorder','create_smart','create_smart_append','create_smart_normalized','delete_smart','rename_smart','reorder_smart','move_smart','move')
@@ -2483,6 +2567,6 @@ def validate_request(request):
             occurrences.add(track['membership_id'])
         try:
             names=('id','membership_uuid','source_membership_uuid') if 'membership_id' in track else ('id','membership_uuid')
-            if any(str(UUID(track[key]))!=track[key] for key in names):raise ValueError('UUID')
+            if any(not _canonical_uuid(track[key]) for key in names):raise ValueError('UUID')
         except (ValueError,TypeError,AttributeError) as exc:
             raise WriteProofError('Invalid native membership UUID') from exc

@@ -87,9 +87,10 @@ requirement. Users never choose or separately enable the formats.
   frozen native DB/XML pairs. No source permission is granted by that proof.
 - `playlist_pilot_plan.py` / `playlist_pilot.py` — a separately approved, unintegrated
   desktop-source test for one new named playlist plus two existing unsynced tracks.
-  Preparation/show are read-only to the source. Publish/recover require the exact
-  separate original approval; the research tool does not inherit production
-  authority from the accepted runtime writer.
+  The completed pilot is terminal; its original approval must never be replayed.
+  Preparation/show are read-only to the source. Any unresolved recovery retains
+  its exact domain/plan/evidence and current guards; the research tool does not
+  inherit production authority from the accepted runtime writer.
   CLI: `scripts/prove_rekordbox_playlist_pilot.py`; read the
   [research scope and production boundaries](../../docs/analysis-playlists-next.md) first.
 

@@ -75,6 +75,21 @@ class ArtistsPresentation(unittest.TestCase):
         self.browser.replace(rows)
         self.assertIs(self.view.topLevelItem(0), before)
 
+    def test_filter_matches_each_track_once_and_keeps_group_and_child_visibility_exact(self):
+        from desktop.model import row_matches
+        rows=[*self.rows(),dict(id='3',artist='Ann',title='Other',genre='Dubstep')]
+        self.browser.replace(artist_rows(rows))
+        for terms in (['missing'],['dubstep'],['alpha'],['ann','other'],[]):
+            with self.subTest(terms=terms),mock.patch('desktop.artists_browser.row_matches',wraps=row_matches) as match:
+                self.browser.filter(terms)
+                self.assertEqual(match.call_count,len(rows) if terms else 0)
+            for name,item in self.browser._headers.items():
+                group=[row for row in rows if row['artist']==name]
+                self.assertEqual(item.isHidden(),bool(terms) and not any(row_matches(row,terms) for row in group))
+                for row in group:
+                    self.assertEqual(self.browser._tracks[row['id']].isHidden(),
+                        bool(terms) and not row_matches(row,terms))
+
     def test_finished_song_and_artwork_updates_reuse_all_existing_items(self):
         rows = self.rows()
         self.browser.replace(rows)
@@ -233,6 +248,31 @@ class LibraryBrowserReadiness(unittest.TestCase):
         self.assertEqual(window.table.currentIndex(),selected)
         self.assertEqual(window.table.verticalScrollBar().value(),scrollbar)
         self.assertEqual([r['id'] for r in window.model._rows],['1'])
+
+    def test_header_sort_and_matching_search_keep_multiple_selected_songs(self):
+        from PySide6.QtCore import Qt
+        self.apply_library(self.library);window=self.window;window._show_collection()
+        selection=window.table.selectionModel()
+        selection.setCurrentIndex(window.model.index(0,1),
+            QItemSelectionModel.ClearAndSelect|QItemSelectionModel.Rows)
+        selection.select(window.model.index(1,0),QItemSelectionModel.Select|QItemSelectionModel.Rows)
+        current=window.model._rows[selection.currentIndex().row()]['id']
+        window.table.sortByColumn(0,Qt.AscendingOrder);self.app.processEvents()
+        self.assertEqual({window.model._rows[i.row()]['id'] for i in selection.selectedRows()},{'1','2'})
+        self.assertEqual(window.model._rows[selection.currentIndex().row()]['id'],current)
+        self.assertEqual(selection.currentIndex().column(),1)
+        window.search.setText('a');self.app.processEvents()
+        self.assertEqual({window.model._rows[i.row()]['id'] for i in selection.selectedRows()},{'1','2'})
+
+    def test_filter_membership_change_retains_the_selected_songs_still_visible(self):
+        self.apply_library(self.library);window=self.window;window._show_collection()
+        selection=window.table.selectionModel()
+        selection.setCurrentIndex(window.model.index(0,0),
+            QItemSelectionModel.ClearAndSelect|QItemSelectionModel.Rows)
+        selection.select(window.model.index(1,0),QItemSelectionModel.Select|QItemSelectionModel.Rows)
+        window.search.setText('alpha');self.app.processEvents()
+        self.assertEqual([row['id'] for row in window.model._rows],['1'])
+        self.assertEqual([window.model._rows[i.row()]['id'] for i in selection.selectedRows()],['1'])
 
     def test_background_estimate_updates_artists_even_outside_the_current_playlist(self):
         self.library.tracks_by_id['1'].bpm = ''

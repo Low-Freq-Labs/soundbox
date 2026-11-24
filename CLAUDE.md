@@ -13,8 +13,10 @@ Native macOS library/prep/player app bridging rekordbox to USB, stock iPod and R
 
 - Preserve QOL: ordinary desktop pages/services prepare before interaction; USB/iPod pages/backends initialize on demand.
 - Track-dependent preparation follows selection/load; complete selected artwork precedes Track Info's first frame.
+- Speed work preserves complete first frames, coordinated audio/waveform readiness, selection/drafts and durable saves; earlier partial readiness or pop-in is a QOL regression.
 - Keep the engine Qt-free, production independent of research/tests, and personal code behind provider admission.
 - Reuse cohesive internal modules; keep authority-specific source SQL, recovery and exporter rules separate.
+- Target Sonny's one current installation. Retire obsolete compatibility after checking or migrating his actual saved state, backups, devices and recovery; do not keep speculative support for other installations.
 - Native source edits require their own accepted exact-library authority, fresh guards and shared writer/lock/journal.
 - Supported library/prep edits must persist in the shared rekordbox DB. SoundBox's current effective titles, artists and organization are authoritative migration inputs; preserve them before any native refresh or write. Local-only success is unfinished work.
 - Playback/export preserves source audio; only separately accepted conversion and user-confirmed removal may change originals.
@@ -60,7 +62,8 @@ Keep only one temporary previous app during installation; retire it after accept
 
 ## Documentation
 
-Keep folder READMEs within 25 lines: purpose, entry points, key rules, checks and links.
+Keep notes durable: explain responsibilities, entry points, relationships and important invariants. Code comments explain why or who owns work; dated changes belong in history and installed status belongs in HANDOFF.
+Keep folder READMEs within 25 lines: purpose, entry points, key rules, checks and links. Update guides with structural changes and keep every maintained directory reachable from the root README.
 Update behavior docs with code; keep history in dated records, not current instructions.
 Keep `AGENTS.md` and `CLAUDE.md` byte-identical whenever shared instructions change.
 Private music-acquisition workflows stay outside this repository.
