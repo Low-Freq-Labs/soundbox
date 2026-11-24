@@ -551,7 +551,14 @@ class StockCatalogSyncUi(unittest.TestCase):
         self.case.drain();self.case.commit_stock.assert_not_called()
 
     def test_unrelated_art_and_policy_changes_still_commit_and_gui_never_reads_images(self):
-        w=self.window;w.art_cache.store_ok('1',self.cover('red'));main=threading.get_ident()
+        w=self.window
+        neighbor=replace(w.lib.tracks_by_id['1'],track_id='unselected',name='Unselected neighbor',
+                         location_uri='file:///synthetic/unselected.wav',
+                         source_native_id='9999',source_uuid='unselected-neighbor-uuid')
+        w.lib=replace(w.lib,tracks_by_id={**w.lib.tracks_by_id,'unselected':neighbor})
+        w._bind_library_artwork()
+        self.assertNotIn('unselected',w.lib.playlists[0].keys)
+        w.art_cache.store_ok('1',self.cover('red'));main=threading.get_ident()
         snapshot=w.art_cache.cover_snapshot;threads=[]
         def read(track):
             threads.append(threading.get_ident())

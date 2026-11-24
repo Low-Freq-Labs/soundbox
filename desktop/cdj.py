@@ -693,5 +693,9 @@ class CdjDeviceMixin:
             item = self.usb_device_pages.playlist_tree.currentItem()
             if item is not None:
                 self.usb_device_pages._activate_song(item)
-        else:
+        elif self.stack.currentWidget() is self.artists_view:
+            track = self._selected_track()
+            if track is not None:
+                self._load_track(track)
+        elif self.stack.currentIndex() == 0:
             self._play_row(self.table.currentIndex())

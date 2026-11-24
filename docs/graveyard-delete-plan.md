@@ -53,8 +53,10 @@ Normal shutdown joins the source worker; accepted intentions survive restart.
 
 Ordinary completed operations keep the latest full encrypted DB pair and permanent
 row/XML/resource/operation receipts. Older exact DB payloads retire with their own
-verified, resumable marker. Unresolved operations and native acceptance references
-are never treated as disposable completed payloads. Cancel removes only exact
+verified, resumable marker. Unresolved operations retain necessary exact recovery
+payloads. Completed
+diagnostic native-reference copies follow the November23 post-delivery cleanup;
+required offline test fixtures remain separate. Cancel removes only exact
 unstarted generated review copies.
 
 ## Native references and validation

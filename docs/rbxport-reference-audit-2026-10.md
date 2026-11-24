@@ -106,8 +106,11 @@ cache rebuild was introduced by this audit.
 ## Evidence and practical limits
 
 Private evidence root: `~/Library/Logs/Soundbox/rbxport-audit-2026-10-30/`.
-The immutable repository catalog/revisions, downloaded source, baseline native
-library/source, analysis tests, GPU tests and drawable captures are retained.
+The audit originally retained the repository catalog/revisions, downloaded source,
+baseline native/library copies, analysis/GPU results and drawable captures. The
+November23 cleanup retired completed diagnostic payloads; only compact receipts
+remain there. Required pinned source and regression fixtures live in their
+documented repository/reference roots, separately from those retired copies.
 
 - A generated seven-minute track changes from120 to150BPM after310seconds. The default engine detects both tempos and analyzes all frames; canonical bytes remain exact.
 - A truncated tail beyond the previous300-second cutoff is rejected. Legacy records survive state round-trip; partial/inconclusive reanalysis retains component data and provenance.

@@ -229,9 +229,11 @@ was provisioned afterward. The installed build/status remains in HANDOFF.
 row/counter planning, lexical XML and encrypted paired recovery. Only playlist/
 membership rows and localUpdateCount may change. Native and agent must be closed;
 unknown cloud/sync states, stale identities and foreign recovery fail closed.
-Tag/Cue/Grid/Playlist share one worker, lock and journal. Current required native-reference and pending-acceptance archives
-retain full pairs; completed duplicate diagnostics follow current bounded
-retention. Normal editing retains the latest full encrypted pair plus
+Tag/Cue/Grid/Playlist share one worker, lock and journal. Necessary unfinished
+acceptance/recovery retains its exact payloads. Completed
+diagnostic DB/state copies and captures retire after the verified update is up
+and running under the November23 policy; required offline test fixtures remain.
+Normal editing retains the latest full encrypted pair plus
 permanent row/XML/operation receipts, retiring only verified older completed DB
 payloads with resumable progress.
 
@@ -421,8 +423,9 @@ Sonny verified the playlist/order, both120BPM/8B and the first track's existing
 Memory Cue. Normal rekordbox quit preserved playlist/membership rows and exact
 published XML bytes. Content/cue/analysis inventories remained unchanged.
 Native startup changed agentRegistry authentication/notification bookkeeping;
-readable reports retain only credential-redacted deltas. Encrypted snapshots
-remain intact. Do not normalize native registry changes to manufacture equality.
+readable reports retain only credential-redacted deltas. That checkpoint verified
+encrypted snapshots before their later diagnostic
+retirement. Do not normalize native registry changes to manufacture equality.
 Native-open/native-closed comparisons and acceptance.json are under sibling
 `native-acceptance/`. SoundBox's curation/art/authorities stayed exact; the two
 newly playlist-scoped references now enter its read-only browser (3742 tracks,
@@ -436,6 +439,10 @@ exact-plan pilot grants no operations in those domains.
 Never reuse this approval for a different operation or refresh a stale plan.
 
 ## Private evidence
+
+These are historical locations. Completed full captures, renders and state
+snapshots were retired under the November23 cleanup; only small receipts may
+remain. Required offline fixture roots are separate.
 
 Original captures and22 UI references:
 `~/Library/Logs/Soundbox/playlist-analysis-ui-2026-10-29/`.

@@ -3,7 +3,7 @@
 Qt-free library, source protocols, analysis and device exporters.
 
 - `library.py` / `engine.py`: source-neutral models and composition.
-- `state_repository.py` / `state_records.py` / `state_io.py`: canonical state, per-song records and atomic publication; portable snapshots include every record.
+- `state_repository.py` / `state_records.py` / `state_io.py`: canonical state, records and atomic publication; `artwork_identity.py` binds cover ownership and guarded saved-owner adoption.
 - `native_transaction.py`, `cache_io.py`, `ipod_policy.py`: shared mechanics; domain rules stay separate.
 - `rekordbox_*.py`: independently authorized native edit domains; `playlist_track_order.py` / `playlist_membership_replay.py` compose accepted membership commands and compact their exact final effects; companion snapshots grant no second write permission.
 - `source_truth.py` / `alias_intents.py` / `metadata_provenance.py`: frozen pairs, raw scalar/ACK ownership and durable merges/resets.

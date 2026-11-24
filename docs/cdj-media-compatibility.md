@@ -53,7 +53,9 @@ Unsupported layouts/unknown headers remain explicit; no guessed downmix.
 
 ## Concrete native references
 
-Four prepared copies and exact originals/native resources are retained:
+Four conversion references were verified. Original conversion audio and required
+native resources remain protected; completed diagnostic copies follow the current
+[retention contract](PROJECT_LAYOUT.md), including November23 capture retirement:
 
 - Kaivon66027819/UUID9877688c-b93b-49eb-a386-fdd67a40baf6: float→PCM24/44.1,
   7,664,276 frames, eight cues; same rate, gain and frame timing.

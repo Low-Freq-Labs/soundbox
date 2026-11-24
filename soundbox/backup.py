@@ -83,6 +83,8 @@ def _validate_bundle(root: Path) -> None:
     if policy.exists():
         from .art_sources import parse_exclusions
         parse_exclusions(json.loads(policy.read_text(encoding="utf-8")))
+    from .artwork_identity import validate_scoped_artwork
+    validate_scoped_artwork(root / "art")
     for relative in ("art/index.json", "art/defaults/index.json"):
         path = root / relative
         if not path.exists():
@@ -201,6 +203,39 @@ def _backup_root(src: Path, tmp: Path) -> Path:
     raise ValueError(f"Not a SoundBox backup: {src}")
 
 
+def _prepare_legacy_art_restore(selected: Path, staged: Path, current: Path) -> None:
+    """Resolve an old backup's art from its saved owner, never the next library."""
+    selected_art = selected / 'art'
+    index = selected_art / 'index.json'
+    if (not index.exists() or not json.loads(index.read_text())
+            or any((selected_art / 'scoped').glob('*/index.json'))):
+        return
+    owner_path = current / 'art' / 'ownership.json'
+    if not owner_path.exists() and not any((current / 'art' / 'scoped').glob('*/index.json')):
+        return
+    from . import source_truth
+    from .artwork_identity import prepare_legacy_restore, saved_track_identity
+    document = read_state(selected / 'library.json')
+    header = (document.get('settings', {}).get(source_truth.CURATION) or {}).get('active')
+    if not isinstance(header, dict):
+        raise ValueError('The backup needs a verified saved artwork owner before restoration')
+    try:
+        source_truth._validate_header(header)
+    except (TypeError, ValueError) as exc:
+        raise ValueError('The backup needs a verified saved artwork owner before restoration') from exc
+    scope = header['scope']
+    source: tuple[str, str, str] = (scope['kind'], scope['library_id'],
+                                   str(Path(scope['source']).absolute()))
+    identities = {tid: saved_track_identity(tid, source_uuid=pin['uuid'],
+                        native_id=pin['native_id'], native_path=pin['path'])
+                  for tid, pin in header['pins'].items()}
+    # Current adoption bindings describe the current saved songs, not the
+    # selected backup. Reused logical IDs cannot supply missing historical
+    # proof, even when both snapshots name the same source library.
+    prepare_legacy_restore(selected_art, staged / 'art',
+                           source_identity=source, track_identities=identities)
+
+
 def restore_backup(data_dir, src) -> dict:
     """Stage/validate first; publish library, history and artwork as one unit.
 
@@ -228,6 +263,7 @@ def restore_backup(data_dir, src) -> dict:
                         _copy_library(source, staged / item)
                     else:
                         copy_state(source, staged / item)
+            _prepare_legacy_art_restore(root, staged, data_dir)
             _validate_bundle(staged)
             current = data_dir / "library.json"
             # A validated selected backup must be able to repair malformed live

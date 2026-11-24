@@ -5,8 +5,10 @@ results below retain their original scope. [HANDOFF](HANDOFF.md) records source
 validation and installed identity separately.
 
 Older sections are dated evidence, including their original retention statements.
-Keep compact receipts and required current/unresolved recovery or acceptance
-payloads; completed duplicate payloads follow the bounded retention contract.
+Keep compact receipts and necessary unfinished-operation recovery. Once the
+verified update is up and running, remove completed diagnostics/captures and
+installation/migration snapshots under the November23 retention contract; required
+offline test fixtures remain protected.
 Historical paths do not imply all original full captures remain on disk.
 
 ## Fast local fixes and complete publication checks

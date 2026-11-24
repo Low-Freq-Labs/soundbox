@@ -195,6 +195,177 @@ class PlayerGestureFreshness(_PlayerFixture, unittest.TestCase):
         self.assertEqual(deck.state, PlaybackState.PAUSED)
 
 
+class RefillDeck(Deck):
+    """Native Play can remain PAUSED until a later PCM refill."""
+    def __init__(self):
+        super().__init__(False)
+        self.requested = False
+        self.pauses = 0
+
+    def play(self):
+        self.requested = True
+        self.plays += 1
+
+    def pause(self):
+        self.requested = False
+        self.pauses += 1
+        self.state = PlaybackState.PAUSED
+
+    def stop(self):
+        self.requested = False
+        super().stop()
+
+    def refill(self):
+        if self.requested:
+            self.state = PlaybackState.PLAYING
+
+
+class PendingNativePlayback(_PlayerFixture, unittest.TestCase):
+    def test_second_play_explicit_pause_and_stop_cancel_post_ready_native_start(self):
+        for command in ('toggle', 'pause', 'stop', 'latched-cue'):
+            with self.subTest(command=command):
+                pb, _ = self.player(False)
+                deck = RefillDeck(); pb.player = deck
+                pb._update_transport()
+                self.assertTrue(pb.play_btn.isEnabled())
+                self.assertTrue(pb._waveform_ready)
+                self.assertFalse(pb._pending_autoplay)
+                if command == 'latched-cue':
+                    pb._marker_cue_press('hot', 0, 7_123)
+                    pb.play_btn.click()
+                    self.assertTrue(pb._cue_preview_latched)
+                    pb._marker_cue_release('hot', 0)
+                else:
+                    pb.play_btn.click()
+                self.assertTrue(deck.requested)
+                self.assertEqual(deck.state, PlaybackState.PAUSED)
+                if command in ('toggle', 'latched-cue'):
+                    pb.play_btn.click()
+                else:
+                    getattr(pb, command)()
+                self.assertFalse(deck.requested)
+                self.assertFalse(pb._transport_play_active)
+                self.assertFalse(pb._wants_ordinary_playback())
+                self.assertEqual(pb.play_btn.text(), '▶')
+                deck.refill()
+                self.assertNotEqual(deck.state, PlaybackState.PLAYING)
+                if command != 'stop':
+                    self.assertGreater(deck.pauses, 0)
+
+    def test_paused_refill_poll_and_focus_do_not_erase_requested_play(self):
+        pb, _ = self.player(False)
+        deck = RefillDeck(); pb.player = deck
+        pb.toggle()
+        pb._on_state(PlaybackState.PAUSED)
+        pb.resynchronize_transport()
+        self.assertTrue(pb._transport_play_active)
+        self.assertTrue(pb._wants_ordinary_playback())
+        self.assertEqual(pb.play_btn.text(), '❚❚')
+        deck.refill()
+        pb._on_state(deck.state)
+        self.assertTrue(pb.is_playing())
+        self.assertEqual(deck.plays, 1)
+
+    def test_new_source_replaces_pending_native_play_without_inheriting_its_request(self):
+        pb, _ = self.player(False)
+        deck = RefillDeck(); pb.player = deck
+        original = deck.setSource
+
+        def source(url):
+            deck.requested = False
+            original(url)
+
+        deck.setSource = source
+        pb.toggle()
+        pb.play_track('B', '/synthetic/B.wav', autoplay=False)
+        deck.refill()
+        self.assertEqual(pb.current_track(), 'B')
+        self.assertFalse(deck.requested)
+        self.assertNotEqual(deck.state, PlaybackState.PLAYING)
+
+
+class TrackLoadOwnership(_PlayerFixture, unittest.TestCase):
+    def test_accepted_conversion_retargets_only_exact_owned_fade_without_new_intent(self):
+        pb, deck = self.player(True)
+        ramps = []
+        del pb._animate_gain
+        deck.ramp_gain = lambda _gain, _ms, done: ramps.append(done)
+        started, cancelled = mock.Mock(), mock.Mock()
+        pb.play_track('B', '/synthetic/B.wav', on_started=started, on_cancelled=cancelled)
+        epoch = pb._transport_epoch
+        self.assertFalse(pb.rebind_pending_path('A', '/synthetic/B.wav', '/synthetic/new.wav'))
+        self.assertFalse(pb.rebind_pending_path('B', '/synthetic/stale.wav', '/synthetic/new.wav'))
+        self.assertTrue(pb.rebind_pending_path('B', '/synthetic/B.wav', '/synthetic/new.wav'))
+        self.assertEqual(pb._transport_epoch, epoch)
+        cancelled.assert_not_called(); started.assert_not_called()
+        ramps[0]()
+        self.assertEqual(pb.current_track(), 'B')
+        self.assertEqual(pb._src_path, '/synthetic/new.wav')
+        started.assert_called_once_with(); cancelled.assert_not_called()
+        self.assertFalse(pb.rebind_pending_path('B', '/synthetic/new.wav', '/synthetic/later.wav'))
+
+    def test_deferred_load_starts_once_and_does_not_cancel_its_own_continuation(self):
+        pb, deck = self.player(True)
+        ramps = []
+        del pb._animate_gain
+        deck.ramp_gain = lambda _gain, _ms, done: ramps.append(done)
+        started, cancelled = mock.Mock(), mock.Mock()
+        pb.play_track('B', '/synthetic/B.wav', on_started=started, on_cancelled=cancelled)
+        self.assertEqual(pb.current_track(), 'A')
+        started.assert_not_called(); cancelled.assert_not_called()
+        ramps[0]()
+        self.assertEqual(pb.current_track(), 'B')
+        started.assert_called_once_with(); cancelled.assert_not_called()
+        ramps[0]()
+        started.assert_called_once_with()
+        pb._on_error(None, 'Accepted B later failed')
+        cancelled.assert_not_called()
+
+    def test_newer_commands_cancel_unstarted_load_once_and_old_completion_is_inert(self):
+        for command in ('pause', 'stop', 'seek', 'cue', 'source', 'same-request', 'shutdown'):
+            with self.subTest(command=command):
+                pb, deck = self.player(True)
+                ramps = []
+                del pb._animate_gain
+                deck.ramp_gain = lambda _gain, _ms, done: ramps.append(done)
+                started, cancelled = mock.Mock(), mock.Mock()
+                pb.play_track('B', '/synthetic/B.wav', on_started=started, on_cancelled=cancelled)
+                stale = ramps[0]
+                if command == 'seek': pb.seek_ms(5_000)
+                elif command == 'cue': pb._marker_cue_press('hot', 0, 7_123)
+                elif command in ('source', 'same-request'):
+                    identity = 'C' if command == 'source' else 'B'
+                    pb.play_track(identity, f'/synthetic/{identity}.wav')
+                elif command == 'shutdown':
+                    # Exercise shutdown's ownership boundary; native close is
+                    # independently tested and this silent fake owns no handle.
+                    deck.close = lambda: None
+                    pb.shutdown()
+                else: getattr(pb, command)()
+                cancelled.assert_called_once_with()
+                stale(); stale()
+                started.assert_not_called()
+                cancelled.assert_called_once_with()
+
+    def test_same_track_direct_load_and_forced_occurrence_reload_notify_acceptance(self):
+        pb, deck = self.player(False)
+        started, cancelled = mock.Mock(), mock.Mock()
+        generation = pb._analysis_generation
+        pb.play_track('A', '/synthetic/A.wav', autoplay=False,
+                      on_started=started, on_cancelled=cancelled)
+        started.assert_called_once_with(); cancelled.assert_not_called()
+        self.assertEqual(pb._analysis_generation, generation)
+        pb._on_dur(60_000)
+        started.reset_mock()
+        pb.play_track('A', '/synthetic/A.wav', autoplay=False, force_reload=True,
+                      on_started=started, on_cancelled=cancelled)
+        started.assert_called_once_with(); cancelled.assert_not_called()
+        self.assertEqual(pb._analysis_generation, generation + 1)
+        self.assertEqual(deck.pos, 0)
+        self.assertTrue(pb._pending_autoplay)
+        self.assertFalse(pb._waveform_ready)
+
+
 class CompleteDeckLoading(_PlayerFixture, unittest.TestCase):
     """Held waveform delivery must never allow audio to run ahead of its surface."""
     def pending(self, autoplay=True, *, analysis_path='/synthetic/B.DAT'):
@@ -353,3 +524,106 @@ class CompleteDeckLoading(_PlayerFixture, unittest.TestCase):
         pb.toggle();pb._start_waveform.assert_called_once_with(pb._src_path,pb._analysis_path)
         self.assertEqual(deck.plays,0);self.manifest(pb);self.complete(pb)
         self.assertEqual(deck.plays,1);self.assertEqual(ready,[True])
+
+    def test_source_error_retry_reuses_inflight_surface_and_preserves_later_commands(self):
+        for command in ('play', 'pause', 'stop', 'seek', 'cue-held', 'cue-release', 'source'):
+            with self.subTest(command=command):
+                pb, deck, ready = self.pending(False)
+                pb._on_error(None, 'Synthetic source error')
+                pb.play_btn.click()
+                self.assertEqual(deck.plays, 0)
+                self.assertTrue(pb._pending_autoplay)
+                if command == 'seek': pb.seek_ms(12_345)
+                elif command.startswith('cue-'):
+                    pb._marker_cue_press('memory', 0, 23_456)
+                    if command == 'cue-release': pb._marker_cue_release('memory', 0)
+                elif command == 'source':
+                    previous = (pb._src_path, pb._analysis_path, pb._analysis_generation)
+                    pb.play_track('C', '/synthetic/C.wav', analysis_path='/synthetic/C.DAT', autoplay=False)
+                    pb._on_analysis_detail(*previous, {'_waveform_complete': True})
+                    self.assertFalse(pb._waveform_ready)
+                elif command in ('pause', 'stop'): getattr(pb, command)()
+                self.manifest(pb); self.complete(pb)
+                if command == 'source': pb._on_dur(60_000)
+                self.assertEqual(deck.plays, int(command in ('play', 'seek', 'cue-held')))
+                self.assertEqual(deck.pos, 0 if command == 'stop' else 12_345 if command == 'seek'
+                                 else 23_456 if command.startswith('cue-') else 625)
+                self.assertEqual(ready, [True])
+                self.assertEqual(pb._start_waveform.call_count, 2 if command == 'source' else 1)
+
+    def test_decoder_retry_waits_for_new_duration_and_surface_before_exact_seek_play(self):
+        for surface_first in (False, True):
+            for retry_after_surface in (False, True):
+                for command in ('play', 'pause', 'stop', 'seek', 'cue-held', 'cue-release'):
+                    with self.subTest(surface_first=surface_first,
+                                      retry_after_surface=retry_after_surface, command=command):
+                        pb, _, ready = self.pending(False)
+                        deck = RefillDeck(); pb.player = deck
+                        pb._on_error(None, 'Synthetic decoder open error')
+                        pb.seek_ms(12_345)
+                        if retry_after_surface: self.complete(pb)
+                        deck.source_retry_needed = True
+                        retries = []
+
+                        def retry():
+                            retries.append(True)
+                            deck.source_retry_needed = False
+                            deck.pos = 0
+                            pb._on_dur(0)
+                            return True
+
+                        deck.retry_source = retry
+                        pb.play_btn.click()
+                        self.assertEqual(retries, [True])
+                        self.assertEqual(deck.plays, 0)
+                        self.assertEqual(pb._pending_start_ms, 12_345)
+                        self.assertEqual(deck.visual[-1], (12_345, True))
+                        pb._on_backend_pos(0)
+                        self.assertEqual(pb._pos, 12_345)
+                        if command == 'seek': pb.seek_ms(23_456)
+                        elif command.startswith('cue-'):
+                            pb._marker_cue_press('memory', 0, 30_000)
+                            if command == 'cue-release': pb._marker_cue_release('memory', 0)
+                        elif command != 'play': getattr(pb, command)()
+                        self.assertEqual(deck.plays, 0)
+                        if surface_first or retry_after_surface:
+                            if not retry_after_surface: self.complete(pb)
+                            self.assertEqual(deck.plays, 0)
+                            pb._on_dur(60_000)
+                        else:
+                            pb._on_dur(60_000)
+                            self.assertEqual(deck.plays, 0)
+                            self.complete(pb)
+                        deck.refill()
+                        self.assertEqual(deck.state == PlaybackState.PLAYING,
+                                         command in ('play', 'seek', 'cue-held'))
+                        self.assertEqual(deck.pos, 0 if command == 'stop' else 23_456 if command == 'seek'
+                                         else 30_000 if command.startswith('cue-') else 12_345)
+                        self.assertEqual(pb._start_waveform.call_count, 1)
+                        # A complete surface before a failed decoder is still
+                        # only a readiness notification, never audible Play.
+                        self.assertTrue(ready)
+
+    def test_post_ready_stop_then_decoder_retry_owns_zero_before_another_poll(self):
+        pb, _, _ = self.pending(False)
+        self.complete(pb)
+        pb.seek_ms(12_345)
+        pb._on_error(None, 'Synthetic source error')
+        pb.stop()
+        self.assertEqual(pb._pos, 0)
+        deck = RefillDeck(); pb.player = deck
+        deck.source_retry_needed = True
+
+        def retry():
+            deck.source_retry_needed = False
+            pb._on_dur(0)
+            return True
+
+        deck.retry_source = retry
+        pb.play_btn.click()
+        self.assertTrue(pb._pending_autoplay)
+        self.assertEqual(pb._pending_start_ms, 0)
+        self.assertEqual(deck.plays, 0)
+        pb._on_dur(60_000)
+        self.assertEqual(deck.pos, 0)
+        self.assertEqual(deck.plays, 1)

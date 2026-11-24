@@ -31,8 +31,11 @@ class Host(TrackInfoMixin,QFrame):
         self.lib=Library(tracks,[],Path('/synthetic/library.xml'))
         self._selected_track=mock.Mock(return_value=tracks['browser'])
         self.player_bar=SimpleNamespace(current_track=lambda:'deck')
+        # This protocol host supplies a committed load; MainWindow's actual
+        # source/song/path resolver has separate navigation regressions.
+        self._loaded_info_track=mock.Mock(return_value=tracks['deck'])
         self._row_for=lambda track:dict(id=track.track_id,title=track.name,location=str(track.path))
-        self.art_cache=SimpleNamespace(image_path=mock.Mock(return_value=None))
+        self.art_cache=SimpleNamespace(image_path=mock.Mock(return_value=None), scope_owner=object())
         self._art_pick=mock.Mock();self._save_track_info=mock.Mock();self._flash_status=mock.Mock()
         for tid,kind in (('grave-a','del'),('grave-b','rem')):
             item=QTreeWidgetItem([tracks[tid].name]);item.setData(0,_GRAVE_ROLE,(kind,tid,None if kind=='del' else 'playlist'))
@@ -83,7 +86,9 @@ class TrackInfoSelection(unittest.TestCase):
 
     def test_native_deleted_historical_row_uses_recovered_info_without_writable_live_controls(self):
         h=self.host;h.lib.tracks_by_id.pop('grave-a')
-        h.graveyard_controller=SimpleNamespace(info=mock.Mock(return_value=dict(id='grave-a',title='Recovered',location='/exact.wav')))
+        h.graveyard_controller=SimpleNamespace(entries={},
+            _source_identity=(str(h.lib.source),h.lib.source_kind,h.lib.source_library_id),
+            info=mock.Mock(return_value=dict(id='grave-a',title='Recovered',location='/exact.wav')))
         h._grave.setCurrentItem(h._grave.topLevelItem(0));self.click_info()
         self.assertEqual(self.dialog.call_args.args[0]['title'],'Recovered')
         self.assertIsNone(self.dialog.call_args.kwargs.get('save'));self.assertIsNone(self.dialog.call_args.kwargs.get('pick_art'))

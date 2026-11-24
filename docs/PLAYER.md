@@ -20,6 +20,29 @@ edge-color resolution without replacing those curves.
 RGB remains the fixed pixel-exact reference. Each mode retains its own palette;
 BLUE/RGB geometry, audio and separate source-format/device gates stay protected.
 
+## Transport requests and browser occurrences
+
+Requested Play/Pause ownership is separate from the decoder's observed state.
+Pause cancels an accepted native start even while its snapshot still says paused;
+clickless ramps and held cue behavior remain. Source-error retry can reopen only
+the decoder while keeping the complete resident surface and cues. The current
+seek/cue target waits for the new header and complete waveform before Play.
+Newer Pause, Stop, seek, cue or source commands supersede older continuations.
+Native polling fences its remaining snapshot after reentrant signals/commands,
+so an old source cannot publish errors, position or state onto its replacement.
+
+`playback_navigation.py` owns source/song pins and occurrence cursors. Requested
+navigation advances while a load fade is pending; only its accepted load commits
+the supplying order/highlight. Cancellation retains the previous committed song.
+Native membership tokens or visible duplicate ordinals distinguish repeated
+songs. Filtering/selection made after a load request keeps its own seat. Accepted
+conversion path changes retain these cursors through an exact old/new handoff;
+unknown source/song replacements cannot inherit them. Stable SoundBox import IDs
+retain their logical identity when native registration supplies new native facts.
+Artists actions resolve a visible leaf in the active browser rather than hidden
+ordinary-table or filtered-tree selection. Loaded Info fallback requires the
+committed source/song/path, not a matching numeric ID alone.
+
 ## Mini cue readiness — November23
 
 Hot/Memory markers share the pads' immediate selected-track cue publication.
@@ -506,7 +529,7 @@ Transport controls:
   300ms at100ms intervals until release, focus loss or track change.
   Audio before the first saved grid row uses that grid's first interval for
   jump counting, so a forward jump from audio zero or a cue just before the
-  grid start can return backward. This extrapolates transport arithmetic only;
+  grid start can be reversed back to that position. This extrapolates transport arithmetic only;
   it never changes stored grid rows or enables a seek outside the audio.
 - Session CUE and memory cues use gated preview. Paused hot cues do too: press
   starts from the exact saved cue, holding previews, release pauses and returns.
@@ -719,8 +742,10 @@ PWV4/PWV6 preview work supersedes those palette/mini policies. Those dated captu
 lanes in all modes and identical BLUE/3BAND complete frames.
 
 Full native appearance equivalence was not established. Earlier private comparison
-captures and experimental builds were deleted with approval; the fresh Gunslinger
-reference and acceptance receipts remain, along with required regression fixtures.
+captures and experimental builds were deleted with approval. The November23
+cleanup also retired completed Gunslinger and later diagnostic captures; small
+acceptance receipts and required regression fixtures remain. Completed captures
+are not permanent archives or inputs to replay after cleanup.
 See [HANDOFF](HANDOFF.md).
 
 October 1 test audit: production Metal helpers now run against independent

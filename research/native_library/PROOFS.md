@@ -16,6 +16,10 @@ Completed source pilots below are terminal historical evidence. Their approvals
 do not authorize a new source action, replay, song import or native-app input.
 An unresolved recovery must retain its exact domain/plan/evidence and current
 guards; these examples never provision ordinary production authority.
+Completed diagnostic copies/captures follow the November23 accepted-delivery
+cleanup policy. References below describe their original proof checkpoints,
+not a guarantee that every full payload remains; preserve only compact receipts,
+required offline inputs and evidence needed by unfinished recovery.
 
 `registration.py` constructs the observed bare content row independently from
 explicit file facts, native identity/clock seeds and frozen library properties.

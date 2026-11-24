@@ -31,6 +31,7 @@
         "test_native_cloud_readiness",
         "test_native_identity",
         "test_native_registration",
+        "test_playback_navigation",
         "test_prepared_browser_refresh",
         "test_prepared_native_publication",
         "test_shared_engine_infrastructure",
@@ -352,6 +353,7 @@
         "test_native_deck.NativeDeckContract.test_terminal_edge_is_distinct_from_manual_pause",
         "test_native_deck.NativeDeckContract.test_timeline_header_decoder_mismatch_fails_closed",
         "test_native_deck.NativeDeckContract.test_timeline_leadin_is_in_duration_seek_and_end_contract",
+        "test_playback_navigation",
         "test_player_gesture_freshness",
         "test_reviewplayer"
       ],
@@ -470,10 +472,12 @@
         "test_artwork_selection"
       ],
       "integration": [
-        "test_artwork_requests",
         "test_art_review_scan",
         "test_artist_profile_action",
         "test_artreview",
+        "test_artwork_completion",
+        "test_artwork_identity",
+        "test_artwork_requests",
         "test_catalog_thumbnails",
         "test_ipod_artwork_ui",
         "test_review_cover_preparation",
@@ -720,6 +724,7 @@
       "integration": [
         "test_app_icon",
         "test_app_preference_persistence",
+        "test_artwork_completion",
         "test_choices",
         "test_desktop_runtime",
         "test_duplicate_dialog",
@@ -727,6 +732,7 @@
         "test_inline_drafts",
         "test_macos_defaults",
         "test_native_deck.TagPopupNativeGeometry",
+        "test_playback_navigation",
         "test_scroll_feedback",
         "test_sidebar",
         "test_theme_live",

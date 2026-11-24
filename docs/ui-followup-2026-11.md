@@ -6,6 +6,10 @@ installed identity, retention and full wrap-up evidence are in [HANDOFF](HANDOFF
 Later accepted normalized creation, generic node moves, tag rename and immediate
 future-tag behavior supersede the narrower candidate limits below; dated
 rollbacks are not a current retention instruction or permission to replay.
+The November23 cleanup retired completed full reports, captures, copied state/DB
+payloads and application rollbacks described as retained at these checkpoints.
+Only compact receipts remain; necessary unfinished recovery and required offline
+fixtures have their separate current retention rules.
 
 Sonny reported My Tags clipping after the accepted personal172 export delivery.
 The supplied screenshot exposes roughly the empty startup panel's100×86logical

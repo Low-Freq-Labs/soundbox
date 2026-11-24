@@ -2,14 +2,21 @@
 
 ## Current delivery and measurement boundary — reviewed November23
 
-The performance and cleanup changes below are included in the November21
+The performance and cleanup changes below were delivered in the November21
 personal 174 installation, runtime
 `7a5cf06d3e00c8e332abd5b6d1d0d6463de4093afad003f475b60c570f797eba`.
 That build also includes regular-playlist authored order and exact membership
 reposition, BLUE's shared RGB contour/native palette, and the dedicated PWV6
 3BAND mini. Main 3BAND retains its independent PWV7 geometry and 1.35 display gain.
 See [PLAYER](PLAYER.md), [playlist order](native-playlist-order.md) and
-[HANDOFF](HANDOFF.md) for behavior, focused validation and installed provenance.
+[HANDOFF](HANDOFF.md) for behavior, validation and the superseding installed identity.
+They remain included in the current delivery; the 174 identity above is historical.
+
+Sonny's November23 retention instruction retired completed diagnostic DB/state
+copies, recordings, images and scratch payloads after accepted delivery. Only small
+receipts remain in the private Logs paths below; their historical inventories are
+not promises that full captures or runnable comparison scripts still exist.
+Required offline test inputs and musical originals retain their separate protection.
 
 All timings, census counts, candidate states and release totals below belong to
 their dated checkpoints. Earlier delivered fixes remain included; rejected or

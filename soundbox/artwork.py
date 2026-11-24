@@ -60,6 +60,7 @@ class ArtworkSelection:
     _rows: tuple
     _edge_pool: tuple
     _edge_seed: str
+    _manual: bool = False
 
 
 def _art_mutation[**P, R](method: Callable[Concatenate[Any, P], R]) -> Callable[Concatenate[Any, P], R]:
@@ -71,6 +72,8 @@ def _art_mutation[**P, R](method: Callable[Concatenate[Any, P], R]) -> Callable[
                 return method(self, *args, **kwargs)
             if self.read_only:
                 raise OSError("Restore a valid library before changing artwork")
+            if self._retired:
+                raise StateChangedError("Artwork source changed; reload before writing")
             if self._generation != self._area.generation:
                 raise StateChangedError("Artwork state was restored; reload before writing")
             if self._revision != self._area.art_revision:
@@ -119,8 +122,10 @@ def _art_read[**P, R](method: Callable[Concatenate[Any, P], R]) -> Callable[Conc
 
 
 class ArtCache:
-    """Persistent per-TrackID art cache (personal, local). Stores each fetched
-    image once and remembers misses so we never re-hammer for the same track."""
+    """Canonical local art, with frozen source/song views for library consumers.
+
+    Store each fetched image once and retain misses and explicit user blocks.
+    """
 
     def __init__(self, root: Path):
         if Path(root).is_symlink():
@@ -128,11 +133,13 @@ class ArtCache:
         self.root = Path(root).resolve()
         self._area = state_area(self.root.parent if self.root.name == "art" else self.root)
         self.read_only = False
+        self._retired = False
+        self._scope_owner = object()
         self._generation = self._area.generation
         self._revision = self._area.art_revision
         self._changes: dict[str, bytes | Path | None] = {}
         self.root.mkdir(parents=True, exist_ok=True)
-        self._index_path = self.root / "index.json"
+        self._index_path = self._index_file()
         self._reload_index()
         # User-supplied generic pictures are canonical art inputs too, but are
         # deliberately separate from the per-track index.  A fallback never
@@ -144,7 +151,48 @@ class ArtCache:
         self._defaults = self._load_defaults()
         self._selection_exclusions = self.source_exclusions()
 
-    def _selection_rows(self, track_ids) -> tuple[tuple, bool]:
+    @property
+    def scope_owner(self):
+        """Presentation session; compatible views share it, source ABA does not."""
+        return self._scope_owner
+
+    def _index_file(self) -> Path:
+        return self.root / "index.json"
+
+    @property
+    def _records_root(self) -> Path:
+        return self.root
+
+    def _track_key(self, track_id: str) -> str:
+        if not track_id or Path(track_id).name != track_id or track_id in (".", ".."):
+            raise ValueError("Invalid artwork track ID")
+        return track_id
+
+    def _image_file(self, track_id: str, extension: str) -> Path:
+        if extension not in ("jpg", "png"):
+            raise ValueError("Invalid artwork image extension")
+        return self._records_root / f"{self._track_key(track_id)}.{extension}"
+
+    def for_library(self, library):
+        """Return a frozen source/song-bound view; never adopt unowned art."""
+        from .artwork_identity import BoundArtCache
+        return BoundArtCache(self.root, library, read_only=self.read_only)
+
+    def retire(self) -> None:
+        """Close old-source publication while its owned workers finish joining."""
+        with self._area.lock:
+            self._retired = True
+
+    def adopt_legacy(self, saved_library):
+        """Explicit migration from a proved saved owner, before source switching."""
+        from .artwork_identity import adopt_legacy
+        return adopt_legacy(self, saved_library)
+
+    def _save_kept(self, kept: dict) -> None:
+        self._write(self._records_root / "review-kept.json",
+                    json.dumps(kept, ensure_ascii=False).encode())
+
+    def _selection_rows(self, track_ids, *, manual=False) -> tuple[tuple, bool]:
         from .art_sources import excluded_source
         rows = []
         edge = False
@@ -154,19 +202,19 @@ class ArtCache:
             ok = state[0] == 'ok'
             excluded = bool(ok and excluded_source(
                 url=state[2] or '', excluded_accounts=self._selection_exclusions))
-            photo_id = self._default_assignments.get(track_id) if not ok else None
+            photo_id = self._default_assignments.get(track_id) if not ok and not manual else None
             photo = self._defaults['photos'].get(photo_id) if photo_id is not None else None
-            edge = edge or not ok and photo is None
+            edge = edge or not manual and not ok and photo is None
             rows.append((track_id, entry, state, excluded, photo_id, photo))
         return tuple(rows),edge
 
     @_art_read
-    def selection_token(self, track_ids) -> ArtworkSelection:
+    def selection_token(self, track_ids, *, manual=False) -> ArtworkSelection:
         """Capture only selected canonical owners/policy, without filesystem IO."""
-        rows,edge=self._selection_rows(track_ids)
+        rows,edge=self._selection_rows(track_ids, manual=manual)
         pool = tuple(self._defaults['photos'].items()) if edge else ()
         return ArtworkSelection(self, self._area.generation, rows, pool,
-                                self._defaults['seed'] if edge else '')
+                                self._defaults['seed'] if edge else '', manual)
 
     def _selection_pool_current(self, token: ArtworkSelection) -> bool:
         # Canonical mutations detach the photos map under the area lock. One
@@ -185,11 +233,11 @@ class ArtCache:
     @_art_read
     def selection_current(self, token: ArtworkSelection) -> bool:
         """Check selected intent on any thread; never read, decode or hash images."""
-        if (not isinstance(token, ArtworkSelection) or token._cache is not self
+        if (not isinstance(token, ArtworkSelection) or token._cache is not self or self._retired
                 or token._generation != self._generation or self._generation != self._area.generation
                 or self._revision != self._area.art_revision or getattr(self, '_writing', False)):
             return False
-        rows,edge=self._selection_rows(row[0] for row in token._rows)
+        rows,edge=self._selection_rows((row[0] for row in token._rows), manual=token._manual)
         return ((self._selection_pool_current(token) if edge else
                  not token._edge_pool and token._edge_seed=='')
                 and all(row[0] == old[0] and row[1] is old[1] and row[2:5] == old[2:5]
@@ -209,8 +257,42 @@ class ArtCache:
             raise ValueError('Artwork selection no longer belongs to the current cache generation')
         return {row[0]: ArtworkSelection(self, token._generation, (row,),
                     token._edge_pool if row[2][0] != 'ok' and row[5] is None else (),
-                    token._edge_seed if row[2][0] != 'ok' and row[5] is None else '')
+                    token._edge_seed if row[2][0] != 'ok' and row[5] is None else '', token._manual)
                 for row in token._rows}
+
+    def _reservation_key(self, track_id: str) -> str:
+        return str(self._records_root / self._track_key(track_id))
+
+    @_art_read
+    def reserve_manual_selection(self, tokens: dict[str, object]) -> dict[str, ArtworkSelection]:
+        """Capture and reserve selected ownership atomically against auto fill."""
+        if self._retired or self._generation != self._area.generation:
+            raise StateChangedError("Artwork source changed; choose the image again")
+        selections = self.split_selection(self.selection_token(tokens, manual=True))
+        for track_id, token in tokens.items():
+            self.reserve_manual(track_id, token)
+        return selections
+
+    @_art_read
+    def reserve_manual(self, track_id: str, token: object) -> None:
+        """Reserve the latest selected intent without disk IO or a fetch wait."""
+        reservations = getattr(self._area, '_art_reservations', None)
+        if reservations is None:
+            reservations = {}
+            setattr(self._area, '_art_reservations', reservations)
+        reservations[self._reservation_key(track_id)] = (self._area.generation, token)
+
+    @_art_read
+    def release_manual(self, track_id: str, token: object) -> None:
+        reservations = getattr(self._area, '_art_reservations', {})
+        key = self._reservation_key(track_id)
+        held = reservations.get(key)
+        if held is not None and held[1] is token:
+            reservations.pop(key)
+
+    def _manual_reserved(self, track_id: str) -> bool:
+        reservation = getattr(self._area, '_art_reservations', {}).get(self._reservation_key(track_id))
+        return reservation is not None and reservation[0] == self._area.generation
 
     def _reload_index(self) -> None:
         self.index = (json.loads(self._index_path.read_text())
@@ -520,7 +602,7 @@ class ArtCache:
     def _stored_image_path(self, track_id: str) -> Path | None:
         e = self.index.get(track_id) or {}
         if e.get("status") == "ok":
-            p = self.root / f"{track_id}.{e.get('ext', 'jpg')}"
+            p = self._image_file(track_id, e.get('ext', 'jpg'))
             if p.is_file():
                 return p
         return None
@@ -540,7 +622,7 @@ class ArtCache:
         from . import artencode
         data = artencode.ensure_device_safe(res.data)
         ext = "jpg" if artencode.is_device_safe(data) else ("png" if "png" in res.mime else "jpg")
-        self._write(self.root / f"{track_id}.{ext}", data)
+        self._write(self._image_file(track_id, ext), data)
         self.index[track_id] = {"status": "ok", "ext": ext,
                                 "src": res.source_url, "conf": round(res.confidence, 2),
                                 "origin": "auto" if origin == "auto" else "manual"}
@@ -580,7 +662,7 @@ class ArtCache:
         defaults_changed = False
         for index, tid in enumerate(affected):
             was_eligible = self._is_default_eligible(tid)
-            self._write(self.root / f"{tid}.{ext}", data)
+            self._write(self._image_file(tid, ext), data)
             self.index[tid] = {"status": "ok", "ext": ext,
                                "src": res.source_url, "conf": round(res.confidence, 2),
                                "origin": "auto" if origin == "auto" else "manual"}
@@ -605,14 +687,14 @@ class ArtCache:
         (Rockbox-safe). Idempotent + flag-filed, so later launches are instant.
         Returns (checked, fixed)."""
         from . import artencode
-        flag = self.root / ".normalized-v1"
+        flag = self._records_root / ".normalized-v1"
         if flag.exists():
             return 0, 0
         checked = fixed = 0
         for tid, e in list(self.index.items()):
             if (e or {}).get("status") != "ok":
                 continue
-            p = self.root / f"{tid}.{e.get('ext', 'jpg')}"
+            p = self._image_file(tid, e.get('ext', 'jpg'))
             if not p.is_file():
                 continue
             checked += 1
@@ -622,7 +704,7 @@ class ArtCache:
             safe = artencode.to_baseline_jpeg(data)
             if not safe:
                 continue  # undecodable — leave as-is rather than destroy
-            self._write(self.root / f"{tid}.jpg", safe)
+            self._write(self._image_file(tid, 'jpg'), safe)
             if e.get("ext") != "jpg":
                 self._write(p, None)
             self.index[tid] = {**e, "ext": "jpg"}
@@ -644,7 +726,7 @@ class ArtCache:
         A manual edit, removal or miss recorded during the network request wins.
         The check and publication share the state lock, including other caches.
         """
-        if track_id in self.index:
+        if track_id in self.index or self._manual_reserved(track_id):
             return False
         from .art_sources import excluded_source
         if res is not None and excluded_source(
@@ -672,8 +754,8 @@ class ArtCache:
     def _review_paths(self, track_id: str) -> tuple[Path, Path]:
         if not track_id or Path(track_id).name != track_id or track_id in (".", ".."):
             raise ValueError("Invalid artwork track ID")
-        paths = (self.root / "review" / f"{track_id}.json",
-                 self.root / "review" / f"{track_id}.image")
+        paths = (self._records_root / "review" / f"{self._track_key(track_id)}.json",
+                 self._records_root / "review" / f"{self._track_key(track_id)}.image")
         for path in paths:
             self._area.path(str(path.relative_to(self._area.root)))
         return paths
@@ -727,7 +809,7 @@ class ArtCache:
         custom = self.source_exclusions()
         accounts = set(custom)
         entries = list(self.index.values())
-        for path in (self.root / "source-recovery").glob("*.json"):
+        for path in (self._records_root / "source-recovery").glob("*.json"):
             self._area.path(str(path.relative_to(self._area.root)))
             value = json.loads(path.read_text())
             if isinstance(value, dict) and isinstance(value.get("before"), dict):
@@ -742,7 +824,7 @@ class ArtCache:
 
     @_art_read
     def kept_covers(self) -> dict:
-        path = self.root / "review-kept.json"
+        path = self._records_root / "review-kept.json"
         self._area.path(str(path.relative_to(self._area.root)))
         if not path.exists():
             return {}
@@ -756,7 +838,7 @@ class ArtCache:
         self._require_cover(track_id, expected)
         kept = self.kept_covers()
         kept[track_id] = {"entry": expected.entry, "digest": expected.digest, "artist": artist, "title": title}
-        self._write(self.root / "review-kept.json", json.dumps(kept, ensure_ascii=False).encode())
+        self._save_kept(kept)
 
     @_art_mutation
     def apply_excluded_profile(self, track_id: str, expected: CoverSnapshot,
@@ -779,7 +861,7 @@ class ArtCache:
         if not artencode.is_device_safe(safe):
             return False
         receipt, original = self._review_paths(track_id)
-        recovery = self.root / "source-recovery"
+        recovery = self._records_root / "source-recovery"
         policy_receipt = recovery / receipt.name
         policy_image = recovery / original.name
         for path in (policy_receipt, policy_image):
@@ -794,8 +876,8 @@ class ArtCache:
             if hashlib.sha256(policy_image.read_bytes()).hexdigest() != prior["before_sha256"]:
                 raise ValueError("Source recovery image changed; profile replacement stopped")
         if receipt.exists():
-            archive_receipt = recovery / f"{track_id}.review.json"
-            archive_image = recovery / f"{track_id}.review.image"
+            archive_receipt = recovery / f"{self._track_key(track_id)}.review.json"
+            archive_image = recovery / f"{self._track_key(track_id)}.review.image"
             if archive_receipt.exists() or archive_image.exists():
                 raise ValueError("Existing source/review recovery needs inspection")
             self._write(archive_receipt, receipt.read_bytes())
@@ -804,10 +886,11 @@ class ArtCache:
             self._write(original, None)
         self.store_ok(track_id, ArtResult(safe, "image/jpeg", res.confidence,
                                           res.source_url, res.matched_title), origin="auto")
-        self.index[track_id].update(fallback="excluded-source", fallback_artist=artist)
+        self.index[track_id] = {**self.index[track_id], "fallback": "excluded-source",
+                                "fallback_artist": artist}
         self._save()
         if expected.entry.get("ext", "jpg") != "jpg":
-            self._write(self.root / f"{track_id}.{expected.entry['ext']}", None)
+            self._write(self._image_file(track_id, expected.entry['ext']), None)
         return True
 
     @_art_mutation
@@ -857,7 +940,7 @@ class ArtCache:
         self.store_ok(track_id, ArtResult(safe, "image/jpeg", res.confidence,
                                          res.source_url, res.matched_title))
         if expected.entry.get("ext", "jpg") != "jpg":
-            self._write(self.root / f"{track_id}.{expected.entry['ext']}", None)
+            self._write(self._image_file(track_id, expected.entry['ext']), None)
         recovery.update(after=copy.deepcopy(self.index[track_id]),
                         after_sha256=hashlib.sha256(safe).hexdigest())
         self._write(receipt, json.dumps(recovery, ensure_ascii=False).encode())
@@ -865,7 +948,7 @@ class ArtCache:
             kept = self.kept_covers()
             kept[track_id] = {"entry": copy.deepcopy(self.index[track_id]),
                               "digest": recovery["after_sha256"], "artist": context[0], "title": context[1]}
-            self._write(self.root / "review-kept.json", json.dumps(kept, ensure_ascii=False).encode())
+            self._save_kept(kept)
 
     @_art_mutation
     def undo_review(self, track_id: str, expected: CoverSnapshot) -> None:
@@ -879,12 +962,10 @@ class ArtCache:
                 hashlib.sha256(data).hexdigest() != recovery["before_sha256"]):
             raise ValueError("The cover or its Undo copy changed. No artwork was changed.")
         before = recovery["before"]
-        old_path = self.root / f"{track_id}.{before.get('ext', 'jpg')}"
-        if old_path.name != f"{track_id}.{before.get('ext', 'jpg')}":
-            raise ValueError("Invalid recovery image path")
+        old_path = self._image_file(track_id, before.get('ext', 'jpg'))
         self._write(old_path, data)
         if expected.entry.get("ext", "jpg") != before.get("ext", "jpg"):
-            self._write(self.root / f"{track_id}.{expected.entry.get('ext', 'jpg')}", None)
+            self._write(self._image_file(track_id, expected.entry.get('ext', 'jpg')), None)
         self.index[track_id] = before
         self._save()
         self._write(receipt, None)
@@ -925,7 +1006,7 @@ class ArtCache:
         for tid in weak:
             e = self.index.pop(tid, None)
             if e and e.get("status") == "ok" and e.get("ext"):
-                self._write(self.root / f"{tid}.{e['ext']}", None)
+                self._write(self._image_file(tid, e['ext']), None)
         self._save()
         return len(weak)
 
@@ -933,7 +1014,7 @@ class ArtCache:
     def forget(self, track_id: str):
         e = self.index.pop(track_id, None)
         if e and e.get("ext"):
-            self._write(self.root / f"{track_id}.{e['ext']}", None)
+            self._write(self._image_file(track_id, e['ext']), None)
         self._save()
         self._rebuild_default_assignments()
 
@@ -945,7 +1026,7 @@ class ArtCache:
         go through store_ok, which overwrites the block."""
         e = self.index.get(track_id)
         if e and e.get("ext"):
-            self._write(self.root / f"{track_id}.{e['ext']}", None)
+            self._write(self._image_file(track_id, e['ext']), None)
         self.index[track_id] = {"status": "blocked"}
         self._save()
         self._rebuild_default_assignments()
@@ -963,7 +1044,7 @@ class ArtCache:
             entry = self.index.get(tid) or {}
             was_eligible = self._is_default_eligible(tid)
             if entry.get("ext"):
-                self._write(self.root / f"{tid}.{entry['ext']}", None)
+                self._write(self._image_file(tid, entry['ext']), None)
             self.index[tid] = {"status": "blocked"}
             if index == 0 or not was_eligible:
                 defaults_changed = self._rebalance_unpublished() or defaults_changed

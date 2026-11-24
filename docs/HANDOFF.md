@@ -1,98 +1,124 @@
 # SoundBox current handoff
 
-## Current delivery — November 23, 2026
+## Release closure — November23, 2026
 
-Branch: `main`. Sonny requested complete documentation review, validated cleanup,
-commit and push, then reported late Hot/Memory markers on the mini waveform.
-The cue fix is installed and passively verified. The publication commit is the
-current `git log -1` after wrap-up; final validation is recorded below.
+Branch `main`. This delivery closes the reviewed transport/artwork fixes and the
+additional legacy-art restore ownership guard. The installed runtime matches the
+checked source fingerprint below. Exact release-commit/remote/clean-worktree proof
+is recorded in `~/Library/Logs/Soundbox/wrapup-20261123-final/publication.json`.
+Signed app provenance retains its true build-time base; publication does not
+restamp or rebuild an already verified binary merely to change its Git label.
+
+## Delivery behavior
+
+- Requested Play survives transient paused/refill observations. Explicit Pause
+  cancels queued starts; retry preserves the latest seek/cue target, complete
+  waveform and cues. Reentrant poll continuations cannot publish onto a newer
+  source or transport command.
+- Browser navigation binds exact source/song/visible-occurrence cursors, advances
+  rapid requests through held fades and commits only accepted loads. Artists
+  Load/Info uses its selected visible leaf; loaded Info fallback requires the
+  committed source/song/path. Newer selections and drafts survive completion.
+- Per-song artwork, misses, blocks, defaults and review/undo bind source/song
+  identity. Compatible refresh carries unchanged selected choices; source/ABA
+  transitions retire old publishers. Manual preparation reserves its choice
+  against older automatic results. Info receives complete decoded artwork.
+- Legacy-art restoration requires the selected backup's saved source/song pins.
+  A current adoption manifest cannot supply missing historical identity proof.
+  Refusal preserves all current state/art; valid UUID/stable-import restore stays.
+- Mini-cue readiness, authored regular-playlist occurrence order, accepted RGB/BLUE
+  geometry and independent 3BAND/PWV6 behavior remain. This delivery changes no
+  native waveform code/shader or accepted palette.
+
+## Final source checks and review
+
+The bare `./check.sh --render` passed all 5,366 discovered tests exactly once:
+5,288 offscreen and 78 Cocoa cases, zero skips/expected failures. Pyflakes, engine
+mypy (160 files), layout/links/instruction parity, required private fixtures and
+12 Rust tests passed. All 998 frozen non-Markdown inputs remain exact after the
+backup fix; the added preservation regression ran in the complete gate. An
+independent reviewer found no visible layout issue in the fresh synthetic render.
+
+Both freshly signed package profiles match runtime fingerprint
+`6aa29ee1fa19bc8ecd72daeb64ac2659cf044ea0dbaf75b4248cf6880100190c`.
+Artifact inspection compared 240 personal/236 public first-party runtime modules
+and startup scripts to current source; four native code/data section sets match
+tested outputs. Public excludes personal code/dependencies. Both isolated Cocoa
+startups passed native deck/process-query, SQL/ORM and AES checks with no library,
+device or artwork worker. Their empty startup renders are byte-identical.
+
+The review accounts for 148 inputs: 79 current first-party documentation/setup
+files (all prose fully read; locks structurally reviewed), 28 archives reviewed for
+historical scope/hazards/links, 38 upstream inputs checked for provenance/integrity/
+links, and 3 additional linked license/provenance inputs. All 243 vendored files
+and 56 installed Python pins match. The 58 missing upstream link occurrences are
+known omitted upstream targets; no vendor source was rewritten.
+
+Compact per-file hashes, review bases/depths, findings and limitations:
+`~/Library/Logs/Soundbox/wrapup-20261123-final/`.
+No external-link/legal recertification, new native-source/device acceptance,
+whole-video equivalence or exhaustive absence of QOL bugs is claimed.
 
 ## Installed application
 
-`/Applications/Soundbox.app` is signed personal build 174, native ABI 9, ordinarily
-reopened at 00:31 UTC November 24 after Sonny confirmed normal Quit. It was built
-from dirty base `91a60c3432f9e8809dd12b61582e5044edf03082`. Runtime fingerprint:
-`ecd45b50abe3dc918b32942f2b620dd16e2fc4a113958daca8713299bccff16f`.
-Executable SHA256:
-`86f1273f2c379236e99652727fbe95be5a010bf010aa5dd224acd59d21fed763`.
-A later publication commit does not restamp this binary; exact signed composition
-and the runtime fingerprint bind it to the tested source.
+`/Applications/Soundbox.app` is personal build175, native ABI9, built from the
+reviewed dirty source based on `dd2736870002917f3b635beab24191f30ffeb6be`.
+Its exact runtime fingerprint is
+`6aa29ee1fa19bc8ecd72daeb64ac2659cf044ea0dbaf75b4248cf6880100190c`;
+executable SHA256:
+`cbd3c0c214c64028fc54f77da30b6dbbb229607d45aeac552a895893744b161a`.
+This supersedes the earlier build175 fingerprint, includes the final restore
+guard, and is not a claim of clean-HEAD metadata at packaging time.
 
-- Mini Hot/Memory markers appear on the first complete waveform frame using a
-  display-only resident timeline until decoder duration is ready. Decoder
-  timeline publication wakes paused rendering. No new load wait or source read.
-- BLUE shares RGB's exact main outline/LOD/motion and uses the native palette
-  over resident PWV5 spectral proxies; exact native BLUE video parity is unclaimed.
-- 3BAND keeps its independent PWV7 contours/detail, continuous motion and 1.35
-  main gain. Joint encoded pixel areas correct overlap colors. Its mini uses
-  dedicated PWV6 data and the native 1200×25 stacked preview.
-- Optional PWV4/PWV6 previews precede complete grouped publication. No new DSP,
-  waveform-cache format, migration or recooking belongs to these display fixes.
-- Regular playlists retain authored occurrence order and native track dragging
-  through the accepted remove+append composition. Collection/smart defaults stay
-  newest-first; exact source, recovery and acknowledgement guards remain.
-- Complete selected artwork precedes Info's first frame; complete waveform
-  readiness gates audio. Latest selection, transport, drafts and durable saves win.
+After Sonny confirmed normal Quit, installation verified the package, preserved
+one temporary previous app/state copy, and compared exact signed Contents and all
+11,376 protected canonical/record/art/metadata files before and after the swap.
+The saved white Finder/Dock icon was preserved outside signed Contents. Normal
+deep signature and current packaged-source checks pass; strict root metadata
+rejection is expected for the saved custom icon and does not justify stripping
+it or re-signing the running app.
 
-See [PLAYER](PLAYER.md), [playlist order](native-playlist-order.md) and
-[runtime contracts](runtime-contracts.md) for behavior and authority boundaries.
+Normal relaunch was at 05:44:36 UTC November24; passive verification at 05:45:32 UTC
+matched loaded executable/native inode identities and all 240 runtime modules.
+The app loaded 3,299 tracks/86 playlists, reused 3,290 unchanged analyses, prepared
+zero tasks and fetched/failed zero covers. All 11,376 protected files and the
+complete logical canonical document remained byte/value exact through startup.
+The pre-existing missing native import/location notices were observed without
+attempting a source or media repair.
 
-## Validation
+The temporary previous app and state capture, both distribution apps, packaging
+intermediates, Cargo debug output and completed render/startup captures were
+retired after that verified running handoff. Only small result/provenance receipts
+remain for the delivery. Cleanup checked inactivity and current app identity;
+its installed executable stayed exact. Current free data-volume space is about
+24.8 GiB (displayed 25 GiB); live state, originals, recovery, fixtures and Seafile
+were outside deletion scope. Receipts: `install.json`, `runtime-verification.json`
+and `accepted-delivery-cleanup.json` in the final wrap-up log directory.
 
-The complete bare `./check.sh --render` passed: all 5,285 discovered tests ran
-exactly once, with 5,214 offscreen and 71 Cocoa cases, zero skips and zero expected
-failures. Lint, folder guides/links, instruction parity, engine types, required
-fixtures and 12 Rust tests passed. The fresh synthetic UI render was inspected.
-All 978 frozen runtime/test/build inputs remain exact. HANDOFF release-result
-metadata is finalized separately with layout/link checks and a per-file receipt.
+## Retention and unfinished work
 
-Actual first-frame Metal pixels show Hot and Memory mini markers with decoded
-duration still zero; replacement clears them without inventing audio readiness.
-Decoder wake has source/lifecycle review rather than a dedicated delayed-decoder
-oracle. Full native playback, grouped readiness and cadence checks passed.
-The accepted Metal source is unchanged by this cue fix. Earlier generated
-comparisons retain 624 RGB/BLUE frames/attribute cases and 312 independent 3BAND
-attribute cases against accepted 9ed4; whole-video/device equivalence is unclaimed.
+Sonny's November23 standing instruction: one temporary previous app during an
+installation, then remove it and completed diagnostics/captures/copied DB/state/
+packaging payloads once the verified update is up and running. Keep only small
+result/provenance receipts. Do not recreate full archives or ask again for that
+accepted-delivery cleanup. Runtime atomic publication is separate from archived
+diagnostics and remains unchanged.
 
-Strict signed composition verified 238 runtime/startup modules, four native code
-sections/payloads, ABI 9 and the full exact Metal literal. Isolated packaged native,
-process-query, SQL/ORM and AES checks passed without live-source/device discovery.
+The storage cleanup removed 383,146 diagnostic files (10.67 GiB allocated), leaving
+about 14 MiB of compact receipts/active logs. Available space measured 13.9→24.8 GiB;
+APFS and other activity can affect the observation. Required fixtures passed
+before/after; current app/media/Seafile were untouched. Receipt:
+`~/Library/Logs/Soundbox/diagnostic-cleanup-20261123.json`.
 
-The documentation audit covers 120 documents and 22 dependency/toolchain manifests:
-all 65 current first-party documents received full-content review, 28 archives
-received scope/permission/link review, and all 27 upstream docs/licenses match
-their pin. Cue/ABI deltas received a further review. Local targets/anchors passed;
-58 intentionally omitted upstream references are documented in project layout.
-External links, new hardware acceptance and legal clearance are not claimed.
+Preserve live canonical state and referenced records, original artwork/defaults,
+original media/conversions, required offline inputs, active `.venv`, checked
+native/CDJ release outputs and necessary recovery for unfinished operations.
+The earlier original/post-adoption diagnostic snapshots and completed captures
+are retired; historical paths may now contain only compact receipts and are not
+replay/restore inputs. The current curated library supersedes every dated count.
 
-## State and retention
-
-Fresh canonical/record/portable backup preceded installation. Startup loaded
-3,298 tracks and 86 playlists, with zero preparation tasks or artwork fetch/fail.
-The backup holds 6,433 records and current curation/queues, saved RGB mode and white
-icon. Passive verification at 00:41 UTC matched the loaded executable/native
-identities, exact canonical curation/queues, all records and saved preferences.
-Five derived cache/provenance observations were independently reviewed and
-retained. Current preparation signatures reconstruct exactly; causes of seven
-older opaque signatures remain unproved. These are scheduling hints, not source
-authority. No old state was restored. Newer user edits supersede dated counts.
-Duplicate personal distribution/packaging outputs were retired after exact
-signature, Contents and receipt checks; the pending previous app stays intact.
-
-Delivery receipts: `~/Library/Logs/Soundbox/cue-readiness-20261123/`.
-Documentation/gate receipts: `~/Library/Logs/Soundbox/wrapup-20261123/`.
-Earlier waveform reference proofs: `~/Library/Logs/Soundbox/3band-reference-20261121/`.
-The exact accepted 9ed4 rollback was retired during the guarded rotation. Keep
-only the immediate previous 7a5c app at `cue-readiness-20261123/install/previous/`
-until Sonny accepts this new cue delivery. It is pending acceptance, not garbage.
-Preserve AppData/records, current recovery, originals/conversions, required offline
-fixtures, active `.venv` and native/check/CDJ release outputs. No general music,
-AppData or Trash cleanup is authorized.
-
-MainWindow/controller coupling and large iPod planners remain organization debt.
-Complete-grid encoding/GUI acknowledgement and measured projection/storage costs
-remain open. This is not an exhaustive dead-code or instant-every-function claim.
-See [critical findings](critical-audit-2026-11.md), [performance](performance-audit.md),
-[roadmap](ROADMAP.md) and [project layout](PROJECT_LAYOUT.md).
-[Earlier dated handoff](archive/handoff-2026-11-23-before-wrap.md) retains its original
-scope and never grants new app/source/device actions.
+Broader MainWindow coupling, iPod planner/encoding costs, copied-media rollback
+ownership, missing-link proof and separate Graveyard backup inclusion remain
+tracked debt; see [critical findings](critical-audit-2026-11.md),
+[performance](performance-audit.md), [roadmap](ROADMAP.md) and
+[layout/retention](PROJECT_LAYOUT.md). These are separate from this release closure.

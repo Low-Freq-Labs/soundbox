@@ -36,6 +36,7 @@ class Host(QObject):
         self._native_reconcile_source=mock.Mock()
         self._native_pending_changed=mock.Mock()
         self._analysis_queue=[];self._resume_analysis_jobs=mock.Mock()
+        self._rebind_playback_path=mock.Mock()
         self.player_bar=SimpleNamespace(current_track=lambda:None,refresh_audio_detail=mock.Mock())
     def _save_state(self):
         if self.fail_save:return False
@@ -321,3 +322,7 @@ class BackgroundConversion(unittest.TestCase):
         self.assertEqual(w.settings[shared_imports.KEY][0]['destination'],destination)
         self.assertEqual(prepared[0][0]['path'],str(target));self.assertEqual(prepared[0][1].bits,24)
         self.assertFalse(path.exists());self.assertEqual(w.lib.tracks_by_id[tid].path,target)
+        w._rebind_playback_path.assert_called_once_with(tid,str(path),str(target),previous=(
+            (str(w.lib.source),w.lib.source_kind,w.lib.source_library_id),
+            (tid,tid,'',str(path),str(path),'')))
+        self.assertEqual(json.loads(w.state.read_text())['imported'][tid]['path'],str(target))

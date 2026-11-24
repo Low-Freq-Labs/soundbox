@@ -64,9 +64,10 @@ used as a rollback target. The evening install preserved that newer curation and
 all nine authority files exactly.
 
 Detailed evidence stays outside the repository under the dated private
-playlist-unification evidence root. It contains hash-only native comparisons,
-exact existing encrypted reference pairs, registration receipts and redacted
-provider summaries. No new full-library pair is retained for each progress check.
+playlist-unification evidence root. Its compact native-comparison, registration
+and redacted-provider receipts remain; completed encrypted reference/capture
+payloads follow the November23 cleanup policy and are no longer permanent archives.
+No new full-library pair is retained for each progress check.
 Registry credentials, account tokens and private acquisition workflows do not
 belong in this audit or its output.
 

@@ -54,14 +54,19 @@ class ArtworkWorker(QThread):
 
 
 class TrackInfoDialog(QDialog):
-    def __init__(self, row, *, artwork=None, pick_art=None, save=None, parent=None, desktop_artwork=True):
+    def __init__(self, row, *, artwork=None, pick_art=None, save=None, parent=None, desktop_artwork=True,
+                 artwork_current=None, artwork_cache=None):
         super().__init__(parent)
         self.setWindowTitle('Track information');self.resize(800,760)
         self.row=dict(row);self.controls={};self.save_callback=save
         self._artwork=artwork;self._pick_art=pick_art;self._image=QImage()
         self._desktop_artwork=desktop_artwork
+        self._artwork_current=artwork_current
+        self._artwork_cache=artwork_cache
+        self._artwork_scope = getattr(artwork_cache, 'scope_owner', None)
         self._owner=TaskOwner(self);self._art_worker=None
         self._art_ready=False;self._art_dirty=False
+        self._art_invalid=False
         self._covers=[]
         layout=QVBoxLayout(self);layout.setContentsMargins(16,12,16,12)
         self.tabs=QTabWidget();layout.addWidget(self.tabs,1)
@@ -124,7 +129,7 @@ class TrackInfoDialog(QDialog):
 
     def exec(self):
         self.prepare_artwork()
-        if self._owner.stopping:return QDialog.Rejected
+        if self._owner.stopping or self._art_invalid:return QDialog.Rejected
         return super().exec()
 
     def _cover(self,size):
@@ -141,6 +146,8 @@ class TrackInfoDialog(QDialog):
 
     def _load_artwork(self):
         if self._owner.stopping:return
+        if self._artwork_current is not None and not self._artwork_current():
+            self._art_ready=True;self._art_invalid=True;return
         if self._art_worker is not None:
             self._art_dirty=True;return
         if self._artwork is None:
@@ -151,6 +158,8 @@ class TrackInfoDialog(QDialog):
         def retired(w):
             self._art_worker=None
             if self._owner.stopping:return
+            if self._artwork_current is not None and not self._artwork_current():
+                self._art_ready=True;self._art_invalid=True;return
             if self._art_dirty:
                 self._load_artwork();return
             self._image=w.image;self._art_ready=True;self._paint_artwork()
@@ -264,7 +273,11 @@ class TrackInfoMixin:
     def _refresh_info_artwork(self,track_ids):
         ids=set(track_ids)
         for dialog in self.findChildren(TrackInfoDialog):
-            if dialog._desktop_artwork and dialog.row.get('id') in ids and not dialog._owner.stopping:
+            if (dialog._desktop_artwork and dialog.row.get('id') in ids and not dialog._owner.stopping
+                    and (dialog._artwork_scope is self.art_cache.scope_owner
+                         if dialog._artwork_scope is not None else
+                         dialog._artwork_cache is None or dialog._artwork_cache is self.art_cache)
+                    and (dialog._artwork_current is None or dialog._artwork_current())):
                 dialog._load_artwork()
 
     def _open_track_info(self):
@@ -292,14 +305,29 @@ class TrackInfoMixin:
                 row=controller.info(data[1]) if controller and data else None
                 if row:
                     tid=data[1]
-                    _exec_info(TrackInfoDialog(row,artwork=lambda:self.art_cache.image_path(tid),parent=self));return
+                    cache=self.art_cache
+                    scope_owner = cache.scope_owner
+                    entry=controller.entries.get(tid,{})
+                    native=entry.get('native') or {}
+                    source=(str(self.lib.source),self.lib.source_kind,self.lib.source_library_id) if self.lib else None
+                    owns=(source is not None and getattr(controller,'_source_identity',None)==source)
+                    def historical_artwork():
+                        lookup=getattr(self.art_cache,'historical_image_path',None)
+                        return (lookup(tid,source_uuid=native.get('uuid',''),
+                                       native_id=native.get('id',''),native_path=entry.get('path',''))
+                                if owns and lookup is not None else None)
+                    def historical_current():
+                        return (self.art_cache.scope_owner is scope_owner and self.lib is not None
+                                and (str(self.lib.source),self.lib.source_kind,self.lib.source_library_id)==source)
+                    _exec_info(TrackInfoDialog(row,artwork=historical_artwork,parent=self,
+                        artwork_current=historical_current,artwork_cache=cache));return
                 if controller:controller.schedule()
                 self._flash_status('Track is no longer in the library' if data else
                                    'Select a Graveyard track to view its information');return
         else:
             track=self._selected_track()
             if track is None and self.lib:
-                track=self.lib.tracks_by_id.get(self.player_bar.current_track())
+                track=self._loaded_info_track()
         if track is None:
             self._flash_status('Select a track to view its information');return
         tid=track.track_id
@@ -311,17 +339,23 @@ class TrackInfoMixin:
             if selected is None or _edit_identity(self.lib,selected)!=identity:
                 self._flash_status('The song identity changed; reopen Track information before editing');return
             track=selected
-        def current():
+        cache=self.art_cache
+        scope_owner = cache.scope_owner
+        def binding_current():
             selected=self.lib.tracks_by_id.get(tid) if self.lib else None
-            if selected is None or _edit_identity(self.lib,selected)!=identity:
+            return (self.art_cache.scope_owner is scope_owner and selected is not None
+                    and _edit_identity(self.lib,selected)==identity)
+        def current():
+            if not binding_current():
                 self._flash_status('The song identity changed; reopen Track information before editing');return False
             return True
         def save(changes):
             return self._save_track_info(tid,changes) if current() else False
         def pick_art():
             return self._art_pick(tid) if current() else None
-        dialog=TrackInfoDialog(self._row_for(track),artwork=lambda:self.art_cache.image_path(tid),
-            pick_art=pick_art,save=save,parent=self)
+        dialog=TrackInfoDialog(self._row_for(track),
+            artwork=lambda:self.art_cache.image_path(tid) if binding_current() else None,
+            pick_art=pick_art,save=save,parent=self,artwork_current=binding_current,artwork_cache=cache)
         _exec_info(dialog)
 
     def _save_track_info(self,tid,changes):

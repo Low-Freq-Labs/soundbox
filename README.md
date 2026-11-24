@@ -15,7 +15,7 @@ Each maintained folder's README maps its purpose, entry points and boundaries; u
 
 Ordinary desktop controls prepare before interaction; attached-device features initialize when needed.
 Playback/export preserves source audio. Native edits, conversion and deletion retain separate guarded authorities.
-Curated AppData, recovery and private reference fixtures are protected; never clear them for cleanup.
+Live curation, unfinished recovery and required test fixtures are protected. Completed update diagnostics/rollbacks follow [retention](docs/PROJECT_LAYOUT.md).
 
 Use Python 3.14, Apple Silicon/macOS 14+, the pinned requirements and the local `.venv`.
 Choose areas/depth with `./check.sh --list-suites` and `--suite AREA... --level LEVEL`.

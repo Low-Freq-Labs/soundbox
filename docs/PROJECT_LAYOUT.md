@@ -46,7 +46,14 @@ Root build/check scripts recreate their own outputs. Cleanup must identify exact
 - App rollback is one temporary previous bundle during installation, retired after accepted verification. HANDOFF records current retention; musical recovery has its separate rules.
 - Newer user edits supersede every dated count/hash. Old receipts and completed installers are evidence, never replay permission.
 
-Unresolved recovery and pending acceptance retain their required payloads. Sonny's November10 cleanup explicitly retires completed diagnostic duplicates and historical pilot DB snapshots outside current runtime recovery; compact proof receipts remain. Current writer recovery, pending captures, required offline fixtures and original music/conversions stay protected. Ordinary completed native transactions continue their accepted receipt-backed retirement rules.
+Sonny's November23 retention instruction supersedes earlier diagnostic/archive
+retention: after a verified update is up and running, remove its temporary previous
+app, completed diagnostics/captures, copied databases, installation/migration state
+snapshots and packaging scratch. Keep only small result/provenance receipts; do
+not accumulate full archives or ask again for this accepted-delivery cleanup.
+Live curation, original music/conversions, required offline inputs and recovery
+for unfinished operations stay protected. Atomic publication remains unchanged.
+Earlier inventories below are historical; retired payloads are not replay inputs.
 
 Sonny renewed cleanup on November18. After the verified de410 install, the exact
 reviewed manifest retired completed DB/icon/snapshot copies and reproducible

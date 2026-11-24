@@ -125,6 +125,172 @@ class ArtworkRequestOwnership(unittest.TestCase):
         self.release.set();self.settle()
         self.assertEqual((w.art_cache.root/'chosen.jpg').read_bytes(),artencode.ensure_device_safe(newer.data))
 
+    def test_bound_source_aba_discards_old_manual_completion_without_touching_new_choice(self):
+        w = self.window
+        original = w.lib
+        a = w.art_cache.for_library(original)
+        w.art_cache = a
+        a.store_ok('chosen', picture('red'))
+        self.held(picture('blue'))
+        a.retire()
+        other = replace(original, source=Path('/synthetic/other-library.xml'))
+        w.lib = other
+        b = a.for_library(other)
+        w.art_cache = b
+        w.lib = original
+        w.art_cache = b.for_library(original)
+        w.art_cache.store_ok('chosen', picture('green'))
+        accepted = w.art_cache.cover_snapshot('chosen')
+        self.release.set()
+        self.settle()
+        self.assertEqual(w.art_cache.cover_snapshot('chosen'), accepted)
+        self.assertFalse(w._art_requests.requests)
+
+    def test_accepted_manual_request_reserves_unfetched_song_against_older_auto_result(self):
+        w = self.window
+        w.art_cache.forget('chosen')
+        self.held(picture('blue'))
+        self.assertFalse(w.art_cache.store_auto_if_unfetched('chosen', picture('red')))
+        self.assertIsNone(w.art_cache.status('chosen'))
+        self.release.set()
+        self.settle()
+        self.assertEqual(w.art_cache.cover_snapshot('chosen').data,
+                         artencode.ensure_device_safe(picture('blue').data))
+        self.assertFalse(w.art_cache._manual_reserved('chosen'))
+
+    def test_manual_capture_and_reservation_share_one_lock_against_auto_publisher(self):
+        w = self.window
+        w.art_cache.forget('chosen')
+        captured = Event()
+        attempted = Event()
+        auto_done = Event()
+        accepted = []
+        from threading import Thread
+        def auto():
+            captured.wait(2)
+            attempted.set()
+            accepted.append(w.art_cache.store_auto_if_unfetched('chosen', picture('red')))
+            auto_done.set()
+        publisher = Thread(target=auto)
+        publisher.start()
+        selected = w.art_cache.selection_token
+        def observe(*args, **kwargs):
+            token = selected(*args, **kwargs)
+            captured.set()
+            self.assertTrue(attempted.wait(1))
+            # The auto publisher cannot pass the state lock between capture
+            # and reservation; no timing threshold is used for correctness.
+            self.assertFalse(auto_done.is_set())
+            return token
+        try:
+            with mock.patch.object(w.art_cache, 'selection_token', side_effect=observe):
+                self.held(picture('blue'))
+            publisher.join(2)
+            self.assertFalse(publisher.is_alive())
+            self.assertEqual(accepted, [False])
+            self.release.set()
+            self.settle()
+            self.assertEqual(w.art_cache.cover_snapshot('chosen').data,
+                             artencode.ensure_device_safe(picture('blue').data))
+        finally:
+            captured.set()
+            self.release.set()
+            publisher.join(2)
+
+    def test_failed_manual_request_releases_auto_reservation(self):
+        w = self.window
+        w.art_cache.forget('chosen')
+        self.held(RuntimeError('generated provider failure'), local=False)
+        self.assertFalse(w.art_cache.store_auto_if_unfetched('chosen', picture('red')))
+        self.release.set()
+        self.settle()
+        self.assertFalse(w.art_cache._manual_reserved('chosen'))
+        self.assertTrue(w.art_cache.store_auto_if_unfetched('chosen', picture('green')))
+
+    def test_default_only_manual_choice_survives_handoff_and_neighbor_rebalance(self):
+        w = self.window
+        previous = w.art_cache.for_library(w.lib)
+        w.art_cache = previous
+        paths = []
+        for color in ('red', 'green', 'blue'):
+            path = self.root / f'generic-{color}.png'
+            path.write_bytes(picture(color).data)
+            paths.append(path)
+        previous.import_default_photos(paths)
+        previous.configure_default_tracks(w.lib.tracks_by_id)
+        self.held(picture('blue'))
+        tracks = dict(w.lib.tracks_by_id)
+        for at in range(5):
+            tid = f'added-{at}'
+            tracks[tid] = Track(tid, tid, '', f'file:///synthetic/{tid}.wav')
+        w.lib = replace(w.lib, tracks_by_id=tracks)
+        current = previous.for_library(w.lib)
+        w._art_requests.handoff_cache(previous, current)
+        previous.retire()
+        w.art_cache = current
+        current.configure_default_tracks(tracks)
+        self.assertFalse(current.store_auto_if_unfetched('chosen', picture('red')))
+        self.assertTrue(w._art_requests.manual_pending('chosen'))
+        self.release.set()
+        self.settle()
+        self.assertEqual(current.cover_snapshot('chosen').data,
+                         artencode.ensure_device_safe(picture('blue').data))
+        self.assertFalse(current._manual_reserved('chosen'))
+
+    def test_unrelated_track_add_or_remove_preserves_accepted_manual_choice(self):
+        for remove in (False, True):
+            with self.subTest(remove=remove):
+                self.release.clear()
+                w = self.window
+                original = w.lib
+                previous = w.art_cache.for_library(original)
+                w.art_cache = previous
+                previous.store_ok('chosen', picture('red'))
+                self.held(picture('blue'))
+                tracks = dict(original.tracks_by_id)
+                if remove:
+                    tracks.pop('other', None)
+                else:
+                    tracks['added'] = Track('added', 'New', 'Artist', 'file:///synthetic/added.wav')
+                w.lib = replace(original, tracks_by_id=tracks)
+                current = previous.for_library(w.lib)
+                w._art_requests.handoff_cache(previous, current)
+                previous.retire()
+                w.art_cache = current
+                self.assertTrue(w._art_requests.manual_pending('chosen'))
+                self.release.set()
+                self.settle()
+                self.assertEqual(w.art_cache.cover_snapshot('chosen').data,
+                                 artencode.ensure_device_safe(picture('blue').data))
+
+    def test_handoff_rejects_selected_identity_or_cover_change(self):
+        for changed_cover in (False, True):
+            with self.subTest(changed_cover=changed_cover):
+                self.release.clear()
+                w = self.window
+                previous = w.art_cache.for_library(w.lib)
+                w.art_cache = previous
+                previous.store_ok('chosen', picture('red'))
+                self.held(picture('blue'))
+                tracks = dict(w.lib.tracks_by_id)
+                tracks['added'] = Track('added', 'New', 'Artist', 'file:///synthetic/added.wav')
+                if not changed_cover:
+                    tracks['chosen'] = replace(tracks['chosen'], source_uuid='replacement-uuid')
+                w.lib = replace(w.lib, tracks_by_id=tracks)
+                current = previous.for_library(w.lib)
+                if changed_cover:
+                    current.store_ok('chosen', picture('green'))
+                w._art_requests.handoff_cache(previous, current)
+                previous.retire()
+                w.art_cache = current
+                self.release.set()
+                self.settle()
+                if changed_cover:
+                    self.assertEqual(current.cover_snapshot('chosen').data,
+                                     artencode.ensure_device_safe(picture('green').data))
+                else:
+                    self.assertIsNone(current.canonical_image_path('chosen'))
+
     def test_explicit_remote_picker_choice_uses_the_same_accepted_manual_lane(self):
         w = self.window;entered = Event()
         def fetch(*_args):entered.set();self.release.wait(2);return picture('blue')

@@ -613,12 +613,7 @@ class SettingsPageMixin:
         if track is None:
             self._flash_status('Track is no longer in the library', 5)
             return
-        if self._open_track(track, autoplay=None, capture_autoplay=False, audition=True):
-            self._autoplay_order = []
-            self._autoplay_index = None
-            self._autoplay_random_seen = set()
-            self._autoplay_random_queue = []
-            self._update_player_navigation()
+        self._open_track(track, autoplay=None, capture_autoplay=False, audition=True)
 
     def _add_grave_restore_action(self, menu):
         """Expose only selection-scoped restore; never a bulk shortcut."""

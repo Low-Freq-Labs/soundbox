@@ -40,6 +40,10 @@ The small historical release/install/state records referenced below are retained
 under `~/Library/Logs/Soundbox/retained-release-records-2026-10-28/` with their
 original subpaths; HANDOFF describes current delivery. Those records do not
 recreate the deleted diagnostic images, movies or scratch programs.
+The November23 accepted-delivery cleanup also retired completed DB/state snapshots
+and captures from these private Logs roots. Historical statements below that a
+full payload was retained describe its original checkpoint; only small receipts
+remain now. Required offline inputs and musical originals stay protected.
 
 Initial source baseline: `a25de73`, clean `main`; then-installed personal build 131.
 Final implementation and build 133 installation are recorded at the end.

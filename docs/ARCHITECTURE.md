@@ -3,6 +3,21 @@
 ## Current source structure
 
 Folder [guides](README.md) provide short entry points; dated sections below retain their original evidence.
+`desktop.playback_navigation` captures immutable source/song/visible-occurrence
+cursors. Requested loads advance immediately through pending fades, but autoplay
+and committed navigation change only after the accepted load starts. Source/song
+replacement fences stale cursors; an accepted conversion can rebind only its exact
+old/new path. Artists Load/Info uses the selected visible song. Loaded-song Info
+fallback requires the committed source/song/path, and delayed load completion
+preserves a newer selection or draft.
+`soundbox.artwork_identity` binds per-song covers, misses, blocks, review/undo and
+default assignments to a frozen source and stable song identity. Compatible
+refresh transfers an unchanged selected choice; a source switch retires prior
+publishers, including an A→B→A return. Explicit saved-owner adoption copies only
+proved legacy choices; simply opening a source never adopts old logical IDs.
+`desktop.artwork_requests` reserves a selected manual choice before asynchronous
+preparation so an older automatic fetch cannot overwrite it. Matching Track Info
+dialogs receive a complete decoded replacement; unrelated selections stay intact.
 `desktop.artists_browser` owns prepared artist rows and incremental tree updates, preserving navigation state.
 `desktop.native_publication` recognizes own metadata snapshots that can reuse
 prepared imports/services while fresh native cue/tag/smart state is published.
@@ -1658,7 +1673,7 @@ of provenance or old confidence, and prepares comparisons in the background. Sug
 individual browsing, and foreground selection queries can be cancelled/coalesced
 without assigning stale results to the next row. Main actions are Keep, Replace,
 Next. Keep persists an exact entry/image-SHA plus artist/title stamp in
-`art/review-kept.json`; Next dismisses only this session. Replace itself is
+the active source's scoped `review-kept.json`; Next dismisses only this session. Replace itself is
 individual approval, with no second modal. The title supports mouse selection
 and normal copying, matching the source/evidence labels without a text caret.
 More contains a preview-before-approval artist-profile
@@ -1709,7 +1724,7 @@ infer publisher trust. Keep/Replace persist per-track protection, not a learned
 global ranking model; deliberate cross-song artwork choices do not establish
 song identity.
 `ArtCache.apply_review` checks exact displayed metadata/image SHA under the state
-owner and atomically preserves one original per changed track in `art/review/`.
+owner and atomically preserves one original per changed song in its scoped `review/`.
 Backend recovery survives restart and refuses changed/corrupt state. An accepted replacement
 also stamps its new cover/context as reviewed in the same transaction. Browsing/searching never
 publish images; manual artist overrides remain authoritative.
@@ -1732,7 +1747,7 @@ bytes for recovery. The authorized excluded-source policy uses only strictly
 matched artist-profile images (confidence >= .90, profile URL), captured through
 the ordinary artwork worker ownership. It compares the old snapshot again, so
 intervening manual changes win. Original bytes/index and any previous review
-recovery are atomically preserved under `art/source-recovery/`. Intentional
+recovery are atomically preserved in that source/song's scoped `source-recovery/`. Intentional
 profile defaults carry `fallback=excluded-source` and effective artist identity;
 they do not remain Suggested issues or get cleared by normal re-scans. Missing
 profiles leave excluded images hidden. No source audio/rekordbox write occurs.
@@ -1768,8 +1783,12 @@ for copying or downgrading; older readers reject its sentinel. Rotating history
 and full exports materialize complete standalone JSON. Atomic saves, rotating
 backups, corruption auto-recovery, one-click full `.zip` backup/restore
 (library + history + art cache, including managed default photos). Track-specific
-art stays in `art/index.json`; the independent `art/defaults/` pool holds
-content-addressed baseline JPEG copies plus its assignment seed/map. Successful
+art belongs to `art/scoped/<source-key>/index.json` and its song-keyed files;
+`art/index.json` and legacy images remain separate saved migration inputs.
+`art/ownership.json` records the one explicitly proved legacy adoption, never a
+general permission to adopt another source or a reused logical ID. The independent
+`art/defaults/` pool holds content-addressed baseline JPEG copies plus its seed
+and source/song-scoped assignment map. Successful
 track covers/avatars take precedence. Naturally missing and explicitly blocked
 tracks receive a deterministic-random, exact-balanced pool assignment without
 changing their underlying cache state. Rebalancing preserves valid assignments
@@ -1948,6 +1967,11 @@ an interrupted transaction; committed or rolled-back journals are atomically
 retired before recursive cleanup. Failed rollback preserves recovery material and
 blocks further publication. This is a recoverable multi-path transaction, not a
 single filesystem-atomic swap visible to arbitrary external readers.
+Scoped artwork indexes and their payloads are validated as part of backup/restore.
+Restoring legacy artwork requires its selected backup's saved source/song pins;
+current adoption bindings cannot supply missing historical identity proof. An
+unproved entry refuses the restore before live state changes. Valid saved UUID
+pins and stable SoundBox import identities retain their accepted restoration path.
 The separate historical Graveyard identity archive is not yet included in a full
 backup; the [critical ledger](critical-audit-2026-11.md) retains that known gap.
 Do not infer lossless native-deleted identity recovery from a library/art ZIP alone.
@@ -2025,6 +2049,10 @@ write failure. Verify installed signature/Contents/icon and unchanged live-state
 bytes before an authorized normal relaunch and startup inspection. Retain that one
 previous app only until verified user acceptance, then retire it; do not accumulate
 app rollback bundles. Musical originals and transaction recovery remain protected.
+Sonny's November23 retention instruction also removes completed diagnostic captures,
+copied DB/state snapshots and packaging scratch once the verified update is up and
+running. Keep small result/provenance receipts and necessary unfinished recovery;
+do not retain another full archive as routine proof of an accepted delivery.
 Never use `rm -rf`, replay an older installer, or write/restore
 AppData merely to replace the app; fresh read-only preservation copies are allowed.
 

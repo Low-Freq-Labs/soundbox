@@ -3,6 +3,7 @@
 Dates, results, settings, paths and pending statements apply to their original checkpoints.
 Archived app-control, source-pilot, restore and cleanup approvals grant no present authority.
 They never authorize replay, restoring old state/audio or retiring protected recovery.
+Old retention statements and paths follow the current cleanup policy: completed captures/snapshots may now retain only small receipts; required offline test inputs remain separate.
 Start with [HANDOFF](../HANDOFF.md), [ROADMAP](../ROADMAP.md),
 [PLAYER](../PLAYER.md) or [ARCHITECTURE](../ARCHITECTURE.md).
 

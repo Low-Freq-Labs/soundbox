@@ -1631,6 +1631,8 @@ class PlayerBar(QWidget):
         self._track_id: str | None = None
         self._src_path: str | None = None
         self._analysis_path = ""
+        self._pending_track_load = None
+        self._retry_waiting_duration = False
         self._live_cues: list[dict] | None = None
         self._live_grid = None
         self.quantize_enabled = False
@@ -1993,6 +1995,10 @@ class PlayerBar(QWidget):
         """Seek through the same clickless transport as the deck waveform."""
         if self._dur > 0:
             self._move_clean(max(0, min(self._dur, int(position))))
+        elif self._retry_waiting_duration:
+            # Retain an explicit target while the same source reopens. The
+            # pending gate clamps it against the new authoritative duration.
+            self._move_clean(max(0, int(position)))
 
     def set_jump_mode(self, mode: str, emit: bool = True):
         """Select the grid-aware transport jump and refresh edge availability."""
@@ -2046,15 +2052,19 @@ class PlayerBar(QWidget):
 
     def play_track(self, track_id: str, path, title: str = "", bpm=None,
                    analysis_path: str = "", autoplay: bool | None = True,
-                   cues: list[dict] | None = None, detected_analysis=None):
+                   cues: list[dict] | None = None, detected_analysis=None, *,
+                   on_started=None, on_cancelled=None, force_reload: bool = False):
         """Load a track, optionally starting once its first grid beat is known.
 
         ``autoplay=False`` still waits for prepared analysis and positions the
         paused deck on the first rekordbox beat. Browser loads use ``None`` to
         retain ordinary playback intent, including previous/next navigation.
+        Optional callbacks distinguish accepted loads from canceled fade waits;
+        readiness/audio and later decoder errors do not roll back acceptance.
+        A new occurrence of the same song can explicitly request a fresh load.
         """
         path = str(path)
-        changed = (track_id != self._track_id or path != self._src_path
+        changed = (force_reload or track_id != self._track_id or path != self._src_path
                    or analysis_path != self._analysis_path)
         if autoplay is None:
             # Resolve before the old source's fade clears its playback request.
@@ -2071,14 +2081,27 @@ class PlayerBar(QWidget):
             # Never tear a live decoder/source out from under an audible
             # buffer. Fade to silence, phase-lock the stopped transport, then
             # perform the source change and its normal clickless fade-in.
-            self._pause_clean(lambda: self.play_track(
-                track_id, path, title=title, bpm=bpm,
-                analysis_path=analysis_path, autoplay=autoplay, cues=cues, detected_analysis=detected_analysis))
+            request = dict(track_id=track_id, path=path, on_cancelled=on_cancelled)
+            self._pending_track_load = request
+
+            def start():
+                if self._pending_track_load is not request:
+                    return
+                # The continuation owns this load now. Clear its cancellation
+                # hook before recursive admission advances the transport epoch.
+                self._pending_track_load = None
+                self.play_track(track_id, request['path'], title=title, bpm=bpm,
+                    analysis_path=analysis_path, autoplay=autoplay, cues=cues,
+                    detected_analysis=detected_analysis, on_started=on_started,
+                    on_cancelled=on_cancelled, force_reload=force_reload)
+
+            self._pause_clean(start)
             return
         self.detected_analysis = detected_analysis
         self._live_cues = list(cues) if cues is not None else None
         if changed:
             self._load_started = perf_counter()
+            self._retry_waiting_duration = False
             self._analysis_generation += 1
             generation = self._analysis_generation
             self._track_id = track_id
@@ -2129,6 +2152,11 @@ class PlayerBar(QWidget):
         self.now_playing_changed.emit(title)
         self.wave.set_active(True)  # a track is loaded — scrubbing is now live
         self._update_transport()
+        if on_started is not None:
+            epoch = self._transport_epoch
+            on_started()
+            if epoch != self._transport_epoch:
+                return
         if not changed and autoplay:
             self._transport_play_active = True
             self._sync_deck_button_states()
@@ -2137,6 +2165,19 @@ class PlayerBar(QWidget):
             # Imported/non-rekordbox tracks have no grid to wait for.
             self._pending_start_ms = 0
             self._try_pending_autoplay()
+
+    def rebind_pending_path(self, track_id: str, old_path: str, new_path: str) -> bool:
+        """Retarget only an owned fade wait after a durable source conversion.
+
+        The conversion controller verifies the exact library/source identity;
+        this boundary does not admit a new load or change its transport intent.
+        """
+        pending = self._pending_track_load
+        if (pending is None or pending['track_id'] != track_id
+                or pending['path'] != str(old_path) or not new_path):
+            return False
+        pending['path'] = str(new_path)
+        return True
 
     def set_track_navigation(self, can_previous: bool, can_next: bool):
         """MainWindow tells us whether adjacent tracks exist in the active view."""
@@ -2148,7 +2189,8 @@ class PlayerBar(QWidget):
         self._begin_transport_intent()
         self._ordinary_playback_requested = False
         self._pending_autoplay = False
-        self._pending_start_ms = None
+        # Cancel automatic start, but retain its exact positioning for an
+        # explicit retry while the valid waveform may still be preparing.
         self._gain_completion = None
         self._pause_pending = False
         self._pause_clock.invalidate()
@@ -2177,6 +2219,9 @@ class PlayerBar(QWidget):
     def _begin_transport_intent(self) -> int:
         """Invalidate every completion created by an older user command."""
         self._transport_epoch += 1
+        pending, self._pending_track_load = self._pending_track_load, None
+        if pending is not None and pending['on_cancelled'] is not None:
+            pending['on_cancelled']()
         if self._deck_drag_active or self._deck_drag_target is not None:
             self._deck_drag_active = False
             self._deck_drag_resume = False
@@ -2205,11 +2250,29 @@ class PlayerBar(QWidget):
             # to the complete waveform. Preserve the newest transport/cue
             # request until that same generation's surface is accepted.
             self._pending_should_play = self._transport_play_active
+            if not self._pending_autoplay:
+                self._pending_autoplay = True
+                if self._pending_start_ms is None and self._pending_positioned_ms is not None:
+                    self._pending_start_ms = self._pos
             if self._waveform_error:
                 self._waveform_error = ''
                 self._pending_autoplay = True
                 self._pending_start_ms = self._pos if self._pending_position_explicit else None
                 self._start_waveform(self._src_path, self._analysis_path)
+        if getattr(self.player, 'source_retry_needed', False):
+            # Reopen only the failed decoder. Its new duration must arrive
+            # before a nonzero seek/play; the resident waveform stays intact.
+            if not self._pending_autoplay:
+                self._pending_autoplay = True
+                self._pending_start_ms = self._pos
+                self._pending_position_explicit = True
+            self._pending_should_play = self._transport_play_active
+            self._pending_positioned_ms = None
+            self._retry_waiting_duration = True
+            self._paint_position(self._pos, update_transport=False)
+            self.player.retry_source()
+            return
+        if self._retry_waiting_duration or not self._waveform_ready:
             return
         # Native PAUSED snapshots during seek/refill or wake describe the
         # engine, not a cancellation of the user's ordinary playback request.
@@ -2238,6 +2301,11 @@ class PlayerBar(QWidget):
                 self._gain_completion = finish
             return
         if not self.is_playing():
+            # Native Play can be requested before its first PLAYING poll.
+            # Always cancel that request, even when no audible fade is needed.
+            self._gain_completion = None
+            self.player.pause()
+            self.audio.setVolume(self._deck_volume)
             if after is not None:
                 after()
             return
@@ -2332,8 +2400,7 @@ class PlayerBar(QWidget):
             self._transport_play_active = False
             if self._pending_autoplay:
                 self._pending_should_play = False
-            if self.is_playing() or self._pause_pending:
-                self._pause_clean()
+            self._pause_clean()
             self._sync_deck_button_states()
             return
         if self._pending_autoplay:
@@ -2345,7 +2412,7 @@ class PlayerBar(QWidget):
         if self._pause_pending:
             self._transport_play_active = True
             self._play_clean()  # a quick second press cancels the pending pause
-        elif self.is_playing():
+        elif self._wants_ordinary_playback() or self.is_playing():
             self._transport_play_active = False
             self._pause_clean()
         elif self._src_path:
@@ -2486,6 +2553,7 @@ class PlayerBar(QWidget):
         self._pause_pending = False
         self._pause_clock.invalidate()
         self._transport_play_active = False
+        self._retry_waiting_duration = False
         pending_position = self._pending_autoplay or not self._waveform_ready
         if pending_position:
             self._pending_should_play = False
@@ -2495,8 +2563,7 @@ class PlayerBar(QWidget):
         self._reset_cue_preview()
         self.audio.setVolume(self._deck_volume)
         self.player.stop()
-        if pending_position:
-            self._on_pos(0)
+        self._on_pos(0)
 
     def resynchronize_transport(self):
         """Rejoin controls to the authoritative native state on activation."""
@@ -2510,7 +2577,7 @@ class PlayerBar(QWidget):
         if (not self._cue_preview_active
                 and not self._cue_preview_latched
                 and not self._pause_pending):
-            self._transport_play_active = backend_playing
+            self._transport_play_active = backend_playing or self._wants_ordinary_playback()
         self._update_transport()
 
     # ---- internals ----
@@ -2733,7 +2800,7 @@ class PlayerBar(QWidget):
             self.wave.set_timing(ms, self._dur)
             self._emit_playback_time(ms)
         if not visual_owned and hasattr(self.player, "set_visual_position"):
-            self.player.set_visual_position(ms, False)
+            self.player.set_visual_position(ms, self._retry_waiting_duration)
         if update_transport:
             self._update_transport()
 
@@ -2776,6 +2843,10 @@ class PlayerBar(QWidget):
 
     def _on_backend_pos(self, ms: int):
         """Keep the visual clock phase-locked to the real audio transport."""
+        if self._retry_waiting_duration:
+            # A decoder reopen temporarily reports zero. The user's exact
+            # paused retry/seek/cue target owns the view until header readiness.
+            return
         if not self._transport_running or not self.is_playing():
             self._anchor_transport(ms, False)
             self._paint_position(ms)
@@ -2792,6 +2863,11 @@ class PlayerBar(QWidget):
         self._paint_position(self._transport_position())
 
     def _on_dur(self, ms: int):
+        if ms > 0 and self._retry_waiting_duration:
+            self._retry_waiting_duration = False
+            # Opening the new decoder can reset seeks made before its header.
+            # Reissue only this retry's latest target against the new clock.
+            self._pending_positioned_ms = None
         self._dur = ms
         self.wave.set_timing(self._pos, ms)
         preview = (self.wave._drag_preview_ms if self.wave.is_dragging()
@@ -2806,7 +2882,7 @@ class PlayerBar(QWidget):
                 and not self._deck_drag_active
                 and not self._cue_preview_active
                 and not self._cue_preview_latched):
-            self._transport_play_active = False
+            self._transport_play_active = self._wants_ordinary_playback()
         self._sync_deck_button_states()
         self.playback_active_changed.emit(st == PlaybackState.PLAYING)
         if st == PlaybackState.PLAYING:
@@ -2845,6 +2921,8 @@ class PlayerBar(QWidget):
     def _try_pending_autoplay(self):
         """Set a newly selected track on its first grid beat, then maybe play."""
         if not self._pending_autoplay or self._pending_start_ms is None:
+            return
+        if self._retry_waiting_duration:
             return
         # A nonzero seek is only reliable after Qt has loaded the local media
         # and reported its duration. Grid parsing and media loading race.
@@ -2951,6 +3029,8 @@ class PlayerBar(QWidget):
 
     def shutdown(self):
         """Release workers plus any native audio/display threads."""
+        self._begin_transport_intent()
+        self._gain_completion = None
         self.shutdown_waveforms()
         self.player.close()
 

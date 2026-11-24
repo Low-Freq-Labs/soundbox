@@ -5,7 +5,7 @@ PySide6 presentation and application orchestration; the engine stays Qt-free.
 - Start at `app.py` for composition, library publication and signal wiring.
 - `model.py` / `trees.py`: browser rows and drag/drop; `rekordbox_playlists.py` owns durable membership gestures and occurrence identity.
 - `artists_browser.py`: prepared artist groups and incremental tree presentation.
-- `player.py` / `native_deck.py`: Qt controls and the native playback boundary.
+- `player.py` / `native_deck.py`: Qt controls and native playback; `playback_navigation.py` pins source/song occurrences and accepted load ownership.
 - `tag_creation.py` / `tag_creation_controller.py`: tag forms; `source_intent_admission.py` stages small source queues until durable ACK.
 - Controllers own prep/imports/playlists/devices; `stock_catalog_sync.py` owns catalog Sync and `device_progress.py` maps measured phases.
 - `metadata_controller.py`: durable paired edits, policy/merge generations and sparse refresh; exact native readback precedes acknowledgement.

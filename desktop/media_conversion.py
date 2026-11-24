@@ -268,6 +268,10 @@ class MediaConversionController(QObject):
             if not self.closing and not w._shutting_down and same_source:
                 target=result.get('target',job['path'])
                 ids=set(job['ids']);native={(r['id'],r['uuid']) for r in result.get('native',[])}
+                from .playback_navigation import song_pin,source_scope
+                playback_before={track.track_id:(source_scope(w.lib),song_pin(track))
+                    for track in w.lib.tracks_by_id.values()
+                    if track.track_id in ids and str(track.path)==job['path']}
                 if target!=job['path']:
                     for track in w.lib.tracks_by_id.values():
                         if track.track_id in ids and (track.native_id,track.source_uuid) in native:
@@ -278,6 +282,9 @@ class MediaConversionController(QObject):
                     self.cache[target]=entry
                 self._publish_facts()
                 if target!=job['path']:imports.inject(w.lib,w.imported,repair_missing=False)
+                if target!=job['path']:
+                    for tid,previous in playback_before.items():
+                        w._rebind_playback_path(tid,job['path'],target,previous=previous)
                 pb=w.player_bar
                 current=w.lib.tracks_by_id.get(pb.current_track())
                 bound=(not job['native'] or current and (current.native_id,current.source_uuid) in {(ref['id'],ref['uuid']) for ref in job['native']})

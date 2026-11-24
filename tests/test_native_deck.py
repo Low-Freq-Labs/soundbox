@@ -137,6 +137,45 @@ class WaveformStreamRepair(unittest.TestCase):
 
 
 class TerminalSnapshotOrdering(unittest.TestCase):
+    def backend(self, *, error=-21):
+        class Backend(SimpleNamespace):
+            setSource = NativeDeckBackend.setSource
+            _set_state = NativeDeckBackend._set_state
+            _set_poll_interval = NativeDeckBackend._set_poll_interval
+            retry_source = NativeDeckBackend.retry_source
+            source_retry_needed = NativeDeckBackend.source_retry_needed
+            play = NativeDeckBackend.play
+            pause = NativeDeckBackend.pause
+            stop = NativeDeckBackend.stop
+            setPosition = NativeDeckBackend.setPosition
+            close = NativeDeckBackend.close
+
+        snapshot = _Snapshot()
+        snapshot.sample_rate = 44100
+        snapshot.duration_frames = 44100 * 60
+        snapshot.position_frames = 44100 * 12
+        snapshot.playback_state = 1
+        snapshot.generation = 17
+        snapshot.error_code = error
+        snapshot.error_message = b'Old source decoder fault' if error else b''
+        snapshot.ramp_completed = 1
+        timer = mock.Mock()
+        timer.interval.return_value = 8
+        return Backend(_handle=1, _source_epoch=1, _poll_epoch=0,
+            _snapshot=snapshot, _duration_ms=60000, _position_ms=12000,
+            _last_position_emit=0, _state=PlaybackState.PLAYING,
+            _end_emitted=False, _ramp_token=0, _ramp_completion=None,
+            _loading=True, _last_error=(0, 0), _source_path='/synthetic/A.wav',
+            _source_failed=False, _sample_rate=44100, _poll_timer=timer,
+            _host_widget=None, durationChanged=mock.Mock(), positionChanged=mock.Mock(),
+            playbackStateChanged=mock.Mock(), endOfMedia=mock.Mock(), errorOccurred=mock.Mock(),
+            set_cues=mock.Mock(), set_session_cue=mock.Mock(),
+            _lib=SimpleNamespace(sb_deck_snapshot=mock.Mock(return_value=True),
+                sb_deck_has_ended=mock.Mock(return_value=False),
+                sb_deck_load=mock.Mock(return_value=True), sb_deck_play=mock.Mock(),
+                sb_deck_pause=mock.Mock(), sb_deck_stop=mock.Mock(),
+                sb_deck_seek_frames=mock.Mock(), sb_deck_destroy=mock.Mock()))
+
     def test_newer_end_flag_overrides_playing_snapshot_and_emits_once(self):
         snapshot = _Snapshot()
         snapshot.sample_rate = 44100
@@ -161,6 +200,146 @@ class TerminalSnapshotOrdering(unittest.TestCase):
         backend._set_poll_interval.assert_called_with(125)
         NativeDeckBackend._poll(backend)
         backend.endOfMedia.emit.assert_called_once_with()
+
+    def test_each_reentrant_snapshot_boundary_retires_old_source_tail(self):
+        for boundary in ('duration', 'position', 'end', 'state', 'ramp'):
+            for action in ('new-source', 'same-path', 'close'):
+                with self.subTest(boundary=boundary, action=action):
+                    backend = self.backend()
+                    if boundary == 'duration': backend._duration_ms = 0
+                    if boundary == 'position': backend._position_ms = 0
+                    if boundary == 'end': backend._lib.sb_deck_has_ended.return_value = True
+                    if boundary == 'state': backend._state = PlaybackState.STOPPED
+                    fired = []
+
+                    def replace(*_args):
+                        if fired: return
+                        fired.append(True)
+                        if action == 'close': backend.close()
+                        else:
+                            path = '/synthetic/B.wav' if action == 'new-source' else '/synthetic/A.wav'
+                            backend.setSource(QUrl.fromLocalFile(path))
+
+                    if boundary == 'ramp':
+                        backend._ramp_token = 1
+                        backend._ramp_completion = replace
+                    else:
+                        signal = {'duration': backend.durationChanged, 'position': backend.positionChanged,
+                                  'end': backend.endOfMedia, 'state': backend.playbackStateChanged}[boundary]
+                        signal.emit.side_effect = replace
+                    NativeDeckBackend._poll(backend)
+                    self.assertEqual(fired, [True])
+                    backend.errorOccurred.emit.assert_not_called()
+                    if action == 'close':
+                        self.assertIsNone(backend._handle)
+                        backend._lib.sb_deck_destroy.assert_called_once_with(1)
+                        backend._poll_timer.stop.assert_called_once_with()
+                    else:
+                        self.assertEqual(backend._source_path,
+                            '/synthetic/B.wav' if action == 'new-source' else '/synthetic/A.wav')
+                        self.assertTrue(backend._loading)
+                        self.assertFalse(backend._source_failed)
+                        self.assertEqual((backend._duration_ms, backend._position_ms), (0, 0))
+                        self.assertEqual(backend._state, PlaybackState.STOPPED)
+
+    def test_unchanged_current_source_error_is_delivered_once(self):
+        backend = self.backend()
+        NativeDeckBackend._poll(backend)
+        NativeDeckBackend._poll(backend)
+        backend.errorOccurred.emit.assert_called_once_with(None, 'Old source decoder fault')
+        self.assertTrue(backend._source_failed)
+
+    def test_newer_reentrant_poll_wins_even_without_a_source_change(self):
+        backend = self.backend(error=0)
+        backend._duration_ms = 0
+        entered = []
+
+        def newer(duration):
+            if entered: return
+            entered.append(duration)
+            backend._snapshot.duration_frames = 44100 * 90
+            backend._snapshot.position_frames = 4410
+            backend._snapshot.playback_state = 2
+            NativeDeckBackend._poll(backend)
+
+        backend.durationChanged.emit.side_effect = newer
+        NativeDeckBackend._poll(backend)
+        self.assertEqual((backend._duration_ms, backend._position_ms), (90000, 100))
+        self.assertEqual(backend._state, PlaybackState.PAUSED)
+
+    def test_duration_ready_seek_keeps_target_and_loaded_bookkeeping(self):
+        backend = self.backend(error=0)
+        backend._duration_ms = 0
+        backend._position_ms = 0
+        backend.durationChanged.emit.side_effect = lambda _duration: backend.setPosition(23_456)
+        NativeDeckBackend._poll(backend)
+        self.assertEqual(backend._position_ms, 23_456)
+        self.assertFalse(backend._loading)
+        backend._lib.sb_deck_seek_frames.assert_called_once_with(1, round(23_456 * 44.1))
+        self.assertEqual(backend.positionChanged.emit.call_args_list, [mock.call(23_456)])
+
+    def test_source_reset_cannot_load_an_old_target_after_its_signal_replaces_it(self):
+        for boundary in ('position', 'duration', 'state'):
+            with self.subTest(boundary=boundary):
+                backend = self.backend(error=0)
+                fired = []
+
+                def replace(*_args):
+                    if fired: return
+                    fired.append(True)
+                    backend.setSource(QUrl.fromLocalFile('/synthetic/B.wav'))
+
+                signal = {'position': backend.positionChanged, 'duration': backend.durationChanged,
+                          'state': backend.playbackStateChanged}[boundary]
+                signal.emit.side_effect = replace
+                backend.setSource(QUrl.fromLocalFile('/synthetic/A.wav'))
+                self.assertEqual(backend._source_path, '/synthetic/B.wav')
+                backend._lib.sb_deck_load.assert_called_once_with(1, b'/synthetic/B.wav')
+
+    def test_decode_only_retry_preserves_wave_and_cues_and_invalidates_old_poll(self):
+        backend = self.backend()
+        backend._source_failed = True
+        backend._ramp_token = 1
+        backend._ramp_completion = backend.retry_source
+        NativeDeckBackend._poll(backend)
+        backend._lib.sb_deck_load.assert_called_once_with(1, b'/synthetic/A.wav')
+        backend._lib.sb_deck_play.assert_not_called()
+        backend.set_cues.assert_not_called()
+        backend.set_session_cue.assert_not_called()
+        backend.errorOccurred.emit.assert_not_called()
+        self.assertTrue(backend._loading)
+        self.assertFalse(backend._source_failed)
+        self.assertEqual(backend._duration_ms, 0)
+        backend.durationChanged.emit.assert_called_once_with(0)
+
+    def test_play_retry_cannot_start_a_replaced_or_closed_source(self):
+        for action in ('replace', 'close', 'refuse', 'pause', 'stop', 'seek', 'poll', 'same-source'):
+            with self.subTest(action=action):
+                backend = self.backend(error=0)
+                backend._source_failed = True
+                if action == 'replace':
+                    # A replacement emits duration0 itself; retire this listener
+                    # before source notification to avoid recursive test input.
+                    def replace(_ms):
+                        backend.durationChanged.emit.side_effect = None
+                        backend.setSource(QUrl.fromLocalFile('/synthetic/B.wav'))
+                    backend.durationChanged.emit.side_effect = replace
+                elif action == 'close': backend.durationChanged.emit.side_effect = lambda _ms: backend.close()
+                elif action == 'refuse': backend._lib.sb_deck_load.return_value = False
+                elif action in ('pause', 'stop'):
+                    backend.durationChanged.emit.side_effect = lambda _ms: getattr(backend, action)()
+                elif action == 'seek': backend.durationChanged.emit.side_effect = lambda _ms: backend.setPosition(7_123)
+                elif action == 'poll':
+                    def observe(_ms):
+                        backend.durationChanged.emit.side_effect = None
+                        backend._snapshot.duration_frames = 0
+                        backend._snapshot.position_frames = 0
+                        backend._snapshot.playback_state = 2
+                        NativeDeckBackend._poll(backend)
+                    backend.durationChanged.emit.side_effect = observe
+                backend.play()
+                if action in ('same-source', 'poll'): backend._lib.sb_deck_play.assert_called_once_with(1)
+                else: backend._lib.sb_deck_play.assert_not_called()
 
 
 class NativeDeckContract(unittest.TestCase):
@@ -577,15 +756,23 @@ class NativeDeckContract(unittest.TestCase):
             audition.set_track("review")
             audition.play.click()
             self._wait_until(lambda: pb.is_playing() and pb._dur > 0)
-            # A refill/activation PAUSED report can clear the button intent
-            # before the real engine reports PLAYING again.
+            # A refill/activation PAUSED report cannot cancel the user's Play
+            # request before the real engine reports PLAYING again.
             pb._on_state(PlaybackState.PAUSED)
+            self.assertTrue(pb._wants_ordinary_playback())
+            self.assertTrue(pb.review_transport_state()['requested'])
+            audition._sync()
+            self.assertEqual(audition.play.text(), "❚❚")
             pb._on_state(PlaybackState.PLAYING)
-            self.assertFalse(pb._transport_play_active)
+            self.assertTrue(pb._transport_play_active)
             audition._sync()
             self.assertEqual(audition.play.text(), "❚❚")
             audition.play.click()
             self._wait_until(lambda: not pb.is_playing() and not pb._pause_pending)
+            self.assertFalse(pb._wants_ordinary_playback())
+            self.assertFalse(pb.review_transport_state()['requested'])
+            audition._sync()
+            self.assertEqual(audition.play.text(), "▶")
             position = pb.player.position()
             QTest.qWait(80)
             self.assertLess(abs(pb.player.position() - position), 10)
@@ -741,12 +928,15 @@ class NativeDeckContract(unittest.TestCase):
             # Model a transient PAUSED/activation report while ordinary audio
             # continues, then a suspended UI that misses the terminal instant.
             pb._on_state(PlaybackState.PAUSED)
-            self.assertFalse(pb._transport_play_active)
+            self.assertTrue(pb._transport_play_active)
+            self.assertTrue(pb._wants_ordinary_playback())
             pb.player._poll_timer.stop()
             time.sleep(0.4)
             pb.resynchronize_transport()
             self._wait_until(lambda: ended)
             self.assertEqual(ended, ["native-end"])
+            self.assertFalse(pb._wants_ordinary_playback())
+            self.assertFalse(pb._transport_play_active)
             pb.player.synchronize()
             QTest.qWait(150)
             self.assertEqual(ended, ["native-end"])

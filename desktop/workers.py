@@ -668,6 +668,7 @@ class ArtFillWorker(QThread):
     progress = Signal(int, int)  # done, total
     failed = Signal(str)
     profile_changed = Signal(str)
+    cover_changed = Signal(str)
 
     DELAY = 1.6  # seconds between fetches — polite, never a burst
 
@@ -799,6 +800,7 @@ class ArtFillWorker(QThread):
             if stored and res:
                 ok += 1
                 self.changed_track_ids.add(t.track_id)
+                self.cover_changed.emit(t.track_id)
             self.progress.emit(i, total)
             self._cancelled.wait(self.DELAY)
         self.cache.rebalance_default_photos()

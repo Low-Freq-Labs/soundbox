@@ -4299,15 +4299,42 @@ class Graveyard(unittest.TestCase):
         _win._apply_settings_to_lib()
         _win._refresh_graveyard()
         item = _win._grave.topLevelItem(0)
+        previous = (getattr(_win, '_autoplay_context', None), _win._autoplay_order, _win._autoplay_index,
+                    _win._autoplay_random_seen, _win._autoplay_random_queue,
+                    getattr(_win, '_cue_audition_track', None),
+                    getattr(_win, '_playback_navigation', None))
+        _win.__dict__.pop('_playback_navigation', None)
         _win._autoplay_order = ['2', '3']; _win._autoplay_index = 0
-        with mock.patch.object(_win, '_open_track', return_value=True) as load:
-            _win._grave.itemDoubleClicked.emit(item, 0)
-        load.assert_called_once_with(_win.lib.tracks_by_id['1'], autoplay=None, capture_autoplay=False, audition=True)
-        self.assertEqual(_win._autoplay_order, [])
-        self.assertIsNone(_win._autoplay_index)
-        _app.processEvents()
-        self.assertIn("1", _win.hidden)
-        self.assertIn('1', _win.lib.hidden_ids)
+        try:
+            # A load admission is not a completed waveform/audio handoff. Keep
+            # the current queue until the real acceptance callback commits it.
+            with mock.patch.object(_win, '_open_track', wraps=_win._open_track) as load, \
+                    mock.patch.object(Path, 'is_file', return_value=True), \
+                    mock.patch.object(_win, '_analysis_result', return_value=None), \
+                    mock.patch.object(_win.player_bar, 'play_track') as prepare, \
+                    mock.patch.object(_win, '_highlight_now_playing'):
+                _win._grave.itemDoubleClicked.emit(item, 0)
+                load.assert_called_once_with(_win.lib.tracks_by_id['1'], autoplay=None,
+                    capture_autoplay=False, audition=True)
+                prepare.assert_called_once()
+                self.assertEqual(_win._autoplay_order, ['2', '3'])
+                self.assertEqual(_win._autoplay_index, 0)
+                prepare.call_args.kwargs['on_started']()
+                self.assertEqual(_win._autoplay_order, [])
+                self.assertIsNone(_win._autoplay_index)
+                self.assertIsNone(_win._autoplay_context)
+                self.assertEqual(_win._cue_audition_track, '1')
+            _app.processEvents()
+            self.assertIn("1", _win.hidden)
+            self.assertIn('1', _win.lib.hidden_ids)
+        finally:
+            (_win._autoplay_context, _win._autoplay_order, _win._autoplay_index,
+             _win._autoplay_random_seen, _win._autoplay_random_queue,
+             _win._cue_audition_track, navigation) = previous
+            if navigation is None:
+                _win.__dict__.pop('_playback_navigation', None)
+            else:
+                _win._playback_navigation = navigation
 
     def test_date_stamped_on_delete(self):
         import time as _t
@@ -6808,7 +6835,7 @@ class PlayerHardening(unittest.TestCase):
         self.assertEqual(_win._player_order(), ["2", "1", "3"])
         played = []
         real = _win._load_track
-        _win._load_track = lambda t: played.append(t.track_id)
+        _win._load_track = lambda t, **_options: played.append(t.track_id)
         try:
             _win.player_bar._track_id = "1"
             _win._play_relative(-1)
@@ -7444,8 +7471,22 @@ class AutoplaySemantics(unittest.TestCase):
             list(_win._autoplay_random_queue),
         )
         self._real_save = _win._save_state
+        self._context = getattr(_win, '_autoplay_context', None)
+        self._navigation = getattr(_win, '_playback_navigation', None)
+        self._audition = getattr(_win, '_cue_audition_track', None)
+        _win.__dict__.pop('_playback_navigation', None)
+        _win._autoplay_context = None
+        _win._cue_audition_track = None
         _win._save_state = lambda: None
         _win._set_autoplay_mode("", save=False)
+
+    def origin(self, identities, index):
+        from desktop.playback_navigation import capture
+        order = capture(_win.lib, ('transport-fixture',), [{'id': key} for key in identities],
+                        _win._native_row_identity)
+        cursor = order.cursor(index)
+        _win._navigation().committed = cursor
+        _win._install_autoplay_context(cursor)
 
     def tearDown(self):
         _win._save_state = self._real_save
@@ -7455,6 +7496,12 @@ class AutoplaySemantics(unittest.TestCase):
         _win._autoplay_index = index
         _win._autoplay_random_seen = seen
         _win._autoplay_random_queue = queue
+        _win._autoplay_context = self._context
+        _win._cue_audition_track = self._audition
+        if self._navigation is None:
+            _win.__dict__.pop('_playback_navigation', None)
+        else:
+            _win._playback_navigation = self._navigation
 
     def test_three_header_modes_are_mutually_exclusive_and_toggle_off(self):
         for mode, button in _win._autoplay_buttons.items():
@@ -7519,17 +7566,20 @@ class AutoplaySemantics(unittest.TestCase):
             _win._autoplay_playable = real_playable
 
     def test_terminal_advance_keeps_context_and_rejects_a_stale_end(self):
-        _win._autoplay_order = ["3", "1"]
-        _win._autoplay_index = 0
+        self.origin(["3", "1"], 0)
         _win._set_autoplay_mode("down", save=False)
         real_playable = _win._autoplay_playable
         real_open = _win._open_track
         current = _win.player_bar._track_id
         opened = []
         _win._autoplay_playable = lambda _index: True
-        _win._open_track = lambda track, autoplay, capture_autoplay: (
+        requested = []
+        def request(track, autoplay, capture_autoplay, **options):
+            requested.append(options)
+            return (
             opened.append(
                 (track.track_id, autoplay, capture_autoplay)) or True)
+        _win._open_track = request
         _win.player_bar._track_id = "3"
         try:
             _win._advance_autoplay("old-track")
@@ -7541,7 +7591,11 @@ class AutoplaySemantics(unittest.TestCase):
             _win._advance_autoplay("3")
             self.assertEqual(opened, [("1", True, False)])
             self.assertEqual(_win._autoplay_order, ["3", "1"])
-            self.assertEqual(_win._autoplay_index, 1)
+            # A request is not a committed source handoff. The separate
+            # lifecycle regressions cover accepting/cancelling this cursor.
+            self.assertEqual(_win._autoplay_index, 0)
+            self.assertEqual(requested[0]['autoplay_index'], 1)
+            self.assertEqual(requested[0]['occurrence'].index, 1)
         finally:
             _win._review_audition_active = False
             _win._autoplay_playable = real_playable
@@ -7556,6 +7610,7 @@ class AutoplaySemantics(unittest.TestCase):
         fake.position.return_value = 1000
         fake.playbackRate.return_value = 1.0
         fake.playbackState.return_value = PlaybackState.PAUSED
+        fake.source_retry_needed = False
         try:
             with (mock.patch.object(pb, "player", fake),
                   mock.patch.object(pb, "_animate_gain"),
@@ -7566,25 +7621,26 @@ class AutoplaySemantics(unittest.TestCase):
                 pb.track_ended.connect(_win._advance_autoplay)
                 pb._src_path = "/tmp/loaded.wav"
                 pb._playback_available = True
+                pb._waveform_ready = True
                 pb._dur = 2000
                 for mode in ("up", "random", "down"):
                     for resume in (False, True):
                         with self.subTest(mode=mode, resume=resume):
                             opened.reset_mock()
-                            _win._autoplay_order = ["1", "3", "2"]
-                            _win._autoplay_index = 1
+                            pb.pause()
+                            self.origin(["1", "3", "2"], 1)
                             _win._set_autoplay_mode(mode, save=False)
                             pb._track_id = "3"
                             pb.toggle()
                             if resume:
-                                pb._pause_clean()
+                                pb.pause()
                                 self.assertFalse(pb._ordinary_playback_requested)
                                 pb.toggle()
                             # A refill/seek can publish PAUSED before PLAYING;
                             # activation may also land between those snapshots.
                             pb._on_state(PlaybackState.PAUSED)
                             pb.resynchronize_transport()
-                            self.assertFalse(pb._transport_play_active)
+                            self.assertTrue(pb._transport_play_active)
                             pb._on_state(PlaybackState.PLAYING)
                             # The terminal flag can land a poll after PAUSED.
                             pb._on_state(PlaybackState.PAUSED)
@@ -7592,9 +7648,14 @@ class AutoplaySemantics(unittest.TestCase):
                             pb._on_end_of_media()
                             _app.processEvents()
                             opened.assert_called_once()
-                            self.assertEqual(opened.call_args.kwargs,
-                                             {"autoplay": True,
-                                              "capture_autoplay": False})
+                            request = opened.call_args.kwargs
+                            self.assertEqual(set(request), {'autoplay', 'capture_autoplay',
+                                                           'occurrence', 'autoplay_index'})
+                            self.assertTrue(request['autoplay'])
+                            self.assertFalse(request['capture_autoplay'])
+                            self.assertEqual(request['occurrence'].index, request['autoplay_index'])
+                            self.assertTrue(request['occurrence'].order.valid(_win.lib, request['autoplay_index']))
+                            self.assertEqual(request['occurrence'].entry.song[0], opened.call_args.args[0].track_id)
         finally:
             pb.shutdown()
 
@@ -7617,8 +7678,7 @@ class AutoplaySemantics(unittest.TestCase):
                 pb._src_path = "/tmp/loaded.wav"
                 pb._playback_available = True
                 pb._track_id = "3"
-                _win._autoplay_order = ["1", "3", "2"]
-                _win._autoplay_index = 1
+                self.origin(["1", "3", "2"], 1)
                 _win._set_autoplay_mode("random", save=False)
                 pb._cue_press()
                 self.assertFalse(pb._ordinary_playback_requested)
@@ -7744,7 +7804,7 @@ class DoubleClickSemantics(unittest.TestCase):
         self._loaded = []
         self._played = []
         self._orig_load, self._orig_play = _win._load_track, _win._play_track
-        _win._load_track = lambda t: self._loaded.append(t.track_id)
+        _win._load_track = lambda t, **_options: self._loaded.append(t.track_id)
         _win._play_track = lambda t: self._played.append(t.track_id)
         _win.sb_tree.setCurrentItem(_win.sb_tree.topLevelItem(0))  # Collection
         _app.processEvents()

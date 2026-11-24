@@ -13,6 +13,10 @@ and48kHz MP3 publication remain gated. The separate WAV v1 scope is unchanged.
 Current runtime provenance stays in [HANDOFF](HANDOFF.md).
 Historical closed-app work instructions below grant no current permission to
 control the app, repeat a pilot or add generated songs.
+The November23 accepted-delivery cleanup retired completed diagnostic DB/state,
+generated-media and capture payloads from the Logs locations below. Their retained-
+copy descriptions are historical, not a current replay inventory. Small receipts,
+required offline inputs and recovery for unfinished operations remain separate.
 
 ## Implemented preparation
 
@@ -54,9 +58,9 @@ source publisher, authority provisioner, audio retagging or compatibility conver
 
 ## Frozen evidence
 
-The existing generated-format captures under the private
-`~/Library/Logs/Soundbox/shared-native-library-2026-10-30/` root include native CBR
-and Xing VBR MP3s. The new compact reports are under
+The generated-format captures used from the private
+`~/Library/Logs/Soundbox/shared-native-library-2026-10-30/` root included native CBR
+and Xing VBR MP3s. Compact reports are under
 `~/Library/Logs/Soundbox/mp3-analysis-2026-11-02/`.
 
 Both references contain 1,226 audio frames / 1,412,352 untrimmed samples at

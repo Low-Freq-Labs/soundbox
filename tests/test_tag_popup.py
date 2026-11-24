@@ -12,6 +12,7 @@ from PySide6.QtGui import QContextMenuEvent
 from PySide6.QtWidgets import QApplication
 
 from desktop.app import MainWindow
+from desktop.playback_navigation import song_pin, source_scope
 from soundbox.library import Library, LibraryTag, Track
 from soundbox.providers import Providers
 
@@ -87,7 +88,15 @@ class TagPopupBrowsing(unittest.TestCase):
         self.assertEqual(observed, [True])
         self.assertEqual(self.assigned, [('tag', True)])
         self.assertFalse(self.button.popup.isVisible())
-        self.loaded.assert_called_once_with(self.win.lib.tracks_by_id['2'])
+        self.loaded.assert_called_once()
+        args, keywords = self.loaded.call_args
+        self.assertEqual(args, (self.win.lib.tracks_by_id['2'],))
+        self.assertEqual(set(keywords), {'occurrence'})
+        cursor = keywords['occurrence']
+        self.assertEqual(cursor.order.source, source_scope(self.win.lib))
+        self.assertEqual(cursor.index, 2)
+        self.assertEqual(cursor.entry.token, ('track', '2', 0))
+        self.assertEqual(cursor.entry.song, song_pin(self.win.lib.tracks_by_id['2']))
 
     def test_button_toggle_and_escape_dismiss_without_an_extra_assignment(self):
         self.open_and_assign()

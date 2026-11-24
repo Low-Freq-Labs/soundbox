@@ -403,10 +403,18 @@ class SharedImportController(QObject):
                         if record:pb._analysis_parts.update(_detected_sha256=record['sha256'],_detected_epoch=record['epoch'])
                         pb.refresh_audio_detail(receipt['path'])
             if 'media_conversion' in value and not self.closing and not w._shutting_down:
+                from .playback_navigation import song_pin,source_scope
+                intent=value['media_intent'];receipt=value['media_conversion']
+                target=receipt.get('target',receipt['path'])
+                playback_before={track.track_id:(source_scope(w.lib),song_pin(track))
+                    for track in w.lib.tracks_by_id.values()
+                    if track.track_id in intent['ids'] and str(track.path)==receipt['path']}
                 imports.inject(w.lib,w.imported,repair_missing=False)
-                pb=getattr(w,'player_bar',None);intent=value['media_intent'];receipt=value['media_conversion']
+                if target!=receipt['path']:
+                    for tid,previous in playback_before.items():
+                        w._rebind_playback_path(tid,receipt['path'],target,previous=previous)
+                pb=getattr(w,'player_bar',None)
                 if pb and pb.current_track() in intent['ids']:
-                    target=receipt.get('target',receipt['path'])
                     if target!=receipt['path']:pb._src_path=target
                     record=w.settings.get('analysis_results',{}).get(analysis.result_key(target))
                     if record:pb.detected_analysis=record;pb._analysis_parts.update(_detected_sha256=record['sha256'],_detected_epoch=record['epoch'])

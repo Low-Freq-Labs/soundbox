@@ -1,5 +1,38 @@
 # SoundBox gotchas & niche facts
 
+Completed diagnostic recordings, screenshots and copied DB/state payloads follow
+the November23 [retention contract](runtime-contracts.md#diagnostic-retention--november23-cleanup-supersedes-older-archive-retention):
+remove them after verified, accepted delivery. Older evidence descriptions below
+do not require retaining those payloads. Keep small receipts, required offline
+fixtures and recovery needed by unfinished operations.
+
+## Source-bound artwork ownership
+
+- `artwork.py` owns canonical publication/default photos; `artwork_identity.py`
+  supplies frozen source/song views, saved-owner adoption and backup validation.
+  Per-song decisions/images/review/recovery use scoped identity keys. Global
+  default-photo and exclusion policy remain separate. Source or numeric ID alone
+  cannot identify a song; canonical stable local import IDs survive registration.
+- Legacy artwork belongs only to an independently proved saved owner. Explicit
+  adoption copies under the shared StateArea lock and retains root originals,
+  metadata and unknown entries. Opening a new source never adopts them. Full
+  ownership bindings include default-only songs and exact archived identities.
+- Cache read/handoff/retirement share the state lock. Unchanged source/song
+  choices survive a neighboring row change; retired publishers cannot write to
+  a replacement view. Existing manual-save admission still precedes source switch.
+  Source-session ownership survives compatible view forks, but never source ABA.
+  Pending manual choices reserve publication before normalization; background
+  results and default rebalance cannot displace the user's newer selection.
+- Automatic accepted covers notify only matching current consumers through the
+  prepared image decoder. Existing complete images stay until replacements are
+  ready; late source/ABA results are discarded. Future automatic fetches do not
+  delay Info opening, and a delayed image is no substitute for complete first paint.
+- Full backups include scoped indexes, ownership and global defaults. Restoring
+  an older per-ID art snapshot into scoped state requires its saved source/pins,
+  supplemented only by matching original ownership bindings; unproved owners
+  fail before publication. The selected source's old decisions, including absence,
+  replace its current ones while other source namespaces remain intact.
+
 ## Wider responsiveness review — November21
 
 - Review duplicate detection keeps its exact RGB/fit/threshold rules. Prepare
@@ -550,6 +583,10 @@ test, after unchanged source-identity and native/manual provenance guards.
   `ditto`, and follow current verification/relaunch authorization while comparing
   curated state. Never use `rm -rf /Applications/Soundbox.app`; never
   replace or clear SoundBox AppData as part of an app install.
+  After the verified update is up and running, Sonny's November23 standing
+  instruction requires removing the temporary prior app, completed diagnostics,
+  captures and copied installation/migration state. Keep only small receipts;
+  do not turn temporary installation protection into a permanent archive.
 
 ## Historical offline native playlist references
 
@@ -619,7 +656,8 @@ test, after unchanged source-identity and native/manual provenance guards.
 - **Run Cocoa cadence checks without competing preview windows.** A capture
   harness with an always-on-top window can fully cover the native test host;
   macOS then stops its drawable cadence. Finish visual captures before the full
-  native gate and preserve failed exploratory evidence; do not lower thresholds.
+  native gate and retain useful failure receipts; do not lower thresholds. Retire
+  completed capture payloads after accepted delivery.
 - **Python worker tests need an event loop that yields the GIL.** Repeated
   QTest.qWait calls can starve first NumPy/SciPy imports in a QThread even
   while native audio plays. Use QEventLoop with a bounded timer and the owner's
@@ -1808,6 +1846,9 @@ their accepted selected export/recovery contract is below and in the CDJ guide.
   verified user acceptance; automated checks alone do not establish acceptance.
   Do not accumulate app rollback bundles. Musical/conversion originals, native
   recovery and required fixtures remain protected.
+  The November23 retention rule also retires completed diagnostic/capture and
+  installation-snapshot payloads after accepted delivery; live state and recovery
+  for unfinished operations are separate from those disposable archives.
 - **Status presentation has one owner at a time.** Per-file acquisition/copy/
   verification notifications update hover details only; they never replace the
   operation label, track count, pulse or overall percentage. Reserve count width

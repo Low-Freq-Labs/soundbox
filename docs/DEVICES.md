@@ -68,6 +68,12 @@ dated scope; current installation and acceptance are in `HANDOFF.md`.
 Read this with `GOTCHAS.md` and the write contract at
 the top of `soundbox/sync.py` before changing device detection or export.
 
+Completed development captures under the private Logs roots were retired under
+Sonny's November23 retention instruction; those historical locations now retain
+only small receipts. Required offline fixtures remain protected. Dated recovery
+counts and device-state inventories below are observations from their original
+campaigns, never the current retention inventory or permission to replay them.
+
 Current source shares descriptor-pinned device publication: exclusive temporary
 files remain open through verification, flush/fsync and atomic replacement;
 cleanup removes only the operation's own stage. In-place artwork ranges reject
@@ -462,7 +468,7 @@ browser or a transaction. A stale or tampered manifest row beneath `/PIONEER`
 is discarded in memory without inspecting the payload. FAT-style case variants,
 lexical aliases, and symlink redirects into the tree fail closed. Consequently,
 rekordbox changes below `/PIONEER` cannot independently surface **Sync needed**.
-The dedicated CDJ pilot above has its own scoped contract. The legacy filesystem
+The dedicated CDJ exporter above has its own scoped contract. The legacy filesystem
 erase backend still requires explicit whole-volume confirmation; the native USB
 menu exposes Reformat USB instead. Stock and dual iPods expose neither operation.
 

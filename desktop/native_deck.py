@@ -620,6 +620,9 @@ class NativeDeckBackend(QObject):
         self._duration_ms = 0
         self._loading = False
         self._source_path = ""
+        self._source_epoch = 0
+        self._command_epoch = 0
+        self._poll_epoch = 0
         self._source_failed = False
         self._sample_rate = 44100.0
         self._last_error: tuple[int, int] = (0, 0)
@@ -637,6 +640,8 @@ class NativeDeckBackend(QObject):
         pass
 
     def setSource(self, source: QUrl):
+        self._source_epoch = getattr(self, '_source_epoch', 0) + 1
+        epoch = self._source_epoch
         path = source.toLocalFile()
         self._source_path = path
         self._source_failed = False
@@ -648,8 +653,14 @@ class NativeDeckBackend(QObject):
         self._position_ms = 0
         self._duration_ms = 0
         self.positionChanged.emit(0)
+        if self._source_epoch != epoch or not self._handle:
+            return
         self.durationChanged.emit(0)
+        if self._source_epoch != epoch or not self._handle:
+            return
         self._set_state(PlaybackState.STOPPED)
+        if self._source_epoch != epoch or not self._handle:
+            return
         # Header probing and all source reads belong to the native decode
         # thread, including when a cloud-backed source needs hydration.
         if not path or not self._lib.sb_deck_load(
@@ -663,18 +674,49 @@ class NativeDeckBackend(QObject):
             self._handle, self._analysis_generation))
 
     def play(self):
+        if not self._handle:
+            return
+        self._command_epoch = getattr(self, '_command_epoch', 0) + 1
+        command_epoch = self._command_epoch
+        self._poll_epoch = getattr(self, '_poll_epoch', 0) + 1
         self._set_poll_interval(8)
-        if self._source_failed and self._source_path:
-            # A failed cloud open is retryable after the provider recovers.
-            # Reload audio only: canonical waveform/cues remain resident.
-            self._source_failed = False
-            self._loading = True
-            self._end_emitted = False
-            self._lib.sb_deck_load(
-                self._handle, self._source_path.encode("utf-8"))
+        epoch = getattr(self, '_source_epoch', 0)
+        if self.retry_source():
+            # Retry observers may replace/close the source synchronously.
+            if (getattr(self, '_source_epoch', 0) != epoch + 1
+                    or self._command_epoch != command_epoch
+                    or not self._handle or self._source_failed):
+                return
         self._lib.sb_deck_play(self._handle)
 
+    @property
+    def source_retry_needed(self):
+        return bool(self._source_failed and self._source_path)
+
+    def retry_source(self):
+        """Prepare a failed decoder again without starting audio or clearing art/cues."""
+        if not self.source_retry_needed or not self._handle:
+            return False
+        self._source_epoch += 1
+        self._poll_epoch = getattr(self, '_poll_epoch', 0) + 1
+        self._source_failed = False
+        self._loading = True
+        self._end_emitted = False
+        self._duration_ms = 0
+        self._set_poll_interval(8)
+        if not self._lib.sb_deck_load(self._handle, self._source_path.encode('utf-8')):
+            self._loading = False
+            self._source_failed = True
+            self.errorOccurred.emit(None, 'Native deck could not load the track')
+        else:
+            self.durationChanged.emit(0)
+        return True
+
     def pause(self):
+        if not self._handle:
+            return
+        self._command_epoch = getattr(self, '_command_epoch', 0) + 1
+        self._poll_epoch = getattr(self, '_poll_epoch', 0) + 1
         self._lib.sb_deck_pause(self._handle)
         # PlayerBar fade completions immediately continue into source changes.
         # Publish pause synchronously so that continuation cannot observe the
@@ -684,9 +726,17 @@ class NativeDeckBackend(QObject):
             self._set_state(PlaybackState.PAUSED)
 
     def stop(self):
+        if not self._handle:
+            return
+        self._command_epoch = getattr(self, '_command_epoch', 0) + 1
+        self._poll_epoch = getattr(self, '_poll_epoch', 0) + 1
         self._lib.sb_deck_stop(self._handle)
 
     def setPosition(self, ms: int | float):
+        if not self._handle:
+            return
+        self._command_epoch = getattr(self, '_command_epoch', 0) + 1
+        self._poll_epoch = getattr(self, '_poll_epoch', 0) + 1
         precise_ms = max(0.0, float(ms))
         frame = round(precise_ms * self._sample_rate / 1000)
         self._lib.sb_deck_seek_frames(self._handle, frame)
@@ -1330,8 +1380,23 @@ class NativeDeckBackend(QObject):
         self._set_audio_detail(detail, generation)
 
     def _poll(self, force_emit: bool = False):
-        if not self._handle or not self._lib.sb_deck_snapshot(
-                self._handle, ctypes.byref(self._snapshot)):
+        if not self._handle:
+            return
+        handle = self._handle
+        source_epoch = getattr(self, '_source_epoch', 0)
+        self._poll_epoch = getattr(self, '_poll_epoch', 0) + 1
+        poll_epoch = self._poll_epoch
+
+        def current():
+            # Signals and completed fades can replace/reload the source, close
+            # this backend or synchronously consume a newer snapshot. A saved
+            # path alone cannot distinguish a retry of the same file.
+            return (self._handle == handle
+                    and getattr(self, '_source_epoch', 0) == source_epoch
+                    and self._poll_epoch == poll_epoch)
+
+        if (not self._lib.sb_deck_snapshot(handle, ctypes.byref(self._snapshot))
+                or not current()):
             return
         snap = self._snapshot
         self._sample_rate = max(1.0, float(snap.sample_rate))
@@ -1344,38 +1409,50 @@ class NativeDeckBackend(QObject):
         }
         state = states.get(int(snap.playback_state), PlaybackState.STOPPED)
         ended = bool(self._lib.sb_deck_has_ended(self._handle))
+        if not current():
+            return
         # CoreAudio can finish between the snapshot and the separate ended
         # read. The newer terminal flag wins over a stale PLAYING snapshot;
         # otherwise the next source waits for a fade on an already stopped
         # engine. PlayerBar defers that source swap until this poll completes.
         if ended:
             state = PlaybackState.PAUSED
+        if duration > 0:
+            self._loading = False
         if duration != self._duration_ms:
             self._duration_ms = duration
             self.durationChanged.emit(duration)
-        if duration > 0:
-            self._loading = False
+            if not current():
+                return
         if position != self._position_ms or force_emit:
             self._position_ms = position
             now = time.monotonic()
             if force_emit or now - self._last_position_emit >= 0.05:
                 self._last_position_emit = now
                 self.positionChanged.emit(position)
+                if not current():
+                    return
         # Publish the terminal edge while PlayerBar still retains ordinary
         # playback intent. Its slot defers playlist advancement by one event
         # turn, allowing the PAUSED snapshot below to land before source swap.
         if ended and not self._end_emitted:
             self._end_emitted = True
             self.endOfMedia.emit()
+            if not current():
+                return
         elif not ended:
             self._end_emitted = False
         if state != self._state:
             self._set_state(state)
+            if not current():
+                return
         if self._ramp_token and snap.ramp_completed >= self._ramp_token:
             self._ramp_token = 0
             completion, self._ramp_completion = self._ramp_completion, None
             if completion is not None:
                 completion()
+                if not current():
+                    return
         active = (
             state == PlaybackState.PLAYING
             or bool(self._ramp_token)
@@ -1393,6 +1470,7 @@ class NativeDeckBackend(QObject):
             self.errorOccurred.emit(None, message or "Native deck error")
 
     def close(self):
+        self._source_epoch = getattr(self, '_source_epoch', 0) + 1
         self._poll_timer.stop()
         host = getattr(self, "_host_widget", None)
         if host is not None:

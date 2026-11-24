@@ -22,7 +22,7 @@ Native macOS library/prep/player app bridging rekordbox to USB, stock iPod and R
 - Playback/export preserves source audio; only separately accepted conversion and user-confirmed removal may change originals.
 - Generic USBs export selected playlists explicitly; no automatic sync status or idle catalog comparisons.
 - Preserve curated AppData, current user edits, original conversions, recovery, immutable fixtures and pending-acceptance rollbacks.
-- Keep diagnostic captures bounded: compact receipts by default; retain only needed current full proof/recovery payloads and retire completed duplicates.
+- Keep one temporary previous app only during installation. Once the updated app is verified and Sonny is up and running, remove that rollback plus completed diagnostics, captures, copied DBs/state and packaging scratch as part of finishing the update. Keep only small result receipts; do not accumulate full archives. This standing cleanup authorization supersedes older diagnostic/state-snapshot retention. Preserve live curation, original audio/conversions, required offline fixtures and recovery for unfinished operations; it does not require disabling atomic saves.
 - Canonical `library.json` and referenced `.state-records/` are inseparable; materialize portable snapshots through the state repository.
 - No automated input/termination of real apps, live-source tests, device erase/replay, restoration or permanent deletion without current explicit scope.
 - Work autonomously on reversible local changes. Inspect and preserve the dirty worktree.

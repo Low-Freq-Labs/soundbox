@@ -10,6 +10,10 @@ Device Library Plus together. Sonny reports successful player playback, artwork
 and waveforms from his export. Exact firmware, the wider performance/control
 matrix and newer OneLibrary hardware remain separate acceptance. Installed
 provenance and validation are recorded in [HANDOFF](HANDOFF.md).
+Completed development DB/state copies and captures in private Logs locations were
+retired after verified delivery under Sonny's November23 instruction. Historical
+evidence paths below may now hold only small receipts; required offline fixture
+roots retain their separate protection and are not disposable diagnostic archives.
 
 ## Dedicated CDJ write contract
 
@@ -279,7 +283,8 @@ and the native classic→Plus comparison he offered. He confirms CDJ-3000 and
 rekordbox 6; the fresh capture records installed 6.8.7.0303, while exact CDJ
 firmware remains to record. New-format hardware
 acceptance cannot be supplied by his 3000s and stays a separate pending gate.
-That research phase preceded the dedicated pilot contract above; ordinary exporters remain excluded.
+That research phase preceded the production CDJ contract above; ordinary stock,
+dual and Rockbox/filesystem exporters remain excluded from its PIONEER scope.
 
 The initial four native states are preserved in the private reference root: empty and
 playlist exports on exFAT, a repeated five-track **smol test** export after a

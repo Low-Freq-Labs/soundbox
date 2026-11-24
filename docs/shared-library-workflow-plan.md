@@ -14,6 +14,12 @@ their original boundaries, not current production availability.
 Later exact-library v5 Title/Artist saves and preserved backfill were independently
 accepted; scheduling pause does not revoke that authority. Other native Track Info
 fields, artwork, broader analysis/replacement and gain remain separate work.
+SoundBox's local artwork choices now bind to the exact source and song identity;
+opening another source never adopts unowned legacy art. Compatible refreshes
+retain accepted manual choices, while source changes retire the old publishers.
+Restoring old artwork requires the selected backup's saved song pins; the current
+adoption manifest cannot supply missing historical ownership. This local identity
+protection does not implement a native artwork publisher.
 The installed runtime also has selected durable iPod export checkpoints independent of
 bulk metadata pause, with selected physical/structural fences. Generic USB retains
 its native CDJ source-save barrier. HANDOFF distinguishes tested source, full-gate
@@ -548,6 +554,10 @@ That historical cleanup used APFS sharing. Current bounded retention keeps compa
 proof and required current/unresolved payloads while retiring completed duplicates;
 an old path is not a promise that every full payload remains. Do not recapture old
 cases merely because apparent folder sizes look large.
+Sonny's November23 instruction additionally retired completed installation/migration
+snapshots and accepted image/video captures after verified delivery. Keep only small
+receipts, the live library, musical originals, required offline inputs and recovery
+for unfinished operations; do not retain another diagnostic archive after acceptance.
 
 ## Execution and release discipline
 

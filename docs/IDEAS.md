@@ -1,6 +1,6 @@
 # SoundBox exploratory ideas
 
-Reviewed November5,2026; October25 ranking findings remain dated evidence.
+Reviewed November23,2026; October25 ranking findings remain dated evidence.
 These are concepts requiring a UX workshop with Sonny,
 not active tasks or approved changes. Committed sequencing belongs in
 [ROADMAP](ROADMAP.md); current player behavior belongs in [PLAYER](PLAYER.md).

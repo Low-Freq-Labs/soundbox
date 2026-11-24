@@ -4,6 +4,9 @@ Sonny requested ongoing parallel audits on November17 while focused fixes ship.
 An audit does not authorize live-source/device tests or real-app control. Trace
 actual production assembly as well as fixture paths; reproduce in isolation.
 Record the trigger, code location, consequence, evidence, fix scope and status.
+Completed full diagnostic payloads cited below follow the November23 retention
+policy; small receipts and required offline test fixtures remain distinct. A dated
+path does not imply that its original full capture or private prototype still exists.
 Keep uncertain leads distinct from confirmed findings. Focused releases need not
 wait for unrelated audits to finish; only validated changes join an update.
 
@@ -31,6 +34,68 @@ The confirmed queued findings remain separate future work unless explicitly
 marked implemented or delivered. This November23 document review reconciles
 current source with dated evidence; it does not claim all listed P1/P2s fixed,
 perform live reproductions or broaden source/device authority.
+
+## QOL recheck — November23 after mini-cue delivery
+
+A parallel audit of `dd27368` reproduced seven current issue families with
+private generated/offscreen controls. Sonny subsequently authorized all seven
+fixes. All seven shipped in signed personal175, runtime fingerprint
+`762b27a79eb96dd1521884aedc3febdd8d72965e4842dac6a18c6486f5d6f96e`.
+The complete5365-case gate and guarded install/runtime verification passed; source
+publication status is recorded in HANDOFF. The initial audit did not exercise
+native audible timing or
+the real app; later synthetic Cocoa checks and passive installed-state proof are
+recorded separately in HANDOFF.
+
+The original audit confirmed two additional gaps, both fixed in build175:
+
+- A source/decoder error clears the pending load in `PlayerBar._on_error`.
+  Pressing enabled Play before the still-valid waveform completes restores the
+  play intent but not its pending owner/target. Complete surface delivery then
+  leaves the deck paused with zero Play calls. Normal pre-surface Play and a
+  retry after surface completion each play once. Preserve the new request until
+  complete readiness without recooking; newer Pause/Stop/source must still win.
+- Ordinary automatic artwork publication updates the cache/browser but omits
+  the matching open Info notification. A real generated Info stays `No artwork`
+  after the image is accepted; its existing target-refresh path loads it. This
+  is stale content after later acceptance, not a missing already-accepted cover
+  on first show. Define a source/track-bound prepared-image handoff; do not turn
+  delayed pop-in or an indefinite future-fetch wait into a first-frame fix.
+
+The same pre-fix audit also reproduced five queued families: post-ready decoder refill
+can outlive Pause; an old native poll can deliver its error after a fade loads a
+new track; Artists Load/filtered Info can target stale or hidden songs; manual
+Next/highlight/autoplay capture collapse duplicate occurrences; and bare artwork
+keys can supply another library's cover for a reused numeric ID. The last probe
+rechecks the first-show consumer only, not the older source-switch/delete proof.
+
+Each family had controls, source hashes, fix boundaries and explicit
+limits under `~/Library/Logs/Soundbox/qol-audit-20261123/summary.json` and its
+referenced receipts/scripts. The nested Review-picker retarget lead remains
+unconfirmed. Prioritize transport cancellation and exact action targets while
+preserving complete art/waveform readiness, drafts and durable save ownership.
+
+The delivered implementation separates requested transport intent from decoder observations,
+fences reentrant native snapshots, and preserves retry readiness ownership.
+Navigation binds the active visible browser, exact source/song and occurrence;
+accepted-load callbacks commit the cursor after held fades. Artwork uses scoped
+source/song ownership, prepared notifications and compatible-session handoffs.
+Saved-owner adoption preserves existing covers/defaults and original bytes;
+unproved legacy ownership is rejected before publication. Final validation and
+actual installed identity belong in HANDOFF, not these source-review statements.
+
+## Final wrap-up legacy-art restore follow-up — November23
+
+Independent review found `_prepare_legacy_art_restore` supplementing a selected
+old backup's missing song pins from the current installation's ownership bindings.
+A reused logical ID could therefore assign unproved historical art to a current
+song, even when both snapshots named the same library. The correction uses only
+the selected backup's saved song pins and refuses missing historical ownership
+before publication. The new full `restore_backup` regression requires every
+synthetic current file to remain byte-identical on refusal; proved legacy and
+stable-import restores retain their successful paths. The28-case backup/artwork
+identity selection passed. Full-gate, package and installed-delivery status are
+recorded separately in HANDOFF; this review performed no real-state restoration.
 
 ## Independent cleanliness review — November21 source follow-up
 
@@ -258,7 +323,7 @@ installed identity and user acceptance are recorded in HANDOFF.
 | Track | Scope | Current status |
 | --- | --- | --- |
 | Writes/persistence | All native completion saves, curation pins, exact preference leaves, failure/retry and source ownership | Metadata/preferences, tag and playlist sparse admission/ACK work is implemented; remaining per-path costs and protocol limits stay explicit |
-| Playback/artwork | Transport/load/gesture lifetimes, duplicate occurrences, image choices, modal dialogs and GUI I/O | Complete waveform/audio readiness, latest pending-load positioning and artwork-choice ownership are delivered; unrelated navigation/refill findings retain their individual disposition below |
+| Playback/artwork | Transport/load/gesture lifetimes, duplicate occurrences, image choices, modal dialogs and GUI I/O | Complete waveform/audio readiness, latest pending-load positioning and artwork-choice ownership are delivered; personal175 adds requested transport/refill cancellation, exact occurrence/source navigation and scoped artwork; other findings retain their individual disposition below |
 | Devices/export/recovery | CDJ/stock/Rockbox admission, cancellation/eject, stale results and file/recovery ownership | Indexed Delete/cancellation passed de410 delivery; later identity/sidebar and selected export capture have separate HANDOFF status. Physical acceptance stays separate; copied-media rollback ownership remains queued |
 | Browsing/editing | Selection/filter/sort, model resets, inline edits, menus and hidden preparation | Inline drafts/context targets, bulk tag selection and accepted nested folder placement are delivered; separate relink/adoption/artwork findings below remain queued |
 
@@ -455,7 +520,8 @@ rollback controls separately confirm that copied-media cleanup can remove an
 external replacement (different inode with equal or different bytes, or modified
 same inode). Original publication authority and an explicit descriptor budget
 are required for its later fix; indexed Delete witnesses cannot mint that authority
-after replacement. These are retained future-update findings, not claimed fixed.
+after replacement. The copied-media ownership controls remain future-update findings. Personal175
+subsequently fixes the held-fade occurrence navigation described at this checkpoint.
 
 ## FAT32 publication refusal — November18, corrective work
 
@@ -781,8 +847,8 @@ establish fixes for every row or authorize live reproduction.
 | P2 | Foreign-source conversion head stalls current-source work | Source selection omits native-analysis/media queues. Isolated production methods permitted A→B with a valid A media job; adding a valid B job then admitted no worker and repeatedly armed retry because the A head stayed first. No wrong-source SQL or loss occurred. | Define consistent source-switch admission/partition policy for both domains and retain foreign intentions without indefinitely blocking current-source work. |
 | P2 | Folder import races completion of legacy playlist adoption | Folder expansion captures a legacy custom name; unification may finish before its callback. Isolated production methods then registered the song into a terminal hidden legacy custom bag without appending it to the adopted native playlist. Ordinary post-adoption drops are correctly routed. | Include outstanding import-task ownership in adoption completion and revalidate/remap the captured destination before publishing expanded imports. |
 | P2 | Retained local menu creates hidden organization after adoption | Actual retained QAction opened before customs_done then activated after terminal adoption calls `_new_local_playlist` and saves Late Playlist only in the now-hidden local bag; native enqueue remains0 and terminal migration does nothing. This is another trigger of the adoption callback race above. | Recheck current source/adoption at action activation; map the captured parent to its exact native destination or reject the obsolete menu. |
-| P2 | Late load positioning/autoplay overrides newer transport intent | Actual PlayerBar with isolated fake backend and delayed manifest produced Play at0 then Seek375 for both initial autoplay modes. Follow-up controls show Stop and released Memory preview overridden by first-beat seek5s/restart, and released Hot/Memory positions30s overwritten even without autoplay. Held Hot also jumps. Untouched-load positioning remains correct. | **Delivered** in the complete-readiness pass and retained in `7a5c`: latest explicit positioning/Play/Pause/Stop and held/released cue intent survive late manifest/decoder/surface completion. Complete waveform readiness gates audible start; focused `test_player_gesture_freshness.py` controls cover both arrival orders, pending toggles, double-Space, errors/retry and stale tracks. This does not close the separate post-ready native-refill finding below. |
-| P2 | Pause fails to cancel a native decoder start still reporting paused | Actual fully prepared PlayerBar with a native-protocol fake: Play retains a paused snapshot during refill; second toggle sends Play again, and explicit Pause sends no backend pause. Refill then starts playing despite the newer UI pause. Stop control cancels correctly. Native source independently has a pending playRequested state below the startup threshold. This is command-dispatch proof, not native audible timing. | Toggle requested intent and cancel pending backend starts even before a PLAYING snapshot; preserve ordinary paused behavior, clickless fades and newer command ownership. |
+| P2 | Late load positioning/autoplay overrides newer transport intent | Actual PlayerBar with isolated fake backend and delayed manifest produced Play at0 then Seek375 for both initial autoplay modes. Follow-up controls show Stop and released Memory preview overridden by first-beat seek5s/restart, and released Hot/Memory positions30s overwritten even without autoplay. Held Hot also jumps. Untouched-load positioning remains correct. | **Delivered** in the complete-readiness pass and retained in `7a5c`: latest explicit positioning/Play/Pause/Stop and held/released cue intent survive late manifest/decoder/surface completion. Complete waveform readiness gates audible start; focused `test_player_gesture_freshness.py` controls cover both arrival orders, pending toggles, double-Space, errors/retry and stale tracks. The separate post-ready native-refill fix was subsequently delivered in personal175 below. |
+| P2 | Pause fails to cancel a native decoder start still reporting paused | Actual fully prepared PlayerBar with a native-protocol fake: Play retains a paused snapshot during refill; second toggle sends Play again, and explicit Pause sends no backend pause. Refill then starts playing despite the newer UI pause. Stop control cancels correctly. Native source independently has a pending playRequested state below the startup threshold. This is command-dispatch proof, not native audible timing. | **Delivered** in personal175: PlayerBar tracks requested ordinary playback independently of transient decoder observations, so toggle/Pause cancel pending starts. `test_player_gesture_freshness.py` covers command ordering; native/Cocoa and Review transport controls retain fade/readiness behavior. This does not claim universal audible-timing parity. |
 | P2 | Shortcut recorder consumes release of an already held cue | Genuine offscreen QApplication delivery through the actual MainWindow router and BindingDialog: hold mapped Session CUE or Hot1, open KeyboardPage capture, release inside recorder, then Cancel. Router holds and preview remain active/playing; explicit release_all stops them. Text-focus and ordinary-modal controls correctly release. No real audio/native SQL. | Release existing application holds before the recorder installs its consume-all release filter. Preserve new binding/modifier capture, cancellation/save-failure truth and normal modal routing. |
 | P2 | Local hide/custom removal reports success after save failure | Actual local Collection-hide and legacy custom-removal methods with injected storage failure mutated RAM and reported Removed success; Collection hide also discarded disposable analysis. Independently guarded native-removal ACKs are unaffected. | Snapshot/rollback pre-edit state, return durable save result and gate success/dependent cleanup. Keep native ACK's already-durable presentation path separate. |
 | P1 | Ordinary folder Delete absorbs descendants added during confirmation | Actual ordinary-only folder controller captured no subtree envelope, then built a fresh recursive delete after the dialog. Isolated confirmation added child4000 to the original subtree; pending projection and native planner included that unconfirmed child. Existing regression covered only a smart subtree. | Capture/verify ordinary descendants too, while preserving the separately accepted ordinary multi-row clock protocol. Refuse/reconfirm changed destructive scope. |
@@ -795,17 +861,17 @@ establish fixes for every row or authorize live reproduction.
 | P2 | Graveyard disposal history crosses source scopes | Actual source-partition staging plus offscreen UI: A's disposal of numericID1 hides unrelated known-source B's hidden ID1 from Graveyard, despite distinct UUID/path. Global disposal records lack source identity. No audio is removed, but B cannot be selected for normal Restore. | Bind new disposal records to exact source/native UUID and partition them; preserve ambiguous legacy history without borrowing another source's disposal. |
 | P1 | Removal rollback can overwrite new unrelated audio | Actual RemovalStore.apply against generated encrypted TEMP DB/audio: after Trash publication fails, another song arriving between absent-path check and rollback rename is replaced by the recovered original. Recovery reports rolled-back and retires its journal. | Use atomic no-replace restoration with parent identity checks; on collision preserve both files and recovery journal for reconciliation. Audit sibling rollback primitives. |
 | P2 | Full backup omits historical Graveyard identities | Actual TEMP full-ZIP roundtrip retains the hidden flag but omits the separate graveyard-identities path/UUID/display archive. After native row removal, the restored song has no verified file path. Same-directory tests mask the omission by retaining the old archive. | Include bounded source-bound history in full snapshot/restore validation without exporting native DB/audio/authority. |
-| P2 | Old native poll error fails a newly loaded song | Actual NativeDeckBackend poll with mock native API: old fade completion reentrantly loads B, then the same poll emits A's decoder error and marks B failed. No audio/native probe. | Capture source-command epoch at poll entry and discard the old snapshot tail after reentrant source replacement; preserve current-source errors. |
+| P2 | Old native poll error fails a newly loaded song | Actual NativeDeckBackend poll with mock native API: old fade completion reentrantly loads B, then the same poll emits A's decoder error and marks B failed. No audio/native probe. | **Delivered** in personal175: source-command and poll epochs retire the remainder of a reentrant old snapshot. `test_native_deck.py` covers every signal boundary, nested polls and current-source error delivery. |
 | P2 | Native-analysis completion memo crosses library identity | Actual owned controller fixture publishes A, then accepted source switch to B with same logicalID/audio digest but different DB/library/UUID suppresses B's independent publication. Clearing only the global memo admits the exact B job. No wrong-source SQL occurs, but B stays local-only. | Scope completion memo to source/library/nativeID/UUID/result digest and preserve conservative legacy migration. |
 | P1 | Truncated relink scan mistakes a partial match for unique audio | Actual capped index on two TEMP files: cap1 returns only same-size Other song.wav, while the complete scan finds Wanted.wav. Production's200,000-entry cap silently returns partial candidates without completeness status. | Keep the safety cap, report incomplete/error search, and refuse uniqueness inference from partial inventory without exact saved-content proof. |
-| P1 | Per-track artwork crosses source identity and loses curation | Actual source-switch admission/curation plus real TEMP ArtCache: otherwise-empty A→B with reused numericID1 and different UUID shows A's manual cover on B. Actual Remove on B deletes A's canonical image; switching back to A leaves it blocked without its manual cover. Cache keys omit source identity. | Bind per-track cover/block choices to source+UUID/local identity, preserving old curated art; keep genuinely global default-photo policy separate. |
-| P2 | Autoplay order follows reused numeric IDs into another source | Actual MainWindow methods: play A1 with captured order1,2, select idle source B with different UUIDs/paths, then A1's EOF opens B2. Playback and captured order survive the admitted source switch without an exact source pin. | Bind committed autoplay context to source and song identities; cancel advance after source replacement. Publish staged context only after its load actually commits, preserving cancelled fades and supplying-view order. |
-| P2 | Manual Next gets trapped on duplicate playlist occurrences | Actual MainWindow relative navigation on rendered[A,A,B,C] loads[A,A,A] across three Next commands because each request finds the first A with `order.index`. Automatic Down already retains its numeric occurrence. | Carry the committed occurrence through relative navigation and highlighting, preserving supplied order, source binding and cancelled loads. |
+| P1 | Per-track artwork crosses source identity and loses curation | Actual source-switch admission/curation plus real TEMP ArtCache: otherwise-empty A→B with reused numericID1 and different UUID shows A's manual cover on B. Actual Remove on B deletes A's canonical image; switching back to A leaves it blocked without its manual cover. Cache keys omit source identity. | **Delivered** in personal175: `artwork_identity.py` scopes track covers/blocks to source and verified song ownership; guarded saved-owner adoption preserves original curation/defaults. `test_artwork_identity.py` covers reused IDs/paths, source ABA and legacy ownership refusal. |
+| P2 | Autoplay order follows reused numeric IDs into another source | Actual MainWindow methods: play A1 with captured order1,2, select idle source B with different UUIDs/paths, then A1's EOF opens B2. Playback and captured order survive the admitted source switch without an exact source pin. | **Delivered** in personal175: captured playback orders bind source and complete song identity; source replacement invalidates advance, while accepted-load callbacks commit the cursor. `test_playback_navigation.py` covers source switches, canceled/held loads and exact occurrence ownership. |
+| P2 | Manual Next gets trapped on duplicate playlist occurrences | Actual MainWindow relative navigation on rendered[A,A,B,C] loads[A,A,A] across three Next commands because each request finds the first A with `order.index`. Automatic Down already retains its numeric occurrence. | **Delivered** in personal175: immutable browser occurrence tokens and requested/committed cursors preserve duplicate positions through Next/highlight/autoplay, including rapid navigation during held fades. `test_playback_navigation.py` retains supplied-order and canceled-load controls. |
 | P3 | Right/middle waveform clicks alter playback and zoom | Genuine synthetic RightButton/MiddleButton QMouseEvents on actual WaveformBar hard-pause, seek20s and resume a fake deck; right/middle plus also changes zoom92→128. | Accept the intended mouse button only; preserve normal left-button drag, zoom and release ownership. |
 | P2 | Deferred Eject can target a replacement device | Actual `_eject` plus Qt finished/resume: original mount identity11/A is replaced by22/B at the same path; the deferred callback invokes macOS eject for B. OS eject is mocked; no physical volume is touched. | Retain the original mount/UUID through deferral and freshly revalidate before OS eject; reject a replaced target. |
 | P3 | Search/header sort drops still-visible multi-selection | Actual TrackModel/reset and MainWindow reseating reduce selected[A,C] to[A] after sort; a query matching every row likewise reduces[B,C] to[B]. | **Delivered** in the responsiveness pass, retained in `7a5c`: sorting remaps persistent occurrence indexes, unchanged search preserves its projection, and membership-changing filtering restores surviving selections/current/viewport. `test_model.py` and `test_browser_readiness.py` cover repeated row objects, multiple selections and filtered-out rows. |
 | P3 | UI-preference saves claim song-edit status ownership | Real held canonical preference ACK for device_views/stock_ipod_models reserves the tag state token and displays Saving song details; Ready can briefly replace it while background pause remains suppressed. The held-ACK test-isolation proof identifies the exact preference owner. Existing presentation design, separate from the current cue correction. | **Delivered** quiet status separates `TagController.footer_status_text` from lifecycle busy ownership, while ordered preference commits and error/retry/Quit interlocks remain. This is a presentation correction, not permission to skip durable preference publication. |
-| P2 | Artists Load and filtered Info use the wrong visible context | Actual configurable Load with Artists B selected calls ordinary table `_play_row` and loads stale A through a fake load. Separately, filtering Artists to hide its current B leaves actual Track Info opening hidden B. No native/audio access. | Route Load through the active browser; hidden current rows cannot supply actions. Preserve USB's independently bound route and meaningful group selection. |
+| P2 | Artists Load and filtered Info use the wrong visible context | Actual configurable Load with Artists B selected calls ordinary table `_play_row` and loads stale A through a fake load. Separately, filtering Artists to hide its current B leaves actual Track Info opening hidden B. No native/audio access. | **Delivered** in personal175: Load and Track Info use the active visible Artists selection and reject hidden stale rows; USB keeps its separate bound route. Actual MainWindow/Artists regressions are in `test_playback_navigation.py` and `test_track_info_selection.py`. |
 | P1 | Stock-iPod export rollback deletes a foreign replacement | Actual two-song generated TEMP stock export verifies its new copy at inode294; a simulated external atomic replacement installs other audio at inode295 before a later database-write failure. Rollback unlinks that new foreign recording and reports rolled back. Source audio/native DB remain exact. | Atomically capture rollback candidates into owned recovery and verify exact publication identity/content before disposal; preserve foreign occupants and require recovery on conflict. A pre-unlink check alone still races. |
 
 November18 later-only controls extend this existing ownership family without
@@ -837,9 +903,9 @@ manifest commands and native-refill command cancellation with silent backends,
 not audible/native readiness timing. Pre-duration/sample-rate commands still
 needed native proof at that checkpoint. Exact candidate/validation remain under
 the source/recovery audit's `player-intent-prototype-20261117/`; that prototype
-alone implied no source application. The later complete-readiness delivery above
-supersedes its pending-load status, while the separate post-ready refill finding
-retains its own proof/next-fix scope.
+alone implied no source application. The later complete-readiness delivery superseded its pending-load status;
+personal175 subsequently delivered the separate requested-intent/refill correction
+with generated and native/Cocoa controls described above.
 The preserved cursor31 checkpoint has no active conversion job or registered
 FLAC/AIFF binding (one existing failed MP3 job remains), so the codec-rebinding
 finding is not a current metadata-rollout blocker. Import/relink/restore proofs
@@ -981,7 +1047,8 @@ defensive fix. Private script/receipt/proposal are under
   all-missing attempts, cycles, no immediate repeat and directional modes. A slow
   chosen-path stat can still block its handler; this is not an off-thread media
   resolver or a measured filesystem/audio-latency guarantee. Separate duplicate
-  occurrence and source-switch autoplay findings remain queued above.
+  occurrence and source-switch autoplay findings were subsequently delivered in
+  personal175 as recorded above.
 - At the sidebar/Classic identity checkpoint, new iPod export waited for the global native-source backlog, including unrelated
   cues/tags/analysis. Existing cached catalog Sync already captures selected
   effective metadata independently. A generated real stock plan/commit/reopen

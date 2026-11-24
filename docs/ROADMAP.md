@@ -16,6 +16,14 @@ source identity, recovery and normal-Quit drains remain independent of immediate
 presentation. [Player contracts](PLAYER.md) and [runtime contracts](runtime-contracts.md)
 define those boundaries.
 
+The November23 follow-up separates requested Play/Pause from decoder snapshots,
+keeps exact seek/cue targets through decoder retry, and binds browser navigation
+and loaded Info to source/song occurrences. Scoped artwork owners preserve manual
+choices across compatible refreshes and reject late source/ABA results. Current
+installed identity and validation are in HANDOFF. Successful update completion
+also retires its temporary previous app and completed diagnostic/capture/state
+copies, retaining small result receipts under the November23 retention contract.
+
 The accepted November21 player follow-up preserves RGB exactly. BLUE shares its
 signed outline, LOD and motion while using native palette families over resident
 spectral proxies; exact native BLUE pixel equality is unclaimed. Main 3BAND keeps

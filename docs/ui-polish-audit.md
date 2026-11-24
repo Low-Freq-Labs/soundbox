@@ -9,10 +9,17 @@ controls remain prepared before interaction and device pages remain on demand.
 The later BLUE/3BAND waveform changes have their own geometry/readiness contracts
 in [PLAYER](PLAYER.md), not the unchanged-renderer scope of the November3 review.
 
+Personal175 also scopes per-track cover/block ownership to the source and song,
+preserves open Info drafts across compatible refreshes, and delivers accepted
+automatic artwork through a prepared matching-target notification. Complete
+selected artwork still precedes first show; unknown future fetches do not delay it.
+
 Measurements, inventories and test totals remain dated evidence, not universal
 latency guarantees or a new November23 full-gate result. Current runtime, gate
 and retention facts belong in [HANDOFF](HANDOFF.md). Historical install/device
 actions below confer no current permission, and unresolved risks remain explicit.
+Completed captures/renders and installation snapshots follow the November23
+cleanup; dated evidence paths may retain only small receipts.
 
 ## Responsive artwork preparation — November20 source follow-up
 

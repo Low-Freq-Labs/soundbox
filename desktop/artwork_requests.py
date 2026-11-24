@@ -1,5 +1,5 @@
 """Selected artwork preparation keeps canonical publication on the GUI owner."""
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from PySide6.QtCore import QEventLoop, Signal
 from PySide6.QtWidgets import QApplication
@@ -67,6 +67,31 @@ class ArtworkRequests(TaskOwner):
         return self._start(worker, track_ids, publish,
             lambda tid: (lambda: guard(tid)) if guard is not None else None)
 
+    def handoff_cache(self, previous, current):
+        """Retain accepted choices only for exactly unchanged selected songs.
+
+        The library is already current; the old cache remains installed until
+        this synchronous handoff completes. Source changes never qualify.
+        """
+        handoff = getattr(current, 'handoff_selection', None)
+        if handoff is None:
+            return
+        for worker, requests in tuple(self.requests.items()):
+            updated = []
+            for request in requests:
+                selection = (handoff(request.selection)
+                    if request.cache is previous and request.binding_current(self.window)
+                    and self.latest.get(request.track_id) is request.token else None)
+                if selection is None:
+                    updated.append(request)
+                    continue
+                token = object()
+                self.latest[request.track_id] = token
+                current.reserve_manual(request.track_id, token)
+                previous.release_manual(request.track_id, request.token)
+                updated.append(replace(request, cache=current, selection=selection, token=token))
+            self.requests[worker] = tuple(updated)
+
     def _start(self, worker, track_ids, publish, guard_for):
         window = self.window
         if self.stopping or window._shutting_down or window._state_maintenance:
@@ -75,15 +100,15 @@ class ArtworkRequests(TaskOwner):
                     if (binding := track_binding(window, tid)) is not None}
         if not bindings:
             return False
+        tokens = {tid: object() for tid in bindings}
         try:
-            selections = window.art_cache.split_selection(
-                window.art_cache.selection_token(bindings))
-        except ValueError:
+            selections = window.art_cache.reserve_manual_selection(tokens)
+        except (OSError, ValueError):
             window._flash_status('Artwork target changed; choose the image again', 8)
             return False
         repository = getattr(window, '_state_repository', None)
         requests = tuple(_Request(tid, binding, window.art_cache,
-            selections[tid], repository, _generations(repository), object(), guard_for(tid))
+            selections[tid], repository, _generations(repository), tokens[tid], guard_for(tid))
             for tid, binding in bindings.items())
         for request in requests:
             self.latest[request.track_id] = request.token
@@ -93,8 +118,9 @@ class ArtworkRequests(TaskOwner):
         self.requests[worker] = requests
 
         def retired(finished):
+            settled = self.requests.get(finished, ())
             try:
-                current_ids = tuple(request.track_id for request in requests if request.current(self))
+                current_ids = tuple(request.track_id for request in settled if request.current(self))
                 if publish is not None:
                     if not window._shutting_down and not window._state_maintenance:
                         publish(finished, current_ids)
@@ -103,11 +129,12 @@ class ArtworkRequests(TaskOwner):
                         local=finished.local)
                 elif (finished.requires_save and not window._shutting_down
                         and not window._state_maintenance
-                        and any(self.latest.get(r.track_id) is r.token for r in requests)):
+                        and any(self.latest.get(r.track_id) is r.token for r in settled)):
                     window._flash_status('Artwork target changed; choose the image again', 8)
             finally:
                 self.requests.pop(finished, None)
-                for request in requests:
+                for request in settled:
+                    request.cache.release_manual(request.track_id, request.token)
                     if self.latest.get(request.track_id) is request.token:
                         self.latest.pop(request.track_id)
                 window._finish_oneshot(finished, owned=True)

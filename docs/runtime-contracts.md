@@ -1340,8 +1340,8 @@ Device/firmware and source-format acceptance stays separate.
 Mini RGB brightness matching retains the main RGB faint-only shoulder and
 encoded-space blend. The November21 BLUE policy above supersedes its older
 PWV3/linear-light palette. The later PWV6 stacked mini supersedes October30's
-seven-overlap3BAND overview. Preserve the new references,
-acceptance receipts and main-lane parity evidence. Active
+seven-overlap3BAND overview. Preserve required offline test inputs and small
+acceptance/parity receipts; retire completed captures under the November23 policy. Active
 `build/native`, `build/check`, required reference roots and native recovery stay
 in place. Closure does not claim perfect native appearance or presentation cadence.
 Current guidance stays in `docs/`; superseded experiments belong in
@@ -1410,17 +1410,33 @@ curation, transaction recovery or required offline fixtures.
    Strict metadata rejection alone is not an invalid signed payload; never strip
    the saved icon or re-sign a running app just to hide that distinction.
 
-After the installed app passes verification and Sonny accepts it, retain only the
-current `/Applications/Soundbox.app` and active source checkout. Remove the prior
-rollback app, duplicate dist app and obsolete packaging intermediates; do not
-accumulate zombie `.app` directories. Keep small install/provenance records and
-curated library backups separately. Required offline fixtures and device recovery
-material are not application rollbacks and remain protected.
+After the installed app passes verification and Sonny is up and running, remove
+the temporary previous app, duplicate distributions/packaging output, completed
+diagnostics, recordings, screenshots, copied databases and installation/migration
+state snapshots as part of completing the update. Sonny's November23 instruction
+is standing authorization for this cleanup; do not ask again or retain another
+full archive under a different name. Keep only small install/result receipts.
+Live curated state, original audio/conversions, required offline fixtures and
+recovery for unfinished operations remain protected. Ordinary atomic saves and
+in-flight transaction recovery are separate from completed diagnostic archives.
 
 Moving/replacing the `.app` bundle must never touch
 `~/Library/Application Support/LowFreqLabs/Soundbox/`.
 
-## Diagnostic retention — November10 cleanup supersedes older full-archive retention
+## Diagnostic retention — November23 cleanup supersedes older archive retention
+
+Once an updated build is verified and Sonny is up and running, completed diagnostic
+payloads must go, including original/post-migration installation snapshots and
+accepted visual captures. Retain only compact result/provenance receipts, never
+whole state/DB/media copies just to substantiate a completed check. One temporary
+previous app is allowed during installation and is retired at the same point.
+This supersedes older instructions to keep those full payloads after delivery.
+Do not recreate deleted snapshots or demand a new full capture for routine status
+checks. Preserve the live library and referenced records, musical originals,
+required offline test inputs and necessary recovery for unfinished operations;
+this cleanup does not change runtime atomic publication or source-write guards.
+
+The November10 and October31 rules below are historical context under this policy.
 
 Sonny explicitly requested removing accumulated agent-created backups again on
 November10. Completed diagnostic DB copies and old archival pilot snapshots may

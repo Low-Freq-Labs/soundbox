@@ -1614,7 +1614,14 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         # Artists page showing? — the highlighted song there is the selection.
         if self.stack.currentWidget() is self.artists_view:
             it = self.artists_view.currentItem()
-            tid = it.data(0, ARTIST_TRACK_ROLE) if it is not None else None
+            if it is None or not it.isSelected():
+                return None
+            ancestor = it
+            while ancestor is not None:
+                if ancestor.isHidden():
+                    return None
+                ancestor = ancestor.parent()
+            tid = it.data(0, ARTIST_TRACK_ROLE)
             return self.lib.tracks_by_id.get(tid) if (self.lib and tid) else None
         idx = self.table.currentIndex()
         if not idx.isValid() or idx.row() >= len(self.model._rows):
@@ -1634,7 +1641,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         tid = self.model._rows[index.row()].get("id")
         t = self.lib.tracks_by_id.get(tid) if (self.lib and tid) else None
         if t is not None:
-            self._load_track(t)
+            self._load_track(t, occurrence=self._browser_cursor(tid, row=index.row()))
 
     def _on_playback_error(self, msg: str):
         LOG.warning("Playback error: %s", msg)
@@ -1675,36 +1682,132 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         pb = getattr(self, "player_bar", None)
         if pb is None:
             return
-        tid = pb.current_track()
-        order = self._player_order() if tid else []
-        try:
-            idx = order.index(tid)
-        except ValueError:
+        order = self._browser_playback_order()
+        idx = self._navigation_index(order) if order is not None else None
+        if idx is None:
             pb.set_track_navigation(False, False)
             return
-        pb.set_track_navigation(idx > 0, idx + 1 < len(order))
+        pb.set_track_navigation(idx > 0, idx + 1 < len(order.entries))
+
+    def _navigation(self):
+        from .playback_navigation import Navigation
+        if not hasattr(self, '_playback_navigation'):
+            self._playback_navigation = Navigation()
+        return self._playback_navigation
+
+    def _loaded_info_track(self):
+        """Resolve loaded-song Info only within its accepted source identity."""
+        cursor = self._navigation().committed
+        if (cursor is None or cursor.entry.song[0] != self.player_bar.current_track()
+                or not cursor.order.valid(self.lib, cursor.index)):
+            return None
+        track = self.lib.tracks_by_id[cursor.entry.song[0]]
+        return track if str(track.path) == self.player_bar._src_path else None
+
+    def _rebind_playback_path(self, track_id, old_path, new_path, *, previous):
+        """Publish only the exact path mutation already accepted by conversion."""
+        from .playback_navigation import rebind_path
+        if previous[1][0] != track_id or old_path == new_path:
+            return
+        navigation = self._navigation()
+        for name in ('committed', 'requested'):
+            cursor = getattr(navigation, name)
+            if cursor is not None:
+                order = rebind_path(cursor.order, self.lib, previous, old_path, new_path)
+                setattr(navigation, name, order.cursor(cursor.index))
+                if name == 'requested' and order is not cursor.order and cursor.entry.song == previous[1]:
+                    self.player_bar.rebind_pending_path(track_id, old_path, new_path)
+        self._autoplay_context = rebind_path(
+            getattr(self, '_autoplay_context', None), self.lib, previous, old_path, new_path)
+        self._update_player_navigation()
+
+    def _browser_playback_order(self):
+        from .playback_navigation import capture
+        if self.lib is None:
+            return None
+        if self.stack.currentWidget() is self.artists_view:
+            rows = [{'id': identity} for identity in self._player_order()]
+            return capture(self.lib, ('artists',), rows, lambda row: ('artist-track', row['id']))
+        if self.stack.currentIndex() != 0:
+            return capture(self.lib, ('device',), (), self._native_row_identity)
+        return capture(self.lib, ('table', getattr(self, '_view_key', None)),
+                       self.model._rows, self._native_row_identity)
+
+    def _browser_cursor(self, track_id, *, row=None):
+        order = self._browser_playback_order()
+        if order is None:
+            return None
+        if self.stack.currentIndex() == 0:
+            index = self.table.currentIndex()
+            row = index.row() if row is None and index.isValid() else row
+            if row is not None and 0 <= row < len(self.model._rows):
+                at = sum(value.get('id') in self.lib.tracks_by_id for value in self.model._rows[:row])
+                if at < len(order.entries) and order.entries[at].song[0] == track_id:
+                    return order.cursor(at)
+        for at, entry in enumerate(order.entries):
+            if entry.song[0] == track_id:
+                return order.cursor(at)
+        return None
+
+    def _navigation_index(self, order):
+        navigation = self._navigation()
+        cursor = navigation.requested or navigation.committed
+        if cursor is not None:
+            if not cursor.order.valid(self.lib, cursor.index):
+                return None
+            if navigation.requested is None and cursor.entry.song[0] != self.player_bar.current_track():
+                return None
+            return cursor.locate(order)
+        # Hosts that supply an already-loaded track have no occurrence yet.
+        # Ordinary app loads always install their exact source-bound cursor.
+        cursor = self._browser_cursor(self.player_bar.current_track())
+        return cursor.index if cursor is not None else None
+
+    def _playback_selection_stamp(self):
+        """Distinguish a newer user seat from an ACK restoring the same seat."""
+        from .playback_navigation import occurrence_tokens, source_scope
+        if self.lib is None:
+            return None
+        if self.stack.currentWidget() is self.artists_view:
+            view = ('artists',)
+            def token(item):
+                if item is None:
+                    return None
+                identity = item.data(0, ARTIST_TRACK_ROLE)
+                return ('track', identity) if identity else ('artist', item.data(0, ARTIST_ROLE))
+            current = token(self.artists_view.currentItem())
+            selected = frozenset(token(item) for item in self.artists_view.selectedItems())
+        elif self.stack.currentIndex() == 0:
+            view = ('table', getattr(self, '_view_key', None))
+            tokens = dict(enumerate(occurrence_tokens(self.model._rows, self._native_row_identity)))
+            current = tokens.get(self.table.currentIndex().row())
+            selected = frozenset(tokens.get(index.row()) for index in self.table.selectionModel().selectedRows())
+        else:
+            return source_scope(self.lib), ('device',), None, None, frozenset()
+        return source_scope(self.lib), view, self.search.text(), current, selected
 
     def _play_relative(self, direction: int):
         """Load the adjacent visible track, preserving ordinary playback intent."""
         if self.lib is None:
             return
-        order = self._player_order()
-        try:
-            idx = order.index(self.player_bar.current_track())
-        except ValueError:
+        order = self._browser_playback_order()
+        idx = self._navigation_index(order) if order is not None else None
+        if idx is None:
             self._update_player_navigation()
             return
         target = idx + (-1 if direction < 0 else 1)
-        if not 0 <= target < len(order):
+        if not 0 <= target < len(order.entries):
             self._update_player_navigation()
             return
-        track = self.lib.tracks_by_id.get(order[target])
+        track = self.lib.tracks_by_id.get(order.entries[target].song[0])
         if track is not None:
-            self._load_track(track)
+            self._load_track(track, occurrence=order.cursor(target))
 
-    def _load_track(self, t):
+    def _load_track(self, t, *, occurrence=None):
         """Load at the first grid beat, preserving ordinary playback intent."""
-        self._open_track(t, autoplay=None, capture_autoplay=True)
+        if occurrence is None:
+            return self._open_track(t, autoplay=None, capture_autoplay=True)
+        return self._open_track(t, autoplay=None, capture_autoplay=True, occurrence=occurrence)
 
     def _play_track(self, t):
         """Load a track and start it at its first grid beat."""
@@ -1712,7 +1815,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
 
     def _open_track(
             self, t, autoplay: bool | None,
-            capture_autoplay: bool = True, audition: bool = False) -> bool:
+            capture_autoplay: bool = True, audition: bool = False,
+            occurrence=None, autoplay_index=None) -> bool:
         try:
             ok = t.path.is_file()
         except OSError:
@@ -1720,8 +1824,41 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         if not ok:
             self._flash_status("File not on disk", 5)
             return False
-        if capture_autoplay:
-            self._capture_autoplay_context(t.track_id)
+        from .playback_navigation import capture, song_pin
+        if occurrence is None:
+            occurrence = self._browser_cursor(t.track_id)
+        if occurrence is None:
+            occurrence = capture(self.lib, ('track', t.track_id), [{'id': t.track_id}],
+                                 self._native_row_identity).cursor(0)
+        if (not occurrence.order.valid(self.lib, occurrence.index)
+                or song_pin(t) != occurrence.entry.song):
+            return False
+        navigation = self._navigation()
+        previous = navigation.committed
+        sequence = navigation.stage(occurrence)
+        seat = self._playback_selection_stamp()
+        def started():
+            if not navigation.start(sequence):
+                return
+            if capture_autoplay:
+                self._install_autoplay_context(navigation.committed)
+            elif audition:
+                self._autoplay_context = None
+                self._autoplay_order = []
+                self._autoplay_index = None
+                self._autoplay_random_seen = set()
+                self._autoplay_random_queue = []
+            elif autoplay_index is not None:
+                self._autoplay_index = autoplay_index
+                self._autoplay_random_seen.add(t.track_id)
+            self._cue_audition_track = t.track_id if audition else None
+            self._sync_cue_editing()
+            if seat == self._playback_selection_stamp():
+                self._highlight_now_playing(t.track_id)
+            self._update_player_navigation()
+        def cancelled():
+            if navigation.cancel(sequence):
+                self._update_player_navigation()
         src = self.titles.get(t.track_id) or t.name
         artist = metadata.effective_artist(t.track_id, src, t.artist, self.overrides,
                                            True, self.lib.artist_registry if self.lib else None,
@@ -1729,7 +1866,6 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         title = metadata.effective_title(t.track_id, t.name, artist, self.titles,
                                          self._title_junk())
         label = f"{artist} — {title}" if artist and artist != "Unknown Artist" else title
-        self._cue_audition_track = t.track_id if audition else None
         self.player_bar.play_track(
             t.track_id, t.path, title=label, bpm=t.bpm,
             analysis_path=getattr(t, "source_analysis_path", ""),
@@ -1738,27 +1874,42 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             cues=(self.prep_controller.cue_rows(t.track_id)
                   if self.prep_controller.handles(t.track_id) else
                   self.tag_controller.session_cues(t.track_id)
-                  if self.tag_controller.lib is self.lib else getattr(t, "source_cues", None)))
-        self._sync_cue_editing()
-        self._highlight_now_playing(t.track_id)
+                  if self.tag_controller.lib is self.lib else getattr(t, "source_cues", None)),
+            on_started=started, on_cancelled=cancelled,
+            force_reload=bool(previous and previous.order.view == occurrence.order.view
+                              and previous.entry.song == occurrence.entry.song
+                              and previous.entry.token != occurrence.entry.token))
         self._update_player_navigation()
         return True
 
     def _capture_autoplay_context(self, track_id: str):
         """Freeze the supplying playlist/view while the user browses elsewhere."""
-        order = self._player_order()
-        try:
-            index = order.index(track_id)
-        except ValueError:
-            order = [track_id]
-            index = 0
-        self._autoplay_order = list(order)
-        self._autoplay_index = index
-        self._autoplay_random_seen = {track_id}
+        cursor = self._browser_cursor(track_id)
+        if cursor is None:
+            self._autoplay_context = None
+            self._autoplay_order = [track_id]
+            self._autoplay_index = 0
+            self._navigation().committed = None
+            self._navigation().requested = None
+            self._autoplay_random_seen = {track_id}
+            self._autoplay_random_queue = []
+            return
+        self._navigation().committed = cursor
+        self._install_autoplay_context(cursor)
+
+    def _install_autoplay_context(self, cursor):
+        self._autoplay_context = cursor.order
+        self._autoplay_order = [entry.song[0] for entry in cursor.order.entries]
+        self._autoplay_index = cursor.index
+        self._autoplay_random_seen = {cursor.entry.song[0]}
         self._autoplay_random_queue = []
 
     def _autoplay_playable(self, index: int) -> bool:
         if self.lib is None or not 0 <= index < len(self._autoplay_order):
+            return False
+        context = getattr(self, '_autoplay_context', None)
+        if (context is None or not context.valid(self.lib, index)
+                or context.entries[index].song[0] != self._autoplay_order[index]):
             return False
         track = self.lib.tracks_by_id.get(self._autoplay_order[index])
         if track is None:
@@ -1819,14 +1970,18 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
 
     def _advance_autoplay(self, ended_track_id: str):
         """Advance only after an ordinary playing transport reaches its end."""
+        context = getattr(self, '_autoplay_context', None)
         if (getattr(self, "_review_audition_active", False)
+                or getattr(self, '_cue_audition_track', None)
+                or self._navigation().requested is not None
                 or not self._autoplay_mode
                 or self.lib is None
                 or self.player_bar.current_track() != ended_track_id
                 or self._autoplay_index is None
                 or not 0 <= self._autoplay_index < len(self._autoplay_order)
                 or self._autoplay_order[self._autoplay_index]
-                    != ended_track_id):
+                    != ended_track_id
+                or context is None or not context.valid(self.lib, self._autoplay_index)):
             return
         index = self._next_autoplay_index()
         if index is None:
@@ -1835,44 +1990,57 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         track = self.lib.tracks_by_id.get(track_id)
         if track is None:
             return
-        self._autoplay_index = index
-        self._autoplay_random_seen.add(track_id)
         self._open_track(
-            track, autoplay=True, capture_autoplay=False)
+            track, autoplay=True, capture_autoplay=False,
+            occurrence=context.cursor(index), autoplay_index=index)
 
     def _highlight_now_playing(self, tid: str) -> bool:
         """Loading a track ALWAYS highlights it in the visible browser — a
         playing track with no visible cursor is disorienting. No-op when the
         track isn't in the current view (e.g. a different playlist)."""
+        order = self._browser_playback_order()
+        if order is None:
+            return False
+        committed = self._navigation().committed
+        if committed is not None and committed.entry.song[0] == tid:
+            if not committed.order.valid(self.lib, committed.index):
+                return False
+            occurrence = committed.locate(order)
+            if occurrence is None:
+                return False
+        else:
+            cursor = self._browser_cursor(tid)
+            if cursor is None:
+                return False
+            occurrence = cursor.index
         if self.stack.currentWidget() is self.artists_view:
-            cur = self.artists_view.currentItem()
-            if cur is not None and cur.data(0, ARTIST_TRACK_ROLE) == tid:
+            selected = self._selected_track()
+            if selected is not None and selected.track_id == tid:
                 return True
             name = next((a for a, rows in getattr(self, "_artist_children", {}).items()
                          if any(r["id"] == tid for r in rows)), None)
             for i in range(self.artists_view.topLevelItemCount()):
                 top = self.artists_view.topLevelItem(i)
-                if top.data(0, ARTIST_ROLE) != name:
+                if top.data(0, ARTIST_ROLE) != name or top.isHidden():
                     continue
                 top.setExpanded(True)
                 for c in range(top.childCount()):
                     child = top.child(c)
-                    if child.data(0, ARTIST_TRACK_ROLE) == tid:
+                    if child.data(0, ARTIST_TRACK_ROLE) == tid and not child.isHidden():
                         self.artists_view.setCurrentItem(child)
                         self.artists_view.scrollToItem(child)
                         return True
             return False
         if self.stack.currentIndex() != 0:
             return False  # device browser etc. — nothing to highlight
-        for i, r in enumerate(self.model._rows):
-            if r.get("id") == tid:
-                cur = self.table.currentIndex()
-                if not (cur.isValid() and cur.row() == i):
-                    col = cur.column() if cur.isValid() else 0
-                    self.table.setCurrentIndex(self.model.index(i, col))
-                self.table.scrollTo(self.model.index(i, 0))
-                return True
-        return False
+        rows = [i for i, row in enumerate(self.model._rows) if row.get('id') in self.lib.tracks_by_id]
+        i = rows[occurrence]
+        cur = self.table.currentIndex()
+        if not (cur.isValid() and cur.row() == i):
+            col = cur.column() if cur.isValid() else 0
+            self.table.setCurrentIndex(self.model.index(i, col))
+        self.table.scrollTo(self.model.index(i, 0))
+        return True
 
     def _focus_now_playing(self):
         """Return the browser cursor to the exact loaded track.
@@ -3122,6 +3290,22 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         QTimer.singleShot(500, self._maybe_fill_waveforms)
         return True
 
+    def _bind_library_artwork(self):
+        """Keep per-song art owners current without borrowing a source's IDs."""
+        previous = self.art_cache
+        # Reading the new view and closing the old publisher are one handoff:
+        # a fill result cannot land between that read and retirement.
+        with self._state_repository.area.lock:
+            current = previous.for_library(self.lib)
+            if current is previous:
+                return
+            self._art_requests.handoff_cache(previous, current)
+            previous.retire()
+            self.art_cache = current
+        if self._art_worker is not None:
+            self._art_restart = True
+            self._art_worker.stop()
+
     def _apply_loaded_library(self, *, already_projected=False,prepared_native_ids=None,
                               reset_navigation=False):
         """Prepare the loaded source without replacing the current device page.
@@ -3161,6 +3345,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             LOG.info("Repaired duration/size metadata for %d imported track(s)",
                      repaired)
             self._save_state()
+        self._bind_library_artwork()
         loaded = self.lib.tracks_by_id.get(self.player_bar.current_track())
         if loaded is not None:
             cue_rows=(self.prep_controller.cue_rows(loaded.track_id)
@@ -8895,11 +9080,22 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                           provider=self.providers.artwork)
         self._art_worker = w
         w.set_playback_active(self.player_bar.is_playing())
-        w.progress.connect(self._on_art_progress)
-        w.failed.connect(self._on_art_persistence_failed)
-        w.profile_changed.connect(self._on_profile_art_changed)
+        w.progress.connect(lambda done, total, worker=w: self._on_art_progress(done, total)
+                           if self._art_fill_current(worker) else None)
+        w.failed.connect(lambda message, worker=w: self._on_art_persistence_failed(message)
+                         if self._art_fill_current(worker) else None)
+        w.profile_changed.connect(lambda tid, worker=w: self._on_auto_art_changed(worker, tid))
+        w.cover_changed.connect(lambda tid, worker=w: self._on_auto_art_changed(worker, tid))
         w.finished.connect(lambda ww=w: self._on_art_finished(ww))
         w.start()
+
+    def _art_fill_current(self, worker):
+        return (self._art_worker is worker and worker.cache is self.art_cache
+                and not self._shutting_down and not self._state_maintenance)
+
+    def _on_auto_art_changed(self, worker, tid):
+        if self._art_fill_current(worker):
+            self._on_profile_art_changed(tid)
 
     def _on_profile_art_changed(self, tid):
         self._refresh_model_art()
@@ -8921,7 +9117,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             self._art_restart = False
             return
         self._art_status_timer.start()
-        self._queue_stock_artwork(getattr(worker, 'changed_track_ids', ()))
+        if worker.cache is self.art_cache:
+            self._queue_stock_artwork(getattr(worker, 'changed_track_ids', ()))
         if getattr(self, "_art_restart", False):  # a re-scan asked to restart
             self._art_restart = False
             self._start_art_fill()

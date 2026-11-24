@@ -8,7 +8,7 @@ Offline registration/analysis proofs and separately approved historical source p
 
 Production APIs have independent accepted authorities; research never provisions them.
 Completed pilot approvals do not authorize replay, new imports or native-app inputs.
-Preserve unresolved recovery and original evidence. Never run tools against guessed live paths.
+Preserve unresolved recovery, required offline inputs and small proof receipts; retire completed diagnostic copies after accepted delivery. Never run tools against guessed live paths.
 
 Run synthetic proof suites through the root `./check.sh`.
 See [shared workflow](../../docs/shared-library-workflow-plan.md) and [current handoff](../../docs/HANDOFF.md).
