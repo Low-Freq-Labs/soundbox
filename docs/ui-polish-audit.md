@@ -21,6 +21,30 @@ actions below confer no current permission, and unresolved risks remain explicit
 Completed captures/renders and installation snapshots follow the November23
 cleanup; dated evidence paths may retain only small receipts.
 
+## Image decoder concurrency — November24
+
+A fresh full gate exposed a Qt image-plugin/GIL lock cycle between GUI preview
+decoding and a worker using a Python QBuffer. Both Review and byte-backed Info
+now use `desktop.image_decode`: Qt owns its native file reader, with one private
+0600 scratch snapshot removed immediately after a byte decode. Existing path
+reads stay direct. QImageReader format handling, pixels, scaling, first-frame
+readiness and joined worker publication remain unchanged.
+
+The old path deterministically deadlocked in a bounded synthetic subprocess;
+the replacement passes that trap with real GUI timer heartbeats. Five new cases
+cover exact pixels/scaling across supported formats, scratch cleanup/error and
+interruption, and 75 affected review/Info/lifecycle cases passed. A test-development
+TIFF comparison crash was corrected by retaining its QBuffer until reader teardown;
+the production helper owns its device natively. These are focused checks, not a
+complete release pass or installed-runtime claim; final status belongs in HANDOFF.
+
+Generated 500px JPEG snapshots added about 0.3–0.4ms versus the unsafe byte reader;
+a 2500px noise PNG added about 11–12ms. Its workers remained responsive over about
+71–76ms with 70–78 GUI timer ticks. Ordinary stored-cover Info uses the direct
+path and adds no scratch copy. These bounded measurements preserve quality and
+complete reveal, not a universal latency guarantee. Compact proof:
+`~/Library/Logs/Soundbox/final-doc-audit-20261124/image-decoder-fix.json`.
+
 ## Responsive artwork preparation — November20 source follow-up
 
 Choosing a local image in Track Info or the artist catalog synchronously read and

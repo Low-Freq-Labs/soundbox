@@ -79,10 +79,12 @@ The checked build cannot fall through to a stale binary. All generator inputs
 and outputs are explicit local paths; this command does not discover a device,
 read the installed library or write a USB. The prepared isolated Rust toolchain,
 source kit and captures live under gitignored `soundbox-cdj-ref/`. They are local
-dependencies, **not included by cloning this repository**. Preserve that workspace
-as historical evidence. The current adapter's relative crate dependencies resolve
-to the checked-in `native/cdj` vendor tree; the isolated toolchain and explicit
-private fixtures are still needed to reproduce this command. Porting the fixture
+dependencies, **not included by cloning this repository**. Preserve the required
+isolated toolchain and explicit private fixture inputs. The current adapter's
+relative crate dependencies resolve to the checked-in `native/cdj` vendor tree;
+the earlier extracted kit is a historical source reference, not another runtime
+dependency or a blanket retention rule for completed diagnostic output. Follow
+the current [retention contract](../../docs/PROJECT_LAYOUT.md). Porting the fixture
 requires its receipts and an equivalent toolchain, without publishing Sonny's
 media or library data.
 

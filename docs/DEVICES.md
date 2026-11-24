@@ -1167,7 +1167,9 @@ zero-padded filenames carry the user-applied order while stock titles stay clean
 
 The September lifecycle corrections still require the repeat reconnect/playback,
 unchanged-Sync performance, overlap, cancellation/retry and failure-eject gates
-in `HANDOFF.md`. Earlier acceptance does not complete these newer gates.
+in the [lifecycle acceptance matrix](ipod-lifecycle-audit-2026-09.md#failure-matrix-and-acceptance).
+Earlier acceptance does not complete these newer gates; HANDOFF records the
+installed runtime separately.
 
 The current source adds observed Video/Classic format and signing profiles,
 with copied-catalog validation; its new physical Sync/playback acceptance remains

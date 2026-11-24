@@ -376,8 +376,8 @@ repository can answer the question.
   Tag/Cue/Grid root/lock/journal and the one desktop source worker, requires
   rekordbox/agent closed, stages encrypted DB/XML pairs, and validates exact
   recovery prefixes before another edit. Current/unresolved native acceptance retains its required full pairs; completed
-  historical copies follow the November10 bounded-retention rule below. Ordinary
-  completed backups retain the latest full pair plus permanent
+  historical diagnostic copies follow the November23 cleanup rule below. Ordinary
+  runtime transaction recovery retains its bounded latest full pair plus permanent
   row/XML/operation receipts with verified, resumable older-payload retirement.
   Pending UI intents persist before worker admission and survive restart; no
   local veto substitutes for a source save. Retry renews stale/rolled-back intent
@@ -443,8 +443,9 @@ repository can answer the question.
   verify full fresh computed membership before acknowledgement, and share the
   closed-native-app worker/root/lock/journal. Existing intelligent/cloud editing
   remains outside this capability; another library/schema/version needs its own
-  acceptance. Ordinary native recovery keeps its bounded latest full pair and
-  permanent compact receipts under the November10 retention rule.
+  acceptance. Ordinary native transaction recovery keeps its bounded latest full
+  pair and permanent compact receipts; completed diagnostic copies follow the
+  November23 cleanup rule.
 - Intelligent rename and mixed reorder have separately marked, default-off
   capabilities; ordinary CRUD/reorder and smart creation never grant them.
   The local inline-name candidate follows the November19 native +1 window
@@ -543,8 +544,9 @@ repository can answer the question.
   baseline after TEMP proof/review. SONNY's intended deletion and all unrelated
   source/curation data were preserved; the current counter was not rewound.
   The marked receipt only recognizes its exact inactive SQLite journal. This
-  adds no general source restore API; retain unknown/pending repair evidence and
-  use the exact private resumable tool listed in HANDOFF.
+  adds no general source restore API. That completed recovery and its compact
+  receipt are historical evidence, not permission to replay an old repair tool.
+  Retain unknown/pending repair evidence for its separately scoped resolution.
 - Ordinary explicit file imports and imported-track playlist drops use the
   separately accepted `soundbox.rekordbox_registration_store` authority, bound to
   the exact native library/schema/rekordbox6.8.7.0303. Sonny approved its two-WAV
@@ -780,8 +782,10 @@ repository can answer the question.
   untouched except for interrupted-generation recovery: a recovery directory
   bound to the still-current manifest may authorize adoption only when the
   freshly planned path, size, and SHA-256 match exactly. Interrupted candidates require fresh whole-file hashes on each adoption/preflight;
-  FAT epochs and edge hashes cannot refresh an old proof. Historical Mac-side
-  proof journals remain retained, but no new per-file proof JSON is written. Later playlist drops accumulate through new schema-3 generations,
+  FAT epochs and edge hashes cannot refresh an old proof. Existing runtime proof
+  journals needed for unfinished recovery remain protected; completed diagnostic
+  copies follow the November23 cleanup rule. No new per-file proof JSON is written.
+  Later playlist drops accumulate through new schema-3 generations,
   reuse exact managed payloads, source-authoritative repairs, and become true
   no-ops when unchanged. Composite iPod Sync also recognizes append-only edits that
   Rockbox made to an owned M3U8. The frequent device poll uses only the bounded
@@ -1040,8 +1044,8 @@ current permission is separate from the earlier exact-plan Bridge Pilot approval
 and the two specifically approved synthetic NEW-row reference seeds. Those old
 receipts never authorize arbitrary future source tests or changing existing
 sync flags. Preserve compact native reference/approval/recovery receipts. Full payloads
-remain only for current proof, unresolved acceptance or runtime recovery under
-the November10 bounded-retention rule.
+remain only while current validation, unresolved acceptance or runtime recovery
+needs them; retire completed diagnostic payloads under the November23 rule.
 Current implementation/installed status lives in HANDOFF; the broader scope and
 remaining analysis-format/replacement gates are in docs/analysis-playlists-next.md.
 
@@ -1105,7 +1109,7 @@ This proof never broadens native SQL or represents smart-playlist exclusions.
 | `docs/ipod-lifecycle-audit-2026-09.md` | Lifecycle inventory, failure matrix, implementation and acceptance boundaries |
 | `docs/rockbox-playlist-oom-2026-09.md` | Read-only USB findings, firmware comparison and pending runtime OOM isolation |
 | `docs/HANDOFF.md` | Single current session-resume note: live state, unfinished work, exact next checks, validation, and rollback facts |
-| `docs/PROJECT_LAYOUT.md` | Checkout contents, external evidence archive, disposable outputs and retained fixtures |
+| `docs/PROJECT_LAYOUT.md` | Checkout contents, compact evidence locations, generated outputs and retained fixtures |
 | `docs/ROADMAP.md` | Active sequence, acceptance gates, public release and deferred work |
 | `docs/sync-performance-audit-2026-09.md` | Composite inventory reuse, source-read counters and physical acceptance |
 | `docs/archive/repeated-work-audit-2026-09.md` | Completed non-USB optimizations and before/after evidence |

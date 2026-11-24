@@ -69,8 +69,9 @@ The isolated Rust 1.99.0 toolchain is under
 `soundbox-cdj-ref/toolchain-1.99/install/`; its downloaded components were checked
 against the official manifest hashes. No shell profile or global toolchain was
 changed. Cargo dependencies/build output stay under the private reference root,
-with two compile jobs. The retained private upstream kit remains an archival
-reference. Current Cargo manifests use the checked-in pinned vendor closure under
+with two compile jobs. The earlier private upstream kit is a historical source
+reference, not an additional dependency or permanent diagnostic-retention rule.
+Current Cargo manifests use the checked-in pinned vendor closure under
 `native/cdj/vendor/rbxport` and the shared SoundBox metadata wrapper; corrections
 do not modify the vendor sources. Fixtures and the isolated toolchain remain
 private prerequisites, not assets supplied by cloning this repository.
@@ -92,7 +93,8 @@ Retained October28 artifacts:
 
 The earlier numbered generated exports/reports are diagnostic iterations, not
 accepted alternatives. Their duplicate media/build products are disposable;
-preserve the current fixture, native snapshots and evidence receipts.
+preserve the required current fixture/native inputs and compact evidence receipts.
+Completed diagnostic copies follow the [current retention contract](../../docs/PROJECT_LAYOUT.md).
 
 ## What was actually implemented
 

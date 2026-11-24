@@ -71,6 +71,10 @@ loading/renaming, search/now-playing, library refresh/import/new playlist, and
 Settings. Available actions share one catalog in `desktop/keyboard.py`; adding an
 action requires a real dispatcher and tests, not only an editor row.
 
+**Load selected track** follows the active visible browser selection, including
+Artists; a hidden/filtered song cannot supply that action. Play/Pause still
+operates the already-loaded deck independently of browser selection.
+
 Bindings operate inside SoundBox from the normal browsing surfaces. Search,
 inline editors, ordinary dialogs, settings lists and device filesystem browsing
 retain normal typing/navigation. Open/close Settings also works from nontext

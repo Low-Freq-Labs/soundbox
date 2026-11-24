@@ -2,7 +2,9 @@
 
 ## Current source structure
 
-Folder [guides](README.md) provide short entry points; dated sections below retain their original evidence.
+Folder [guides](README.md) provide short entry points; dated sections below retain
+their original observations. Full diagnostic captures cited there may be retired;
+[HANDOFF](HANDOFF.md) governs current artifacts and retention, not those old paths.
 `desktop.playback_navigation` captures immutable source/song/visible-occurrence
 cursors. Requested loads advance immediately through pending fades, but autoplay
 and committed navigation change only after the accepted load starts. Source/song
@@ -357,8 +359,9 @@ browsercache schema4 and libcache schema13 preserve these fields without
 analysis/art rebuilds. In tested source, native Title/Artist edits use
 `desktop.metadata_controller` and an independently admitted native store;
 unsupported native Track Info fields refuse rather than report a local-only save.
-Legacy/XML overlays remain supported migration/display inputs. The narrow
-metadata profile is default-off and does not complete broader Track Info or
+Legacy/XML overlays remain supported migration/display inputs. Metadata authority
+stays disabled for unaccepted sources; Sonny's exact library has separately
+accepted v5 Title/Artist activation. That does not complete broader Track Info or
 artwork persistence; see HANDOFF and the shared-library audit. The ordinary desktop playlist API
 shares the accepted Tag/Cue/Grid lane and has separate explicit authority. The
 historical standalone pilot under research has only its exact-plan approval,
@@ -836,7 +839,8 @@ is removed. Its circle-i is a 44×28 bordered prep button
 immediately before My Tags, using the same BG inner fill as Settings and the other
 controls, with a matching three-point corner radius. Info and Settings use
 centered vector icons, avoiding font bearings. The player-layout popup is sized
-to the selector field after Qt lays it out. Info opens Summary/Info for the selected row, with artwork inside Info.
+to the selector field after Qt lays it out. Info opens Summary/Info for the selected
+row, with artwork prepared for both tabs.
 Tested source routes native Title/Artist changes through durable intentions and
 exact source readback. Metadata authority defaults off for an unaccepted source;
 Sonny's exact library has separately accepted v5 Title/Artist authority, recorded
@@ -1782,7 +1786,9 @@ complete standalone JSON snapshot. A canonical manifest alone is insufficient
 for copying or downgrading; older readers reject its sentinel. Rotating history
 and full exports materialize complete standalone JSON. Atomic saves, rotating
 backups, corruption auto-recovery, one-click full `.zip` backup/restore
-(library + history + art cache, including managed default photos). Track-specific
+(library + history + art cache, including managed default photos). This is not a
+complete AppData or media backup: separate native authority files, credentials,
+source audio/rekordbox files and the Graveyard archive below are excluded. Track-specific
 art belongs to `art/scoped/<source-key>/index.json` and its song-keyed files;
 `art/index.json` and legacy images remain separate saved migration inputs.
 `art/ownership.json` records the one explicitly proved legacy adoption, never a
@@ -2047,7 +2053,8 @@ temporary rollback directory and install the stage. Restore the old bundle if
 the stage handoff fails while the application path is absent, including a receipt
 write failure. Verify installed signature/Contents/icon and unchanged live-state
 bytes before an authorized normal relaunch and startup inspection. Retain that one
-previous app only until verified user acceptance, then retire it; do not accumulate
+previous app only until the verified update is up and running, then retire it as
+part of finishing the delivery; do not accumulate
 app rollback bundles. Musical originals and transaction recovery remain protected.
 Sonny's November23 retention instruction also removes completed diagnostic captures,
 copied DB/state snapshots and packaging scratch once the verified update is up and

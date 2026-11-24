@@ -170,11 +170,11 @@ normalizes one superfluous EOF newline in `test_playlist_sparse_state.py`, with
 identical compiled code, AST and positions; the other923 inputs remain byte-exact.
 Lint, layout/links/instruction parity, engine types, native/CDJ builds, pinned
 vendor integrity and required offline fixtures pass. The synthetic12-song,
-zero-device render was inspected. Reports and frozen inputs are retained under
+zero-device render was inspected. Original reports and frozen inputs were recorded under
 `~/Library/Logs/Soundbox/wrapup-20261120/final-gate/`.
 
-This also validates the new focused/named routing and complete area catalog on
-the current source. Read-only installed verification matches233 runtime modules,
+This validated the new focused/named routing and complete area catalog at that
+checkpoint. Read-only installed verification matched233 runtime modules,
 startup code and four native code sections to the same tested runtime88b6.
 Ordinary deep signature verification passes; saved-color Finder/Dock metadata
 outside signed Contents is preserved under the install contract. No rebuild,
@@ -251,9 +251,9 @@ The final bare `./check.sh --render` passes all 2,886 discovered cases: 2,820
 offscreen in 501.435s and 66 Cocoa in 69.011s, with zero skips/expected failures
 and exact inventories. Lint/types/layout, native/CDJ builds and immutable fixtures
 pass; all 729 publication inputs remain exact after EOF-only normalization.
-Compiled code and positions are unchanged; current source matches all 170
-installed first-party modules. Both original signed-profile proofs and installed
-isolated checks remain retained. [HANDOFF](HANDOFF.md) separates publication's
+Compiled code and positions were unchanged; that source matched all 170
+installed first-party modules. Original signed-profile and installed-isolated
+results are dated evidence. [HANDOFF](HANDOFF.md) separates publication's
 raw-source fingerprint from the unchanged signed runtime and latest app state.
 
 Shared test helpers live in `tests/support/`; moving a builder does not move its

@@ -30,8 +30,8 @@ upstream navigation omissions, not missing first-party instructions. Preserve th
 - `.venv/`: active pinned development environment; the installed app is independent of it.
 - `build/native/`, `build/cdj/release/soundbox-cdj`: checked native outputs required by source runs/tests.
 - `build/check/`: current full-gate inventories/results; `focused/` holds explicitly scoped exact/named-area checks and phase receipts, never complete-release proof.
-- `build/rekordbox-write-proof/`: retained private copy-only proof evidence; no source authority.
-- `build/personal/`, `build/public/`, `dist/`: reproducible packaging intermediates/candidates; preserve an unaccepted handoff until resolved.
+- `build/rekordbox-write-proof/`: private proof output; completed copies retire under the retention policy, with compact results only. It grants no source authority.
+- `build/personal/`, `build/public/`, `dist/`: reproducible packaging intermediates/candidates; keep during validation/install, then remove after the verified running handoff.
 - Python, mypy and Hypothesis caches are generated. Ignored never automatically means disposable.
 
 Root build/check scripts recreate their own outputs. Cleanup must identify exact owned paths and preserve necessary evidence/inputs; do not sweep unrelated scratch, apps or user data.
@@ -68,13 +68,14 @@ The final November18 wrap followed accepted installed iTunes export/reconnect/Sy
 It retired the sole old application fallback and regenerated personal distributions,
 personal packaging and Cargo debug output:1,612,310,155distinct regular-file bytes.
 That wrap preserved its installed app, `.venv`, active native/check/CDJ release outputs,
-curation/originals/recovery and private fixtures remain. Exact guarded manifests
-are in the current handoff's private `wrap-up/connected-wrap-cleanup-*` receipts.
+curation/originals/recovery and private fixtures remained. Exact guarded results
+were recorded in that delivery's `wrap-up/connected-wrap-cleanup-*` receipts;
+the current handoff records current retention separately.
 This byte count is not a measured physical APFS space gain. No app control or
 source/device write was used, and no duplicate candidate/previous app remains
-from that delivery. Later November21 installations have their own identities and
-single-slot retention receipts in HANDOFF; this historical cleanup is not their
-current rollback inventory.
+from that delivery. Later installations have their own identity/retirement
+receipts; HANDOFF describes only the current delivery. This historical cleanup
+is not a current rollback inventory.
 
 ## Evidence and navigation
 

@@ -5,6 +5,12 @@ not the present release inventory. [HANDOFF](HANDOFF.md) records current source
 validation and installed identity; [the release gate](test-release-gate.md) defines
 today's focused-versus-complete workflow.
 
+Completed diagnostic copies, logs and renders from these checkpoints follow the
+November23 [retention policy](PROJECT_LAYOUT.md): keep compact results, required
+offline test inputs and unfinished-operation recovery, then retire completed
+captures. Historical descriptions of retained reports do not require recreating
+or keeping those full payloads today.
+
 ## Focused workflow and scheduling review — November20
 
 Sonny requested focused testing for small local fixes, followed by the complete

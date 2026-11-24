@@ -260,7 +260,8 @@ A TEMP-only replay through `PlaylistStore.apply` matches all 99 native playlist
 rows, the complete counter row and the XML bytes from the captured native result.
 All 41 non-registry table hashes match; unrelated session-registry rows remain
 exactly those of the before snapshot. Only hashes and nonsecret summaries are
-reported. Protected reference DB/XML pairs remain unchanged.
+reported. At that replay the protected reference DB/XML pairs stayed unchanged;
+completed diagnostic captures now follow the current HANDOFF retention policy.
 
 This reference replay alone conferred no source authority. The separately
 approved source pilot moved FLAVORS below FAVORITES; Sonny confirmed its native

@@ -43,6 +43,17 @@ Artists actions resolve a visible leaf in the active browser rather than hidden
 ordinary-table or filtered-tree selection. Loaded Info fallback requires the
 committed source/song/path, not a matching numeric ID alone.
 
+## Artwork decode ownership
+
+Review and Track Info decode selected artwork off-thread through
+`desktop.image_decode`. Captured bytes use a private temporary snapshot that is
+removed after decoding; existing image paths go directly to Qt. The filename
+reader owns a native QFile, avoiding Python device callbacks under Qt's plugin
+mutex while retaining the same Qt formats, full Review pixels and Info scaling.
+Cancellation and source/selection guards still precede GUI publication. Track
+Info appears only after its complete selected cover is ready; an existing cover
+stays visible until a replacement is complete.
+
 ## Mini cue readiness — November23
 
 Hot/Memory markers share the pads' immediate selected-track cue publication.
@@ -678,7 +689,9 @@ Cue panel:
 
 Loading semantics are deliberate:
 
-- Double-click is the only browser gesture that loads a track. It preserves
+- Double-click loads a browser track; ordinary single-click selection does not.
+  The configurable **Load selected track** action also loads the active visible
+  browser selection. Both preserve
   ordinary playback intent: a playing deck starts the new track at its first
   grid beat; a paused/empty deck loads it paused. Rapid replacements retain the
   newest request through fade-out and pending grid/media loading. A temporary
@@ -772,11 +785,12 @@ coverage after numerical and native comparison; it does not smooth source detail
 
 The fixed cyan playhead sits over three waveform lanes:
 
-1. A small, unzoomed whole-track RGB overview. Clicking or dragging it seeks
-   anywhere in the song.
+1. A small, unzoomed whole-track overview in the selected display mode. Clicking
+   or dragging it seeks anywhere in the song.
 2. A ruler showing only the current `bar.beat` at the playhead, avoiding
    triple-digit label clutter.
-3. A zoomed, scrolling RGB detail waveform with Rekordbox beat/downbeat lines.
+3. A zoomed, scrolling detail waveform in that mode with Rekordbox beat/downbeat
+   lines.
 
 The `−` and `+` controls change only the detail lane. The overview never zooms.
 There are thirteen persistent scales governed by one UI/native zoom contract:
@@ -932,9 +946,9 @@ does not capture the playlist autoplay context, and terminal playback cannot
 advance it. Ordinary playback is not stopped merely by opening review.
 The public compact transport snapshot, pause/resume and bounded seek entrypoints
 retain clickless ramps and pending grid-load ownership. The review
-button also follows actual native playback if a transient PAUSED/refill snapshot
-clears its button intent, so running audio always offers Pause. A quick resume
-can cancel an in-flight pause fade.
+button retains ordinary requested Play through transient PAUSED/refill snapshots
+and also observes actual native playback, so running audio still offers Pause.
+An explicit pending pause takes precedence; a quick resume can cancel its fade.
 
 `PlayerBar` owns the transport behavior; one native backend owns playback and
 the scrolling waveform. There is no engine selector and no compatibility
@@ -1029,8 +1043,11 @@ Runtime waveform caches use SBA5 only. V4 container reading/conversion belongs
 only to offline test support; it is excluded from the app. Current signed-mip
 and compact imported V5 records remain supported with unchanged rendering math.
 
-All derived caches are disposable accelerators under
-`~/Library/Application Support/LowFreqLabs/Soundbox/`:
+These caches accelerate reads and playback under
+`~/Library/Application Support/LowFreqLabs/Soundbox/`. Their derived nature is not
+blanket cleanup permission: preserve current musical metadata and warm waveform
+records under the retention/readiness contracts, rather than forcing a library
+recook to recover space.
 
 | Directory/file | Owner and purpose |
 |---|---|

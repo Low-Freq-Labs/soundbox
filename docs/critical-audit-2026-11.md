@@ -47,6 +47,10 @@ native audible timing or
 the real app; later synthetic Cocoa checks and passive installed-state proof are
 recorded separately in HANDOFF.
 
+That first QOL delivery's fingerprint/test count is a dated checkpoint. The
+final restore-guard follow-up below and HANDOFF supersede its artifact identity
+and release totals without changing the seven delivered outcomes.
+
 The original audit confirmed two additional gaps, both fixed in build175:
 
 - A source/decoder error clears the pending load in `PlayerBar._on_error`.
@@ -96,6 +100,20 @@ synthetic current file to remain byte-identical on refusal; proved legacy and
 stable-import restores retain their successful paths. The28-case backup/artwork
 identity selection passed. Full-gate, package and installed-delivery status are
 recorded separately in HANDOFF; this review performed no real-state restoration.
+
+## Image-plugin lock cycle — November24 wrap-up follow-up
+
+The fresh release gate exposed a production deadlock between a GUI pixmap decode
+and a review-cover worker: Qt's image-plugin mutex and a Python QBuffer callback
+waited on each other's GIL/mutex ownership. Review and byte-backed Info now share
+a native-file QImageReader helper, preserving captured bytes, exact pixels and
+scaling, cancellation and complete publication. Existing paths remain direct;
+byte snapshots add bounded private scratch I/O. A deterministic old-path timeout,
+replacement GUI-heartbeat control and 75 affected checks support the correction.
+The new TIFF comparison fixture's own device-lifetime crash was separately fixed.
+Independent source/lifetime review found no blocker. Full release and installed
+status belong in [HANDOFF](HANDOFF.md); [UI evidence](ui-polish-audit.md) records
+the measured costs and limits. No native waveform/source/device code changed.
 
 ## Independent cleanliness review — November21 source follow-up
 

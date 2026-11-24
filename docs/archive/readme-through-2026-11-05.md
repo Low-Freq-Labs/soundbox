@@ -1,5 +1,5 @@
 > Historical README through November 5, 2026. Dated behavior and approvals are
-> evidence, not current instructions. Start with [the current guide](../README.md).
+> evidence, not current instructions. Start with [the current guide](../../README.md).
 
 # SoundBox
 

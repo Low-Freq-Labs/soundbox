@@ -164,8 +164,9 @@ snapshot differ by exactly the independently constructed content row plus the +1
 counter (352390→352391). `research/native_library` reproduces the complete native
 semantic inventory and byte-identical XML without ignoring globals. This remains
 a copy-only/native-reference proof, not source-writer acceptance or app integration.
-The dated private capture/replay roots below retain the exact track/evidence and
-subsequent initial-analysis check; HANDOFF records current delivery provenance.
+The dated private capture/replay roots below are historical locations. Compact
+receipts retain the evidence identities/results after completed payload retirement;
+HANDOFF records current delivery provenance and the November23 retention policy.
 
 The BPM/Grid+Key reference is also captured, including all three registered
 DAT/EXT/2EX files. Native analysis matches SoundBox's120 BPM,8B and249ms first

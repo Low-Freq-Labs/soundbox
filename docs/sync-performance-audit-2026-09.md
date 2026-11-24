@@ -77,8 +77,10 @@ writes alone could not fix the delay. Readiness-only build 115's Finder-closed
 generation 62 then completed in **994.57 + 948.26 seconds**, reading **40.75 GB**
 to write **74.09 MB**. Its two changed sources were each processed once, not once
 per firmware. This is the repeated-read baseline; the incremental build was
-installed afterward at 21:58; its development provenance is archived in the
-rollback evidence. `HANDOFF.md` records the final release installation.
+installed afterward at 21:58. That checkpoint's temporary app/diagnostic payloads
+have since been retired under the current retention policy; compact result
+receipts are separate from a reusable rollback. `HANDOFF.md` records the current
+verified installation.
 
 New synthetic regressions forbid source/audio reads and unchanged device
 media/art stats or directory scans during a no-op, one-title edit and adoption

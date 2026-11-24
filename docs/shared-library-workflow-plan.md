@@ -582,8 +582,9 @@ changes that cannot be confidently scoped. See [the test gate](test-release-gate
 A locked screen invalidates display timing; an actual Keychain request can hold
 a shutdown. Do not suppress failures, weaken thresholds or kill workers to pass.
 Keep logs bounded, retire reproducible build output after verified installation,
-and retain at most one temporary previous app until verified user acceptance,
-then retire it. Preserve musical originals, transaction recovery and required
+and retain at most one temporary previous app until the verified update is up and
+running, then retire it under Sonny's standing cleanup instruction. Preserve
+musical originals, transaction recovery and required
 acceptance/device fixtures; they are separate from application rollbacks.
 
 Final closure requires ordinary saves using the shared native store without

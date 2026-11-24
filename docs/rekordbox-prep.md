@@ -5,6 +5,11 @@ preferences and bounded native commands are documented in
 [native-playlist-order.md](native-playlist-order.md). Artists is a virtual
 SoundBox view and creates no native organization jobs.
 
+Native-reference sections retain their dated protocol observations. Full
+diagnostic payloads at old evidence paths may have been retired; current
+[handoff retention](HANDOFF.md#retention-and-unfinished-work) governs what remains.
+Required offline fixtures and unfinished transaction recovery stay separate.
+
 Current regular playlists preserve authored occurrence order; only Collection and
 smart playlists default newest first. Native track repositioning composes accepted
 remove/append commands through the existing shared writer and durable queue. It
@@ -707,7 +712,8 @@ independently confirmed only the intended two tables/four target fields plus
 counter/PQTZ changed. Source data and recovery evidence live privately under
 AppData `rekordbox_recovery/native-grid-pilot-20261027/`, with additional Juice
 and Jungle Juice reference roots. Incomplete `*.pending` captures are never valid
-baselines. Preserve encrypted baselines, reference files and receipts.
+baselines. Preserve required active recovery baselines and compact receipts;
+completed diagnostic reference copies follow the current HANDOFF retention policy.
 
 ### Immediate deck behavior and background saves
 

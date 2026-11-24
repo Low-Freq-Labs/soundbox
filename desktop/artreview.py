@@ -10,8 +10,8 @@ from dataclasses import dataclass, replace
 from functools import cached_property
 from threading import Lock, Event
 
-from PySide6.QtCore import QBuffer, QIODevice, QSize, Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QIcon, QImage, QImageReader, QPixmap, QPainter, QColor
+from PySide6.QtCore import QSize, Qt, QThread, QTimer, Signal
+from PySide6.QtGui import QIcon, QImage, QPixmap, QPainter, QColor
 from PySide6.QtWidgets import (
     QDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
     QMessageBox, QPushButton, QSplitter, QTabBar, QVBoxLayout, QWidget,
@@ -25,6 +25,7 @@ from soundbox.art_review_scan import ReviewScanStore, context_stamp
 from soundbox.providers import provider_operation
 from .artpicker import ArtPickerDialog, _CandidateSearch
 from .task_owner import TaskOwner
+from .image_decode import read_image
 from . import theme
 
 
@@ -315,11 +316,7 @@ class _ReviewCover(QThread):
         if self._stop or self.isInterruptionRequested():
             return
         if not self._decoded:
-            buffer = QBuffer()
-            buffer.setData(self.selection.snapshot.data)
-            buffer.open(QIODevice.ReadOnly)
-            # Full reader.read releases the GIL; pinned loadFromData blocks GUI Python.
-            image = QImageReader(buffer).read()
+            image = read_image(self.selection.snapshot.data)
             if self._stop or self.isInterruptionRequested():
                 return
             self.image = image

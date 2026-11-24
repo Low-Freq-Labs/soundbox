@@ -1,11 +1,12 @@
 """Track information with complete artwork on its first visible frame."""
-from PySide6.QtCore import Qt, QThread, QEventLoop, QSize, QBuffer, QIODevice
-from PySide6.QtGui import QColor, QCursor, QImage, QImageReader, QPixmap
+from PySide6.QtCore import Qt, QThread, QEventLoop, QSize
+from PySide6.QtGui import QColor, QCursor, QImage, QPixmap
 from PySide6.QtWidgets import (QApplication,QDialog,QDialogButtonBox,QGridLayout,QHBoxLayout,
     QLabel,QLineEdit,QMessageBox,QPlainTextEdit,QPushButton,QScrollArea,QTabWidget,QVBoxLayout,QWidget)
 from .choices import ComboBox as QComboBox
 from soundbox.track_info import EDITABLE
 from .task_owner import TaskOwner
+from .image_decode import read_image
 from . import theme
 
 
@@ -38,15 +39,8 @@ class ArtworkWorker(QThread):
         try:
             source=self.resolve()
             if source and not self.isInterruptionRequested():
-                buffer=None
-                if isinstance(source,bytes):
-                    buffer=QBuffer();buffer.setData(source);buffer.open(QIODevice.ReadOnly)
-                    reader=QImageReader(buffer)
-                else:reader=QImageReader(str(source))
                 bounds=QSize(self.side,self.side)
-                size=reader.size()
-                if size.isValid():reader.setScaledSize(size.scaled(bounds,Qt.KeepAspectRatio))
-                image=reader.read()
+                image=read_image(source,bounds=bounds)
                 if not image.isNull() and not self.isInterruptionRequested():
                     self.image=image.scaled(bounds,Qt.KeepAspectRatio,Qt.SmoothTransformation)
         except (OSError,ValueError):

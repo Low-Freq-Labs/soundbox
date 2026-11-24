@@ -27,11 +27,18 @@ fixtures and recovery needed by unfinished operations.
   prepared image decoder. Existing complete images stay until replacements are
   ready; late source/ABA results are discarded. Future automatic fetches do not
   delay Info opening, and a delayed image is no substitute for complete first paint.
+- Qt image plugins must not read a Python-created QIODevice in a worker. Plugin
+  probing can hold Qt's image mutex while virtual `seek` waits for the GIL;
+  simultaneous GUI pixmap decoding can hold the GIL waiting for that mutex.
+  `desktop.image_decode` uses Qt's native filename reader, with a private temporary
+  snapshot for captured bytes and direct reads for paths. Keep the full Qt format,
+  pixel/scaling and complete-first-frame contracts; retire scratch on every exit.
 - Full backups include scoped indexes, ownership and global defaults. Restoring
-  an older per-ID art snapshot into scoped state requires its saved source/pins,
-  supplemented only by matching original ownership bindings; unproved owners
-  fail before publication. The selected source's old decisions, including absence,
-  replace its current ones while other source namespaces remain intact.
+  an older per-ID art snapshot into scoped state requires source/song pins from
+  that selected backup. Current adoption bindings cannot fill missing historical
+  proof; unproved owners fail before publication. The selected source's old
+  decisions, including absence, replace its current ones while other source
+  namespaces remain intact.
 
 ## Wider responsiveness review — November21
 
@@ -405,7 +412,8 @@ fixtures and recovery needed by unfinished operations.
   recovery/adoption hashes affected files; redundant per-asset completed-proof
   maps/ledgers are no longer written. Historical proof files stay untouched.
 - Logical `sb-…` track IDs are not numeric native content IDs. Incremental
-  catalog work uses `Track.native_id`, while curated art uses the logical ID.
+  catalog work uses `Track.native_id`, while curated art uses the logical ID
+  within its frozen source/song artwork view.
 
 Hard-won + researched. **Read before touching workers, playlists, sync, art, or
 the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
@@ -766,8 +774,9 @@ test, after unchanged source-identity and native/manual provenance guards.
   (`finished_all`/`done`/`failed`) run WHILE `run()` is still finishing — nulling
   `self.x_worker` there GCs the thread on its own thread → abort. FIX (in place):
   drop the ref only on the built-in `finished` signal via
-  `MainWindow._finish_worker(attr, w)` (main thread, after `run()` returns). Used
-  for export/refresh/resync workers + `PlayerBar._wf`. Don't regress it.
+  `MainWindow._finish_worker(attr, w)` for window-owned export/refresh/resync
+  workers. Interactive `PlayerBar._wf` uses `TaskOwner` retirement and join,
+  then `_wf_done` releases its exact references. Don't regress either owner.
 - **A custom worker result signal is not a device-completion boundary.** `done`,
   `finished_all`, and similar signals are emitted inside `run()`; the QThread and
   its UI ownership still exist. Device workers store their result, consume it
@@ -1369,7 +1378,8 @@ test, after unchanged source-identity and native/manual provenance guards.
   reject reserved/unknown values, and preserve I–P even though the current
   panel shows A–H.
 - Player interaction and transport semantics are specified in `PLAYER.md`.
-  Keep double-click = the only browser load gesture (preserving playback), Space =
+  Keep double-click as the browser pointer load gesture and the configured Load
+  action bound to its active visible selection (both preserve playback), Space =
   play/pause for the already-loaded deck only, C = momentary CUE, one decoder
   seek on drag release, and first-Rekordbox-beat loading when a valid imported
   grid exists. A missing/invalid imported grid uses the SoundBox fallback with
@@ -1843,11 +1853,13 @@ their accepted selected export/recovery contract is below and in the CDJ guide.
   Schedule these ahead of full cooks that may be waiting for 25 GiB. `library.json`,
   its small rotating backups, art, and existing analysis are not expendable.
   Keep at most one previous app temporarily during installation. Retire it after
-  verified user acceptance; automated checks alone do not establish acceptance.
+  the verified update is up and running under Sonny's November23 standing cleanup
+  instruction; another confirmation is not required. Automated checks still do
+  not establish separate native-source, device or visual acceptance.
   Do not accumulate app rollback bundles. Musical/conversion originals, native
   recovery and required fixtures remain protected.
   The November23 retention rule also retires completed diagnostic/capture and
-  installation-snapshot payloads after accepted delivery; live state and recovery
+  installation-snapshot payloads after verified delivery; live state and recovery
   for unfinished operations are separate from those disposable archives.
 - **Status presentation has one owner at a time.** Per-file acquisition/copy/
   verification notifications update hover details only; they never replace the
@@ -2131,8 +2143,8 @@ none of those optional modules.
   track on explicit Play, uses the ordinary grid/origin load and gain-ramped
   pause/seek, and suppresses playlist autoplay. A source-change fade and a pending
   grid load must remain cancellable when selecting another row or closing review.
-  The review snapshot must include actual native playback as well as button
-  intent: a transient PAUSED/refill report can clear the latter while audio runs.
+  The review snapshot includes actual native playback as well as requested
+  transport intent; a transient PAUSED/refill report cannot cancel ordinary Play.
   Explicit pause-in-progress wins, and resume can cancel that fade.
   Stop review transport timers/intent before native teardown. Keep/Replace/Next
   advance below the selected row; later scan callbacks must not reset an end

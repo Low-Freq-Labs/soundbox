@@ -14,7 +14,7 @@ from PySide6.QtGui import QPixmap
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
-from desktop import artreview
+from desktop import artreview, image_decode
 from desktop.artpicker import _CandidateSearch
 from desktop.artreview import ArtReviewDialog, _CoverSelection, _ReviewCover, _PreviewComparison
 from soundbox.artwork import ArtCache, ArtResult, CoverSnapshot
@@ -406,11 +406,11 @@ class ReviewCoverPreparation(unittest.TestCase):
             return dict(entry=snapshot.entry, digest=snapshot.digest, choices=[(
                 dict(title=color, uploader='Artist', score=.95, url=f'https://soundcloud.com/artist/{color}'), picture(color))])
         dialog._remember('1', cached('blue'));entered, _decoded, held = self.hold()
-        reader = artreview.QImageReader;sample = artreview._art_sample;originals = []
+        reader = image_decode.QImageReader;sample = artreview._art_sample;originals = []
         def sampled(data):
             if data == snapshot.data:originals.append(1)
             return sample(data)
-        with held, mock.patch.object(artreview, 'QImageReader', side_effect=reader) as readers, \
+        with held, mock.patch.object(image_decode, 'QImageReader', side_effect=reader) as readers, \
                 mock.patch.object(artreview, '_art_sample', sampled), \
                 mock.patch.object(dialog, '_paint_selected', wraps=dialog._paint_selected) as painted:
             dialog._selected(dialog.tracks.currentItem());self.assertTrue(entered.wait(1))

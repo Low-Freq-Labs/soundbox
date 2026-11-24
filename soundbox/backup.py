@@ -1,11 +1,10 @@
-"""Full-library backup & restore (the "thorough" backup, in-app).
+"""Portable library/artwork backup and guarded in-app restore.
 
-A backup is one .zip holding everything SoundBox knows that isn't rekordbox:
-    library.json   title/artist overrides, custom/source playlist additions,
-                   deletes/removals, settings — the crown jewels.
-    backups/       the rotating library.json history.
-    art/           the whole cover-art cache (index + one image per TrackID).
-    README.txt     what this is + how to restore by hand.
+The archive contains materialized canonical state, rotating library history and
+artwork, including scoped source/song ownership and managed default photos.
+It is not a complete AppData, source-media or rekordbox database backup; separate
+Graveyard history, credentials, native authorities and preparation caches are not
+exported. README.txt describes the actual contents and supported restore path.
 
 Restore accepts the .zip OR a folder laid out the same way (e.g. an unzipped
 backup, or the app-data dir itself) OR a path to a library.json inside one.
@@ -32,21 +31,26 @@ from .state_records import capture_file as _capture_state_file
 
 _ITEMS = ("library.json", "backups", "art")
 
-_README = """SoundBox full backup — {date}
-=================================
-library.json   your portable SoundBox library: title/artist overrides, custom
-               playlists, Rockbox-adopted membership, deletes/removals,
-               settings. Keyed by rekordbox
-               TrackID — the crown jewels.
-backups/       rotating history of library.json (earlier states).
-art/           the whole cover-art cache (index.json + one image per TrackID +
-               managed default-photo pool), all baseline-JPEG (iPod-safe).
-               Saves an hour+ of re-fetching and preserves uploaded defaults.
+_README = """SoundBox library and artwork backup — {date}
+=============================================
+library.json   Portable library edits, playlists, membership/removal choices
+               and settings, with referenced per-song records included.
+backups/       Saved library history, when present.
+art/           Cover images, source/song ownership indexes, saved misses and
+               blocks, managed default photos and artwork policy.
 
-RESTORE: Settings -> "Restore from backup" and pick this .zip (or the
-library.json inside the unzipped folder). By hand: quit Soundbox, copy
-library.json (and art/ if wanted) into
-~/Library/Application Support/LowFreqLabs/Soundbox/ and relaunch.
+This archive does not include your audio, rekordbox database/analysis files,
+device contents, waveform caches, Keychain credentials, native write permissions
+or separate Graveyard history. Keep media and rekordbox backups separately.
+
+RESTORE: In SoundBox Settings, use "Restore from backup" and select this .zip
+or library.json inside its extracted folder. Keep the backup folder intact.
+The app checks the backup and restores library/artwork together. If restoration
+is interrupted or fails, keep any recovery data and let the app finish recovery
+before trying another restore. Older artwork without proven source/song ownership
+may be refused rather than assigned to the wrong song. Keep that archive for review.
+Use the app's restore action instead of copying individual state/art files.
+Restoring a backup does not grant new native write permissions.
 """
 
 

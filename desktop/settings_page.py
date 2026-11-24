@@ -409,15 +409,15 @@ class SettingsPageMixin:
         exp.clicked.connect(self._backup_library)
         bl.addWidget(self._settings_row(
             "Back up SoundBox library", exp,
-            "One .zip with everything: your fixes, playlists, settings, the "
-            "library history and the whole cover-art cache."))
+            "Library edits, playlists, settings, history and artwork. Excludes "
+            "audio, rekordbox files and separate Graveyard history."))
 
         imp = QPushButton("Restore…"); imp.setCursor(Qt.PointingHandCursor)
         imp.clicked.connect(self._restore_from_backup)
         bl.addWidget(self._settings_row(
             "Restore from backup", imp,
-            "Pick a backup .zip — or the library.json inside an unzipped backup "
-            "folder. Your current library is snapshotted first."))
+            "Pick a backup .zip — or library.json inside its extracted folder. "
+            "SoundBox checks the backup and keeps recovery data if needed."))
 
         # --- COVER ART -------------------------------------------------------
         gl.addWidget(self._settings_section("COVER ART"))
@@ -809,9 +809,10 @@ class SettingsPageMixin:
         if QMessageBox.question(
                 self, "Restore from backup",
                 "Replace your SoundBox library with this backup?\n\n"
-                "Background work will finish before restoration. Your current "
-                "state is retained until the complete restore succeeds; a failed "
-                "restore rolls back. Editing is paused during this operation.") != QMessageBox.Yes:
+                "Background work will finish before restoration. SoundBox checks "
+                "the backup before applying it and retains recovery data if "
+                "restoration is interrupted or fails. Editing is paused during "
+                "this operation.") != QMessageBox.Yes:
             return
         self._run_state_task(
             lambda: backup.restore_backup(self._data_file.parent, src), restoring=True)

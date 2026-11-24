@@ -1962,8 +1962,8 @@ class PlayerBar(QWidget):
 
     def review_transport_state(self) -> dict:
         """Read-only compact transport view over the same native playback source."""
-        # A transient PAUSED/refill snapshot can clear button intent while
-        # audio resumes. Audible playback must still expose a working Pause;
+        # Transient PAUSED/refill observations retain ordinary Play intent.
+        # Requested or audible playback must expose a working Pause;
         # an explicit pending pause takes precedence for a quick resume.
         return dict(track_id=self._track_id, position=self.player.position(), duration=self._dur,
                     requested=bool(self._pending_should_play if self._pending_autoplay

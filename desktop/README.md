@@ -13,7 +13,7 @@ PySide6 presentation and application orchestration; the engine stays Qt-free.
 - `prepared_browser.py`: detached visibility, organization and registry inputs for sparse Collection/Artists acknowledgements.
 - `state_commit.py` / `quit_saves.py`: ordered deltas, UI preferences and verified failed-queue retention; admission is not durability.
 - `inline_drafts.py`: exact song/field-bound unsaved editor text through refresh, with explicit recovery for changed targets.
-- `task_owner.py` owns workers through finished/join; `artwork_requests.py` prepares selected images before guarded GUI publication.
+- `task_owner.py` owns workers through finished/join; `artwork_requests.py` prepares selected images before guarded GUI publication; `image_decode.py` keeps Qt decoder I/O native.
 - `keyboard.py` and `theme.py` define shared input actions and appearance roles.
 - Export workers consume immutable captures; My Tags dismisses before outside browser input proceeds.
 - `ipod_export_capture.py` / `ipod_export_fences.py`: saved selected generations and physical transitions, independent of bulk metadata progress.
