@@ -38,8 +38,23 @@ The complete bare `./check.sh --render` passed5,876 tests on the final source:
 native/Rust builds, required offline fixtures and inspected render passed.
 Automatic artwork opt-out now covers metadata-edit and exclusion-triggered
 retries while explicit Fetch/Rescan remain available. Fresh BPM width62 prevents
-native decimal clipping; saved widths remain intact. App/package build and
-runtime handoff are still pending. Sonny explicitly deferred the friend's version/admission check; do not
+native decimal clipping; saved widths remain intact.
+
+Personal180 is built from clean code commit
+`d8ce06cb850b15147a2dfb49f778f58526538d37`, source fingerprint
+`1725746bc06354af9442fc5f5663237f64049cd122ebc5a821fd84aef8d69138`.
+Strict signature/composition and isolated native/process/SQLCipher/AES checks pass;
+all four personal provider actions remain present. The app-only installer is
+`dist/installer/Soundbox-macOS-arm64.pkg` (106,610,636bytes), SHA256
+`dcc82ad95c15e7a98274e09913aca137b8d4d09dee7d502a72536f1bf6472ffe`.
+It has been built/expanded/compared, not installed through macOS Installer or
+published. Runtime handoff is waiting for Sonny to quit the real app normally;
+there is no capture, previous-app rollback or real installation phase yet.
+Current closed-install preparation and its exact config are under
+`friend-ready-20261125/delivery/local-install-prep-uquiraou/` in private Logs;
+20 generated installation guards and17 pure plan/delta checks passed. Fresh
+closed capture and a fresh current intended-plan review are still required.
+Sonny explicitly deferred the friend's version/admission check; do not
 ask for it again during this pass. First-tester native cleanup remains gated on
 independent exact-library acceptance; no Sonny authority is
 bundled and no new authority was minted. Known signed beta packaging is locally
