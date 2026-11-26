@@ -122,17 +122,21 @@ def capture(library,*,titles,artists,aliases,settings,visible,owned,previous,own
 def origins(payload,existing,owned,owned_titles=None):
     """Derive automatic artists before aliases or destructive title cleanup."""
     existing=relocated_origins(payload['scope'],payload['tracks'],existing)
+    cleanup=payload.get('cleanup_mode','clean')=='clean'
     scope=payload['scope'];bases=[];trusted=[];reusable={}
     for track in payload['tracks']:
         identity=key(scope,track);prior=existing.get(identity)
         if prior and track['artist'] in [prior['native_artist'],*owned.get(identity,[])]:
             reusable[identity]=prior['automatic'];base=prior['automatic']
-        else:base=metadata.derive_artist(track['name'],track['artist'])[0]
-        bases.append(base)
+        else:base=metadata.derive_artist(track['name'],track['artist'])[0] if cleanup else track['artist']
+        manual = payload['artists'].get(track['local_id'])
+        if not manual and prior and track['artist']==prior['native_artist']:
+            manual = provenance.manual(prior,'artist')
+        bases.append(manual.strip() if manual and manual.strip() else base)
         if track['artist']:trusted.append(reusable.get(identity,track['artist']))
     trusted.extend(value for value in payload['artists'].values() if value.strip())
-    registry=metadata.build_registry(bases,trusted)
-    display_registry=metadata.build_registry(bases,trusted,payload['aliases'])
+    registry=metadata.build_registry(bases,trusted,cleanup_enabled=cleanup)
+    display_registry=metadata.build_registry(bases,trusted,payload['aliases'],cleanup_enabled=cleanup)
     junk=metadata.junk_patterns(payload['rules_off'],payload['words'])
     result=deepcopy(existing)
     for track in payload['tracks']:
@@ -140,18 +144,18 @@ def origins(payload,existing,owned,owned_titles=None):
         automatic=reusable.get(identity)
         if automatic is None:
             automatic=metadata.effective_artist(track['local_id'],payload['titles'].get(track['local_id']) or track['name'],
-                track['artist'],registry=registry,stem=decode_location(track['location_uri']).stem)
+                track['artist'],registry=registry,stem=decode_location(track['location_uri']).stem,cleanup=cleanup)
             retained=payload.get('retained',{}).get(identity)
             if retained and not track['artist'] and automatic==metadata.UNKNOWN_ARTIST:
                 automatic=retained
         prior=existing.get(identity)
         shown=payload.get('retained',{}).get(identity) or metadata.effective_artist(track['local_id'],
             payload['titles'].get(track['local_id']) or track['name'],track['artist'],payload['artists'],
-            registry=display_registry,stem=decode_location(track['location_uri']).stem)
+            registry=display_registry,stem=decode_location(track['location_uri']).stem,cleanup=cleanup)
         shown=payload['info'].get(track['local_id'],{}).get('artist',shown)
         automatic_title=(prior['automatic_title'] if prior and track['name'] in
             [prior['native_title'],*(owned_titles or {}).get(identity,[])] else
-            metadata.effective_title(track['local_id'],track['name'],shown,junk=junk))
+            metadata.effective_title(track['local_id'],track['name'],shown,junk=junk,cleanup=cleanup))
         result[identity]=dict(scope=scope,**{field:track[field] for field in ('local_id','native_id','uuid','path')},
                               automatic=automatic,native_artist=track['artist'],
                               automatic_title=automatic_title,native_title=track['name'],
@@ -159,7 +163,8 @@ def origins(payload,existing,owned,owned_titles=None):
                                   payload['titles'].get(track['local_id'])==prior.get('title_shield') else ''))
         if prior and 'provenance' in prior:result[identity]['provenance']=prior['provenance']
         elif not prior:
-            result[identity]=provenance.seed(result[identity],title=track['name'],artist=track['artist'],display_artist=shown)
+            result[identity]=provenance.seed(result[identity],title=track['name'],artist=track['artist'],
+                display_artist=shown,cleanup=cleanup)
     validate_origins(result)
     return result
 
@@ -167,6 +172,7 @@ def origins(payload,existing,owned,owned_titles=None):
 def build(raw,*,migration_id=None):
     if type(raw) is not bytes or len(raw)>truth._MAX_BYTES:raise ValueError('Invalid frozen alias inputs')
     captured=json.loads(raw);data=deepcopy(captured['payload']);scope=data['scope']
+    cleanup=data.get('cleanup_mode','clean')=='clean'
     data['retained']={identity:row['artist'] for identity,row in captured['visible'].items()}
     origin_data={**data,'artists':captured.get('origin_artists',data['artists'])}
     provenance_rows=origins(origin_data,captured['origins'],captured['owned'],captured.get('owned_titles',{}))
@@ -191,9 +197,9 @@ def build(raw,*,migration_id=None):
             derivation[identity]=derived
             if data['titles'].get(track['local_id'])==prior.get('title_shield'):
                 data['titles'].pop(track['local_id'],None)
-            automatic_title=metadata.tidy_title(derived['title_base'],junk) \
-                if 'title_base' in derived else metadata.effective_title(track['local_id'],derived['name'],prior['automatic'],
-                    junk=junk)
+            automatic_title=(metadata.tidy_title(derived['title_base'],junk)
+                if cleanup and 'title_base' in derived else metadata.effective_title(track['local_id'],
+                    derived['name'] if cleanup else track['name'],prior['automatic'],junk=junk,cleanup=cleanup))
             provenance_rows[identity]={**prior,'automatic_title':automatic_title}
         data['derivation']=derivation
         descriptor,targets=truth.build(truth._encode(data),migration_id=migration_id or uuid4().hex,include_equal=True)
@@ -214,20 +220,23 @@ def build(raw,*,migration_id=None):
         owned=captured['owned'].get(identity,[])
         known=prior is not None and track['artist'] in [prior['native_artist'],*owned]
         automatic=provenance_rows[identity]['automatic']
-        if prior and 'provenance' in prior:
+        if cleanup and prior and 'provenance' in prior:
             name,artist,_manual=provenance.registry_inputs(track,scope,prior)
             tags[identity]=artist;derivation[identity]=dict(name=name,artist=artist)
         else:
             tags[identity]=(automatic if (known and track['artist'] and track['artist']!=automatic
                                          or not track['artist'] and owned) else track['artist'])
-    bases=[metadata.derive_artist(derivation.get(key(scope,track),track)['name'],tags[key(scope,track)])[0]
+    bases=[data['artists'][track['local_id']].strip() if data['artists'].get(track['local_id'],'').strip() else
+           metadata.derive_artist(derivation.get(key(scope,track),track)['name'],tags[key(scope,track)])[0]
+           if cleanup else tags[key(scope,track)]
            for track in data['tracks']]
     trusted=[value for value in tags.values() if value]+list(data['artists'].values())
-    registry=metadata.build_registry(bases,trusted,data['aliases'])
-    automatic_registry=metadata.build_registry(bases,trusted)
+    registry=metadata.build_registry(bases,trusted,data['aliases'],cleanup_enabled=cleanup)
+    automatic_registry=metadata.build_registry(bases,trusted,cleanup_enabled=cleanup)
     desired={track['local_id']:metadata.effective_artist(track['local_id'],data['titles'].get(track['local_id']) or
         derivation.get(key(scope,track),track)['name'],
-        tags[key(scope,track)],data['artists'],registry=registry,stem=decode_location(track['location_uri']).stem)
+        tags[key(scope,track)],data['artists'],registry=registry,stem=decode_location(track['location_uri']).stem,
+        cleanup=cleanup)
         for track in data['tracks']}
     manual_locals={local for local,value in data['artists'].items() if value.strip()}
     data['artists']=desired
@@ -237,10 +246,10 @@ def build(raw,*,migration_id=None):
         identity=key(scope,track);prior=provenance_rows[identity]
         raw_track=derivation.get(identity,track)
         automatic=metadata.effective_artist(track['local_id'],raw_track['name'],tags[identity],
-            registry=automatic_registry,stem=decode_location(track['location_uri']).stem)
+            registry=automatic_registry,stem=decode_location(track['location_uri']).stem,cleanup=cleanup)
         provenance_rows[identity]={**prior,'automatic':prior['automatic'] if track['local_id'] in manual_locals else automatic}
         retained=captured['visible'].get(identity)
-        if (retained and captured.get('changed_artists') is not None and track['local_id'] not in captured['changed_artists']
+        if (cleanup and retained and captured.get('changed_artists') is not None and track['local_id'] not in captured['changed_artists']
                 and desired[track['local_id']]!=retained['artist'] and 'provenance' in prior):
             base=metadata.neat_title(raw_track['name'],desired[track['local_id']])
             provenance_rows[identity].update(provenance={**prior['provenance'],'title_base':base},
@@ -352,7 +361,7 @@ def merge_origins(new,captured,current):
     return result
 
 
-def protect_titles(targets,titles,origins,*,current_bindings,junk=None,explicit_titles=()):
+def protect_titles(targets,titles,origins,*,current_bindings,junk=None,explicit_titles=(),cleanup=True):
     """Redundant native-desired titles prevent a second cleanup after readback.
 
     Mark only generated shields; an explicit user's title map always wins.
@@ -365,7 +374,7 @@ def protect_titles(targets,titles,origins,*,current_bindings,junk=None,explicit_
         manual=(local in titles and (titles[local]!=shield or local in explicit_titles))
         wanted=''
         if not manual:
-            after=metadata.effective_title(local,row['title'],row['display_artist'],junk=junk)
+            after=metadata.effective_title(local,row['title'],row['display_artist'],junk=junk,cleanup=cleanup)
             if after!=row['title']:wanted=row['title'];protected[local]=wanted
             elif shield and protected.get(local)==shield:protected.pop(local)
         provenance[identity]={**prior,'title_shield':wanted}

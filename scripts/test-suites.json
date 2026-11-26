@@ -160,6 +160,7 @@
       "description": "Titles, artists, aliases, curation protection and background native metadata updates.",
       "quick": [
         "test_metadata",
+        "test_metadata_credits",
         "test_native_metadata",
         "test_metadata_curation_pins",
         "test_alias_intents"
@@ -179,12 +180,16 @@
         "test_metadata_truth_validation",
         "test_metadata_worker_projection",
         "test_source_truth",
-        "test_title_policy_handlers"
+        "test_title_policy_handlers",
+        "test_metadata_cleanup_policy",
+        "test_metadata_cleanup_views",
+        "test_rekordbox_installations"
       ],
       "recovery": [
         "test_rekordbox_metadata_store",
         "test_save_shutdown",
-        "test_state_commit"
+        "test_state_commit",
+        "test_metadata_batch"
       ]
     },
     "tags": {
@@ -783,6 +788,7 @@
         "test_image_decode",
         "test_info_dialog_lifetime",
         "test_inline_drafts",
+        "test_inline_edit_gestures",
         "test_macos_defaults",
         "test_native_deck.TagPopupNativeGeometry",
         "test_playback_navigation",
@@ -793,6 +799,8 @@
         "test_track_info_selection",
         "test_track_menu",
         "test_ui",
+        "test_onboarding",
+        "test_default_browser_columns",
         "test_ui_source_playlists"
       ],
       "recovery": [
@@ -832,7 +840,12 @@
       ],
       "recovery": [
         "test_package_runtime_code",
-        "test_packaged_worker_hook"
+        "test_macos_installer",
+        "test_release_updates",
+        "test_release_updates_ui",
+        "test_packaged_worker_hook",
+        "test_build_assets",
+        "test_build_notices"
       ]
     }
   }

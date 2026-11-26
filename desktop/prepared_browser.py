@@ -34,7 +34,7 @@ def context(window):
     return (
         str(lib.source), lib.source_kind, lib.source_library_id,
         frozenset(lib.hidden_ids), lib.hide_untracked, lib.hide_nokey,
-        lib.hide_short, lib.hide_short_secs,
+        lib.hide_short, lib.hide_short_secs, lib.metadata_cleanup_enabled,
         tuple((p.pid, p.name, tuple(p.folder_path), tuple(p.keys), tuple(p.added_keys))
               for p in lib.playlists),
         tuple((t.tag_id, t.name, t.category, t.source_uuid, t.category_id, t.category_uuid)
@@ -61,7 +61,7 @@ def artists_context(window):
         return None
     return (str(lib.source), lib.source_kind, lib.source_library_id,
             tuple(track.track_id for track in window._visible_collection_tracks()),
-            _freeze(window.settings.get('track_info', {})))
+            _freeze(window.settings.get('track_info', {})), lib.metadata_cleanup_enabled)
 
 
 def artist_tag_inputs(library, tracks=None):
@@ -94,21 +94,27 @@ def registry_inputs(library, origins, overrides, previous=None):
             continue
         local=origin.get('local_id')
         by_local[local]=None if local in by_local else origin
-    baseline=(previous['rows'] if previous is not None and previous['scope']==scope else {})
+    baseline=(previous['rows'] if previous is not None and previous['scope']==scope
+              and previous.get('cleanup_enabled', True)==library.metadata_cleanup_enabled else {})
     rows={};bases=[];trusted=[];changed=set()
     for key,track in library.tracks_by_id.items():
         origin=None if key in library.source_binding_issues else by_local.get(key)
         scalar=(_display_scalars(track),track.native_id,track.source_uuid,
-                track.source_native_path,key in overrides)
+                track.source_native_path,overrides.get(key))
         before=baseline.get(key)
         if before is not None and before[0]==scalar and before[1]==origin and before[4]==track.info:
             row=before
         else:
             changed.add(key)
-            name,artist,fulfilled=metadata_provenance.display_registry_inputs(track,scope,origin)
+            name,artist,fulfilled=(metadata_provenance.display_registry_inputs(track,scope,origin)
+                if library.metadata_cleanup_enabled else (track.name,track.artist,None))
             votes=tuple(([artist] if artist else [])
                         + ([fulfilled] if fulfilled is not None and key not in overrides else []))
-            row=(scalar,deepcopy(origin),metadata.derive_artist(name,artist)[0],votes,deepcopy(track.info))
+            base=(metadata.derive_artist(name,artist)[0] if library.metadata_cleanup_enabled else artist)
+            if library.metadata_cleanup_enabled:
+                base=(overrides.get(key) or '').strip() or fulfilled or base
+            row=(scalar,deepcopy(origin),base,votes,deepcopy(track.info))
         rows[key]=row;bases.append(row[2]);trusted.extend(row[3])
     trusted.extend(value for value in overrides.values() if value.strip())
-    return bases,trusted,dict(scope=scope,rows=rows,changed_ids=frozenset(changed))
+    return bases,trusted,dict(scope=scope,rows=rows,changed_ids=frozenset(changed),
+                             cleanup_enabled=library.metadata_cleanup_enabled)

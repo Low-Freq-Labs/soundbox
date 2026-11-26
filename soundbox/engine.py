@@ -72,17 +72,19 @@ def _find(lib: Library, display_path: str) -> Playlist | None:
 
 def track_row(track: Track, overrides: dict | None = None,
               titles: dict | None = None, derive: bool = True,
-              registry=None, junk=None) -> dict:
+              registry=None, junk=None, *, cleanup=True) -> dict:
     """A table row with the *effective* title and artist (overrides win)."""
     r = track.to_row()
+    cleanup = cleanup and (registry is None or registry.cleanup_enabled)
     # Artist first (derived from the raw/overridden name), THEN the neat title —
     # which may strip that very artist off the title's edge.
     src = (titles or {}).get(track.track_id) or track.name
     artist = metadata.effective_artist(
         track.track_id, src, track.artist, overrides, derive, registry,
-        stem=track.path.stem)
+        stem=track.path.stem, cleanup=cleanup)
     r["artist"] = artist
-    r["title"] = metadata.effective_title(track.track_id, track.name, artist, titles, junk)
+    r["title"] = metadata.effective_title(track.track_id, track.name, artist, titles, junk, cleanup=cleanup,
+                                          source_artist=track.artist, registry=registry)
     return r
 
 
@@ -94,7 +96,7 @@ def playlist_rows(lib: Library, display_path: str, overrides: dict | None = None
         return []
     reg = lib.artist_registry
     junk = getattr(lib, "title_junk", None)
-    return [track_row(t, overrides, titles, derive, reg, junk)
+    return [track_row(t, overrides, titles, derive, reg, junk, cleanup=lib.metadata_cleanup_enabled)
             for t in lib.resolve(pl)]
 
 

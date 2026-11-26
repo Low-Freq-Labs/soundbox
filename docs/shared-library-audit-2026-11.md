@@ -1,6 +1,6 @@
 # Shared-library completeness audit — November12,2026
 
-Implementation audit begun November12; current inventory reviewed November20.
+Implementation audit begun November12; current inventory reviewed November25.
 This is not a source-approval or native-acceptance receipt. [HANDOFF](HANDOFF.md)
 records the installed app separately from changing source. Dated checkpoints
 below retain their then-current open/pending status; the current inventory here
@@ -18,6 +18,18 @@ quiet status, tag/playlist sparse saves and immediate pending tags are installed
 generic USB keeps its separate source-save contract. HANDOFF separates actual
 installation, focused/full checks and failed or completed gates.
 Other native field/artwork/analysis profiles below remain independently gated.
+
+The November25 source candidate groups up to eight existing metadata field
+operations per complete fresh readback and durable canonical acknowledgement.
+Each field retains its own admitted request, verified native baseline, writer
+guards and recovery receipt. Worker-built selected scalar indexes avoid GUI
+Library scans; failures preserve the unresolved prefix for ordinary receipt
+replay. The bounded grouping changes neither accepted SQL nor source authority.
+Exact-source Clean/Keep choices now control derivation across display, native
+intent and export; Keep retains raw values plus explicit manual choices. Clean's
+paired feature-credit and component-spelling rules preserve raw provenance and
+manual titles. These are source-candidate changes, not an installed-status or
+new-library acceptance claim; HANDOFF and the current gate receipts record delivery.
 
 The November21 regular-playlist ordering follow-up retains authored occurrence
 order and exact-occurrence dragging. Its compact durable batch reproduces the

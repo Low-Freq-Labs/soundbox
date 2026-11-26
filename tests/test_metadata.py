@@ -6,6 +6,23 @@ from soundbox.metadata import (
 
 
 class TestDeriveArtist(unittest.TestCase):
+    def test_delivery_versions_preserve_tag_or_prior_named_credit(self):
+        cases = (
+            ('Habits of My Heart (EP Version)', 'Jaymes Young', ('Jaymes Young', TAG)),
+            ('KISS - I WAS MADE FOR LOVING YOU (WESH REMIX) [STREAMING VERSION]',
+             'WESH', ('WESH', NAME)),
+            ('SPACEMAN MACHAKI REMIX [DJ VERSION]', '', ('Unknown Artist', UNKNOWN)),
+        )
+        for title, tag, expected in cases:
+            with self.subTest(title=title):
+                self.assertEqual(derive_artist(title, tag), expected)
+
+    def test_delivery_words_inside_named_creators_remain_credits(self):
+        for name in ('DJ Ride', 'EP & Friend', 'So Sus', 'So Sus & Eko Zu'):
+            with self.subTest(name=name):
+                self.assertEqual(derive_artist(f'Song ({name} Version)', 'Original'), (name, NAME))
+        self.assertEqual(derive_artist('Song (So Sus Edition) [DJ VERSION]', 'Original'), ('So Sus', NAME))
+
     def test_named_edition_is_the_artist_for_tagged_and_untagged_imports(self):
         for tag in ("", "ADÉLA"):
             self.assertEqual(derive_artist("Adéla - Nicole Kidman (So Sus Edition)", tag), ("So Sus", NAME))
@@ -67,6 +84,39 @@ class TestDeriveArtist(unittest.TestCase):
 
 
 class TestEffectiveArtist(unittest.TestCase):
+    def test_release_descriptor_changes_preserve_manual_pair_and_owned_raw_inputs(self):
+        from copy import deepcopy
+        from soundbox import metadata, metadata_provenance
+        rows = (
+            ('Habits of My Heart (EP Version)', 'Jaymes Young',
+             'Habits of My Heart (EP Version)', 'Jaymes Young'),
+            ('Song (WESH REMIX) [STREAMING VERSION]', 'Original',
+             'Song (WESH REMIX) [STREAMING VERSION]', 'WESH'),
+            ('Song (So Sus & Eko Zu Edition) FINAL_', 'Original',
+             'Song (So Sus & Eko Zu Edition)', 'So Sus & Eko Zu'),
+        )
+        registry = metadata.freeze_registry(build_registry(
+            [derive_artist(title, artist)[0] for title, artist, _, _ in rows],
+            [artist for _, artist, _, _ in rows]))
+        for title, artist, expected_title, expected_artist in rows:
+            row = dict(local_id='1', native_id='1', uuid='unique', path='/generated.wav',
+                       scope='generated', stem='generated', name=title, artist=artist)
+            untouched = deepcopy(row)
+            result = metadata_provenance.derive(row, origin=None, title_override=None,
+                artist_override=None, info={}, context=(registry, registry), junk=None)
+            self.assertEqual(result[:2], (expected_title, expected_artist))
+            self.assertEqual(row, untouched)
+            self.assertEqual(result[3]['provenance']['raw'], {'title': title, 'artist': artist})
+            origin = {**result[3], 'native_title': result[0], 'native_artist': result[1]}
+            own_row = {**row, 'name': result[0], 'artist': result[1]}
+            repeated = metadata_provenance.derive(own_row, origin=origin, title_override=None,
+                artist_override=None, info={}, context=(registry, registry), junk=None)
+            self.assertEqual(repeated[:2], result[:2])
+            self.assertEqual(repeated[3]['provenance']['raw'], result[3]['provenance']['raw'])
+            chosen = metadata_provenance.derive(row, origin=None, title_override='My exact title',
+                artist_override='My exact artist', info={}, context=(registry, registry), junk=None)
+            self.assertEqual(chosen[:2], ('My exact title', 'My exact artist'))
+
     def test_named_edition_respects_manual_override_and_beats_reversed_original_artist(self):
         self.assertEqual(effective_artist("1", "Nicole Kidman (So Sus Edition)", "ADÉLA", {}), "So Sus")
         self.assertEqual(effective_artist("1", "Nicole Kidman (So Sus Edition)", "ADÉLA", {"1": "Chosen"}), "Chosen")
@@ -91,6 +141,54 @@ class TestEffectiveArtist(unittest.TestCase):
             ),
             "WHALES",
         )
+
+
+class CuratedReferenceRegression(unittest.TestCase):
+    """Actual corrected pairs are the oracle, including intentionally kept text."""
+
+    def test_manual_artist_corrections_outrank_plausible_but_wrong_inference(self):
+        for title, chosen in (('KEN FINAL', 'UNOWN'), ('WOMANIZER', 'WODD'),
+                              ('YC - CMF (KHOLD SECRET VIP)', 'KHOLD')):
+            with self.subTest(title=title):
+                registry = build_registry([derive_artist(title, '')[0], chosen], [chosen])
+                self.assertEqual(effective_artist('1', title, '', {'1': chosen}, registry=registry), chosen)
+
+    def test_acknowledged_corrected_pair_does_not_replay_the_wrong_raw_split(self):
+        from soundbox import metadata, metadata_provenance as provenance
+        row = dict(local_id='1', native_id='1', uuid='generated', path='/generated.wav',
+                   scope='generated', stem='generated', name='2THESTARS - PAPAJAY & ZUZE', artist='')
+        origin = dict(scope='generated', local_id='1', native_id='1', uuid='generated', path='/generated.wav',
+                      automatic='2THESTARS', native_title=row['name'], native_artist='', automatic_title='', title_shield='')
+        origin = provenance.seed(origin, title=row['name'], artist='', display_artist='2THESTARS')
+        origin = provenance.edit(origin, ('title', 'artist'))
+        for field, value in (('title', '2THESTARS'), ('artist', 'PAPAJAY & ZUZE')):
+            origin = provenance.acknowledge(origin, dict(id='a' * 32, field=field, value=value,
+                curation=dict(token=origin['provenance']['edits'][field], manual=value, physical=value)))
+        origin = {**origin, 'native_title': '2THESTARS', 'native_artist': 'PAPAJAY & ZUZE'}
+        current = {**row, 'name': origin['native_title'], 'artist': origin['native_artist']}
+        registry = metadata.freeze_registry(build_registry(['2THESTARS', 'PAPAJAY & ZUZE']))
+        for cleanup in (True, False):
+            result = provenance.derive(current, origin=origin, title_override=None, artist_override=None,
+                info={}, context=(registry, registry), junk=None, cleanup=cleanup)
+            self.assertEqual(result[:2], ('2THESTARS', 'PAPAJAY & ZUZE'))
+            self.assertEqual(result[3]['provenance']['raw']['title'], row['name'])
+
+    def test_acknowledged_kept_artist_prefix_is_not_stripped_again(self):
+        from soundbox import metadata, metadata_provenance as provenance
+        original = 'AVYDUBZ- THE SEARCH (V2) (FULL PLAYABLE)'
+        chosen = 'AVYDUBZ - THE SEARCH'
+        origin = dict(scope='generated', local_id='1', native_id='1', uuid='generated', path='/generated.wav',
+                      automatic='AVYDUBZ', native_title=original, native_artist='AVYDUBZ', automatic_title='', title_shield='')
+        origin = provenance.seed(origin, title=original, artist='AVYDUBZ', display_artist='AVYDUBZ')
+        origin = provenance.acknowledge(origin, dict(id='b' * 32, field='title', value=chosen,
+            curation=dict(token='', manual=chosen, physical=None)))
+        origin = {**origin, 'native_title': chosen}
+        row = {**{key: origin[key] for key in ('scope', 'local_id', 'native_id', 'uuid', 'path')},
+               'stem': 'generated', 'name': chosen, 'artist': 'AVYDUBZ'}
+        registry = metadata.freeze_registry(build_registry(['AVYDUBZ'], ['AVYDUBZ']))
+        result = provenance.derive(row, origin=origin, title_override=None, artist_override=None,
+            info={}, context=(registry, registry), junk=None)
+        self.assertEqual(result[:2], (chosen, 'AVYDUBZ'))
 
 
 class TestArtistRegistry(unittest.TestCase):
@@ -371,6 +469,21 @@ class TidyTitle(unittest.TestCase):
         self.assertEqual(self._t("Bartholomew Kuma 150bpm v2.3"), "Bartholomew Kuma")
         self.assertEqual(self._t("laserbeam Hostage Remix final"),
                          "laserbeam Hostage Remix")
+
+    def test_trailing_mixdown_underscores_finish_in_one_pass(self):
+        from soundbox.metadata import junk_patterns
+        for title, expected in (
+            ('ultimate suicide flip FINAL_', 'ultimate suicide flip'),
+            ('Song FINAL___', 'Song'), ('Song MASTER694_', 'Song'),
+            ('Song (Artist Remix) FINAL_', 'Song (Artist Remix)'),
+        ):
+            with self.subTest(title=title):
+                self.assertEqual(self._t(title), expected)
+                self.assertEqual(self._t(expected), expected)
+        self.assertEqual(self._t('Finally Moving_'), 'Finally Moving')
+        self.assertEqual(self._t('FINAL_'), 'FINAL_')
+        from soundbox.metadata import tidy_title
+        self.assertEqual(tidy_title('Song FINAL_', junk_patterns(['mixdown'])), 'Song FINAL')
 
     def test_bracketed_junk_anywhere(self):
         self.assertEqual(self._t("DESIGNER (FINAL_)"), "DESIGNER")

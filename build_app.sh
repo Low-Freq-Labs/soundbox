@@ -22,6 +22,7 @@ case "$PROFILE" in
   *) echo "Usage: $0 [personal|public]" >&2; exit 2 ;;
 esac
 APP="dist/$PROFILE/Soundbox.app"
+QT_QPA_PLATFORM=offscreen ./.venv/bin/python scripts/build_assets.py --output "build/$PROFILE/assets/Soundbox.icns"
 SOUNDBOX_BUILD_PROFILE="$PROFILE" ./.venv/bin/pyinstaller \
   --noconfirm --clean --distpath "dist/$PROFILE" --workpath "build/$PROFILE" Soundbox.spec
 

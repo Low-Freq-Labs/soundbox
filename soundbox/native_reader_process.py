@@ -63,6 +63,11 @@ class NativeReaderProcess:
         retained = retain_tracks or {}
         return self._read('live', (path,), (('retained', len(retained), retained.items()),))
 
+    def read_preview(self, source: str | Path) -> Library:
+        """First-launch metadata only: never probe music paths or hydrate files."""
+        path = str(Path(source).expanduser())
+        return self._read('preview', (path,), (('retained', 0, ()),))
+
     def _read(self, operation: str, scope: tuple, sections) -> Library:
         with self._lock:
             self.start()
@@ -108,7 +113,7 @@ class NativeReaderProcess:
                         if operation == 'metadata' and (
                                 str(result.source), result.source_kind, result.source_library_id) != scope:
                             raise ProtocolError('Native reader source identity changed')
-                        if operation == 'live' and Path(result.source) != Path(scope[0]):
+                        if operation in ('live', 'preview') and Path(result.source) != Path(scope[0]):
                             raise ProtocolError('Native reader returned another source')
                         return result
                     sequence += 1

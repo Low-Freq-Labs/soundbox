@@ -42,11 +42,12 @@ def validate(value):
     return value
 
 
-def seed(origin,*,title,artist,display_artist):
+def seed(origin,*,title,artist,display_artist,cleanup=True,registry=None):
     """Capture original scalar inputs before the first SoundBox source write."""
     if 'provenance' in origin:return origin
     return {**origin,'provenance':dict(format=FORMAT,raw=dict(title=title,artist=artist),
-        title_base=metadata.neat_title(title,display_artist),edits=dict.fromkeys(FIELDS,''),acks={})}
+        title_base=metadata.neat_title(metadata.cleanup_credit_pair(title,artist,registry=registry)[0],display_artist) if cleanup else title,
+        edits=dict.fromkeys(FIELDS,''),acks={})}
 
 
 def edit(origin,fields):
@@ -128,7 +129,7 @@ def display_registry_inputs(track,scope,origin):
         path=track.source_native_path or str(track.path),name=track.name,artist=track.artist),scope,origin)
 
 
-def reconcile(origin,*,title,artist,titles,artists,owned=(),junk=None,copy_map=None,fields=FIELDS,retired_overlay=False):
+def reconcile(origin,*,title,artist,titles,artists,owned=(),junk=None,copy_map=None,fields=FIELDS,retired_overlay=False,cleanup=True):
     """Reconcile one freshly verified exact row, preserving all unACKed work.
 
     Only callers holding the current identity may pass an origin. ``owned`` is
@@ -147,7 +148,7 @@ def reconcile(origin,*,title,artist,titles,artists,owned=(),junk=None,copy_map=N
         matched=bool(ack and not ack['superseded'] and ack['token']==value['edits'][field])
         can_hold=(matched and current==ack['value'] and
                   (physical==ack['physical'] and physical is not None or retired_overlay))
-        natural=metadata.effective_title(local,title,artist,junk=junk) if can_hold and field=='title' else current
+        natural=metadata.effective_title(local,title,artist,junk=junk,cleanup=cleanup) if can_hold and field=='title' else current
         held=(matched and current==ack['value'] and ack['manual'] is not None and
               (can_hold or physical is None)) if field=='artist' else can_hold and natural!=current
         if held and retired_overlay:
@@ -176,10 +177,10 @@ def reconcile(origin,*,title,artist,titles,artists,owned=(),junk=None,copy_map=N
             if ack:result['provenance']['acks'][field]['superseded']=True
             result['provenance']['raw'][field]=current
             result['native_'+field]=current
-            if field=='artist':result['automatic']=metadata.derive_artist(title,current)[0]
+            if field=='artist':result['automatic']=metadata.derive_artist(title,current)[0] if cleanup else current
             else:
-                result['provenance']['title_base']=metadata.neat_title(title,artist)
-                result['automatic_title']=metadata.effective_title(local,title,artist,junk=junk)
+                result['provenance']['title_base']=metadata.neat_title(title,artist) if cleanup else title
+                result['automatic_title']=metadata.effective_title(local,title,artist,junk=junk,cleanup=cleanup)
         if matched and field=='title' and result.get('title_shield') and physical==result['title_shield']:
             if not held and result.get('title_shield'):
                 if result is origin:result=deepcopy(origin)
@@ -187,9 +188,24 @@ def reconcile(origin,*,title,artist,titles,artists,owned=(),junk=None,copy_map=N
     return result,maps['title'],maps['artist']
 
 
-def derive(row,*,origin,title_override,artist_override,info,context,junk):
+def derive(row,*,origin,title_override,artist_override,info,context,junk,cleanup=True):
     """One detached dirty scalar row; global registry construction is external."""
     display_registry,automatic_registry=context
+    if not cleanup:
+        if origin is None:
+            origin=dict(scope=row['scope'],**{field:row[field] for field in ('local_id','native_id','uuid','path')},
+                automatic=row['artist'],native_artist=row['artist'],automatic_title=row['name'],
+                native_title=row['name'],title_shield='')
+            origin=seed(origin,title=row['name'],artist=row['artist'],display_artist=row['artist'],cleanup=False)
+        artist=artist_override if artist_override is not None else manual(origin,'artist')
+        title=title_override if title_override!=origin.get('title_shield') else None
+        if title is None:title=manual(origin,'title')
+        title=title.strip() if title and title.strip() else row['name']
+        artist=artist.strip() if artist and artist.strip() else row['artist']
+        if display_registry is not None:artist=display_registry.explicit_alias(artist)
+        title=info.get('title',title);artist=info.get('artist',artist)
+        return title,'' if artist==metadata.UNKNOWN_ARTIST and artist!=row['artist'] else artist,artist,{
+            **origin,'automatic':row['artist'],'automatic_title':row['name']}
     automatic=metadata.effective_artist(row['local_id'],row['name'],row['artist'],registry=automatic_registry,
                                         stem=row['stem'])
     if origin is None:
@@ -198,11 +214,12 @@ def derive(row,*,origin,title_override,artist_override,info,context,junk):
         shown=metadata.effective_artist(row['local_id'],row['name'],row['artist'],
             {row['local_id']:artist_override} if artist_override is not None else None,
             registry=display_registry,stem=row['stem'])
-        origin=seed(origin,title=row['name'],artist=row['artist'],display_artist=shown)
+        origin=seed(origin,title=row['name'],artist=row['artist'],display_artist=shown,registry=display_registry)
     recipe=origin.get('provenance')
     own_title=row['name']==origin['native_title'];own_artist=row['artist']==origin['native_artist']
     raw_title=recipe['raw']['title'] if recipe and own_title else row['name']
     raw_artist=recipe['raw']['artist'] if recipe and own_artist else row['artist']
+    paired_title,paired_artist=metadata.cleanup_credit_pair(raw_title,raw_artist,registry=display_registry)
     automatic=metadata.effective_artist(row['local_id'],raw_title,raw_artist,registry=automatic_registry,stem=row['stem'])
     selected_artist=artist_override if artist_override is not None else manual(origin,'artist')
     if selected_artist is not None:automatic=origin['automatic']
@@ -211,11 +228,13 @@ def derive(row,*,origin,title_override,artist_override,info,context,junk):
         registry=display_registry,stem=row['stem'])
     selected_title=title_override if title_override!=origin.get('title_shield') else None
     if selected_title is None:selected_title=manual(origin,'title')
-    base=recipe['title_base'] if recipe and own_title else metadata.neat_title(raw_title,shown)
+    base=(recipe['title_base'] if recipe and own_title and (paired_title,paired_artist)==(raw_title,raw_artist)
+          else metadata.neat_title(paired_title,shown))
     if recipe and own_title and automatic!=origin['automatic'] and selected_artist is None:
-        base=metadata.neat_title(raw_title,shown)
+        base=metadata.neat_title(paired_title,shown)
         origin={**origin,'provenance':{**recipe,'title_base':base}}
-    title=selected_title.strip() if selected_title and selected_title.strip() else metadata.tidy_title(base,junk)
+    automatic_title=metadata.canonical_title_credits(metadata.tidy_title(base,junk),display_registry)
+    title=selected_title.strip() if selected_title and selected_title.strip() else automatic_title
     title=info.get('title',title);shown=info.get('artist',shown)
-    origin={**origin,'automatic':automatic,'automatic_title':metadata.tidy_title(base,junk)}
+    origin={**origin,'automatic':automatic,'automatic_title':automatic_title}
     return title,'' if shown==metadata.UNKNOWN_ARTIST else shown,shown,origin

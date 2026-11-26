@@ -675,9 +675,11 @@ class TagEditController(TagAssignmentIntents, QObject):
             return False
         return self._run_source_job('registration-cancel' if cancelling else 'registration',callback,finished)
 
-    def _run_source_job(self, kind, callback, finished) -> bool:
+    def _run_source_job(self, kind, callback, finished, *, source_ack_token=None) -> bool:
         """Grid work uses this same worker lane and finished/join ownership."""
-        if self.assignment_reserved or self.source_ack_pending:return False
+        if (self.assignment_reserved or self.source_ack_pending and
+                not (kind=='metadata' and source_ack_token is not None
+                     and self._source_ack_tokens=={source_ack_token})):return False
         if (kind not in ('registration', 'registration-cancel', 'analysis')
                 and self._analysis_blocks_source()):return False
         if self.busy or self.checking or self.admission_paused or self.state_commit_owned or self.owner.stopping or self._closing:

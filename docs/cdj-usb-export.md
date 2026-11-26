@@ -228,7 +228,7 @@ Mac artwork cache or reads other covers, catalogs or audio for the information
 request. Discovery finishes before that selected read, and device admission is
 held until its decoder retires. Info fields also appear as optional
 browser columns. These display inputs were introduced with prepared row cache
-schema3/library cache11 and remain in current schemas4/13 without resetting curation, analysis or artwork. New optional
+schema3/library cache11 and remain in current schemas5/13 without resetting curation, analysis or artwork. New optional
 fields stay hidden when older header state is restored; deliberate selections
 that exceed the viewport can scroll. Progress/count/Cancel share a fixed-height
 footer and cannot resize the browser.

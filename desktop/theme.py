@@ -1,4 +1,4 @@
-"""Soundbox desktop theme — near-black with Freq purple accents.
+"""Soundbox desktop theme — near-black with a saved accent, white by default.
 
 Freq brand palette:
   primary  #7B2FBE   accent/light #A855F7   dark #5B21B6
@@ -19,8 +19,9 @@ TEXT = "#c7ccd6"
 TEXT_DIM = "#7c828f"
 TEXT_HI = "#f2f4f8"
 
-DEFAULT_ACCENT = PURPLE
-DEFAULT_ACCENT_TEXT = '#ffffff'
+DEFAULT_ACCENT = '#ffffff'
+DEFAULT_TEXT_MODE = 'black'
+DEFAULT_ACCENT_TEXT = '#000000'
 GRID_RED = '#ed3343'
 
 QSS = f"""
@@ -379,12 +380,12 @@ def normalize_accent_text(value):
 
 
 def set_accent(value, text_color=DEFAULT_ACCENT_TEXT):
-    """Resolve one saved accent into every UI role; default pixels stay familiar."""
+    """Resolve a saved accent, retaining the original purple palette when chosen."""
     from PySide6.QtGui import QColor
     global PURPLE, PURPLE_LIGHT, PURPLE_DARK, ON_ACCENT, SUBTLE, QSS
     PURPLE = normalize_accent(value)
     base = QColor(PURPLE)
-    if PURPLE == DEFAULT_ACCENT.lower():
+    if PURPLE == '#7b2fbe':
         PURPLE_LIGHT, PURPLE_DARK, subtle = '#a855f7', '#5b21b6', '#28173a'
     else:
         PURPLE_LIGHT, PURPLE_DARK = base.lighter(135).name(), base.darker(145).name()

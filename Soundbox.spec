@@ -5,10 +5,11 @@ from pathlib import Path
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 sys.path.insert(0, str(Path(SPECPATH)))
-from scripts.build_composition import composition, collection_options, runtime_submodule, write_manifest
+from scripts.build_composition import composition, collection_options, runtime_submodule, runtime_asset, write_manifest
 
 profile = os.environ.get("SOUNDBOX_BUILD_PROFILE", "personal")
 config = composition(profile)
+bundle_icon = str(Path(SPECPATH) / "build" / profile / "assets" / "Soundbox.icns")
 manifest = write_manifest(profile, Path(SPECPATH) / "build" / profile / "composition")
 datas = [(str(manifest), "."), ("assets/soundbox-wordmark.svg", "assets"),
          ("assets/soundbox-original-sb-icon.svg", "assets"),
@@ -43,6 +44,17 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
+# The QtGui hook includes an unused optional virtual-keyboard plugin. Cocoa
+# owns text input; neither the app nor retained libraries link this module.
+a.binaries = [entry for entry in a.binaries if runtime_asset(entry[0])]
+a.datas = [entry for entry in a.datas if runtime_asset(entry[0])]
+# Include notices from the exact distributions represented in this analysis.
+# A fresh owned subdirectory avoids retaining notices from an older composition.
+import tempfile
+from scripts.build_notices import collect as collect_notices
+notice_parent = Path(tempfile.mkdtemp(prefix='notices-', dir=Path(SPECPATH) / 'build' / profile))
+notice_root = collect_notices([entry[0] for entry in a.pure], notice_parent / 'runtime')
+a.datas += Tree(str(notice_root), prefix='licenses/runtime')
 pyz = PYZ(a.pure)
 
 exe = EXE(
@@ -61,7 +73,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['assets/Soundbox.icns'],
+    icon=[bundle_icon],
 )
 coll = COLLECT(
     exe,
@@ -75,6 +87,6 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name='Soundbox.app',
-    icon='assets/Soundbox.icns',
+    icon=bundle_icon,
     bundle_identifier='com.lowfreqlabs.soundbox',
 )

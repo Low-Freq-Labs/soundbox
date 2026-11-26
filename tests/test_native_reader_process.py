@@ -62,6 +62,17 @@ class NativeReaderProcessTests(unittest.TestCase):
         self.reader = NativeReaderProcess(self.root)
         self.addCleanup(self.reader.close)
 
+    def test_first_launch_preview_reads_real_encrypted_source_without_media_resolution(self):
+        before = sha256(self.source.read_bytes()).hexdigest()
+        expected = rekordbox_db.load_live(self.source, resolve_media_paths=False)
+        with mock.patch.object(rekordbox_db, 'load_live', side_effect=AssertionError('No parent fallback')):
+            actual = self.reader.read_preview(self.source)
+        self.assertEqual(asdict(actual), asdict(expected))
+        self.assertEqual(sha256(self.source.read_bytes()).hexdigest(), before)
+        self.assertEqual(actual.source_library_id, '123')
+        self.assertEqual(actual.tracks_by_id['1'].name, '日本語 - Song')
+        self.assertFalse(list(self.root.glob('*authority*')))
+
     def previous(self):
         track = Track('logical', 'Old', '', 'file:///generated/canonical.wav',
             source_native_id='1', source_uuid='00000000-0000-4000-8000-000000000001',

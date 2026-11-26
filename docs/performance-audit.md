@@ -1,5 +1,52 @@
 # Performance audits and measured limits — November 2026
 
+Dated paths below identify the original evidence. Completed full diagnostic
+captures/copies follow the current retention rules; preserve compact receipts,
+required fixtures and unfinished recovery. Historical approvals are not current
+source/device/app-control permissions. Current installation is in [HANDOFF](HANDOFF.md).
+
+## Metadata cleanup throughput — November25 first-tester preparation
+
+The current bulk path groups at most eight existing, exact single-field native
+intentions. Each request is still durable before its unchanged native apply.
+The group obtains one complete fresh Library, composes the existing per-field
+acknowledgements into one canonical patch, then publishes that complete Library.
+Receipt retirement retains exact successful-prefix recovery. No native SQL,
+accepted row/counter profile, library authority, source lock or backup proof is
+removed. Manual gestures retain their own newer drafts through group completion.
+
+A paired test on the same immutable 39-field target witness from the original
+58.5-MB database copy measured **59.568s individual → 28.551s grouped**, a52.07%
+reduction. Full readbacks and GUI publications fell39→5; canonical patches167→54.
+Verified native baselines stayed20.289→20.523s. Both runs independently checked all
+39 desired pairs, every unselected pair, IDs/UUIDs/paths, exact XML and empty
+canonical queues. This isolates the grouped pipeline, not a physical iPod result.
+
+A generated1,200-track run completed all2,400 actual native field writes and
+acknowledgements in214.254s, with300 full readbacks/GUI publications and3,300
+canonical patches. The earlier grouped-readback-only run took304.667s and7,500
+patches. The initial trial's diagnostic final oracle incorrectly assumed numeric
+song suffixes survive existing BPM cleanup; that failed attempt is distinct from
+the successful runs comparing every frozen planned pair against native output.
+The timed candidate precedes the final worker-owned binding-index handoff and
+Keep-original/manual-reset corrections. These preserve native SQL and grouping;
+final release checks cover the intended complete tree, separately from timing.
+
+These results do not execute every original-library cleanup field or establish
+native rekordbox acceptance for another user/library/version. The final pure
+original-corpus plan covers3,243 active audio tracks among5,498 raw rows:
+2,921 tracks differ, with2,105 title and2,741 artist fields;289 artists remain
+unresolved. That plan is not a correctness oracle for song-specific creator
+choices. The current-library comparison independently preserves matched manual
+curation and classifies the deliberate case/feature/alias corrections.
+
+Native per-field baseline/recovery and canonical durability remain measured
+costs. Sharing backups across released source leases would require a different
+continuous-owner/recovery proof; it is not part of this change. No instant-save,
+universal-parser-correctness or arbitrary-library writer claim follows from these
+fixtures. Compact receipts live under `cleanup-portability-20261126` and
+`cleanup-corpus-20261125` in the private SoundBox Logs directory.
+
 ## CDJ Unicode publication and progress — November24 late evening
 
 SONNY's actual 90-track USB attempt planned707 changes in14.869s and failed after

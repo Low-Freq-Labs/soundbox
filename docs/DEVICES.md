@@ -219,7 +219,8 @@ and Plus together on writable FAT32/exFAT. It preserves unrelated native records
 and playlists across rekordbox/SoundBox switching, including existing differences
 between the formats. Drops export selected new/changed inputs directly. Export
 opens playlist/folder checkboxes on the left and connected devices on the right;
-one target is preselected and several targets may be checked. One action queues
+a sole connected target is preselected; multiple targets start unchecked and
+several may be checked. One action queues
 those targets through the existing serialized exporters, with source/playlist and
 mount/UUID checks before each target. Cancellation/shutdown clear pending targets;
 iPod planning and commit stay guarded without an extra normal-action approval.

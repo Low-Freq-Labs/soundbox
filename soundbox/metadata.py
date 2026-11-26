@@ -40,6 +40,96 @@ UNKNOWN = "unknown"  # could not determine
 UNKNOWN_ARTIST = "Unknown Artist"
 _MAX_ARTIST_LEN = 60
 
+_FEATURE_MARKER = re.compile(r"\s+(?P<bracket>[([])?\b(?:feat(?:uring)?|ft)(?:\.\s*|\s+)", re.IGNORECASE)
+
+
+def cleanup_credit_pair(name: str, artist: str, *, registry=None) -> tuple[str, str]:
+    """Move an explicit featured artist into the title without losing credit.
+
+    Direct collaborations stay intact. A title prefix can supply the original
+    credit when the native artist was originally empty. Call before freezing
+    either desired native field; this function grants no write authority.
+    """
+    credited = artist
+    from_name = False
+    if not _FEATURE_MARKER.search(credited):
+        if not _FEATURE_MARKER.search(name):
+            return name, artist
+        candidate, _origin = derive_artist(name, artist)
+        if not _FEATURE_MARKER.search(candidate):
+            return name, artist
+        credited = candidate
+        from_name = True
+    marker = _FEATURE_MARKER.search(credited)
+    if marker is None:
+        return name, artist
+    primary = credited[:marker.start()].strip()
+    featured = credited[marker.end():].strip()
+    if marker['bracket']:
+        closing = ')' if marker['bracket'] == '(' else ']'
+        if not featured.endswith(closing):
+            return name, artist
+        featured = featured[:-1].rstrip()
+    if not primary or not featured:
+        return name, artist
+    if from_name and registry is not None and not editor_credits(name):
+        reverse = _flip_candidate(name)
+        if reverse and registry.is_trusted(reverse) and not registry.is_trusted(primary):
+            if ' - ' in name:
+                title = name.rsplit(' - ', 1)[0].strip()
+            else:
+                separators = list(_HYPHEN_SEP.finditer(name))
+                title = name[:separators[0].start()].strip() if len(separators) == 1 else name
+            return canonical_title_credits(title, registry), registry.canonical(reverse)
+    editors = editor_credits(name)
+    title = (name if editors and _fold(editors[-1][0]) != _fold(credited)
+             else neat_title(name, credited))
+    # Accept an existing ft/feat/featuring spelling in brackets or an edition
+    # credit, preserving its exact wording and position rather than duplicating.
+    escaped = re.escape(featured).replace(r"\ ", r"\s+")
+    existing = re.search(r"\b(?:feat(?:uring)?|ft)(?:\.\s*|\s+)" + escaped + r"(?!\w)", title, re.IGNORECASE)
+    if not existing:
+        title = f'{title} (feat. {featured})'
+    if registry is not None:
+        title = canonical_title_credits(title, registry)
+        primary = registry.canonical(primary)
+    return title, primary
+
+
+_CREDIT_SEPARATOR = re.compile(
+    r"(\s+(?:x|&|vs\.?|\+|w/)\s+|,\s*|\s+(?:feat(?:uring)?|ft)(?:\.\s*|\s+))", re.I)
+
+
+def _credit_parts(name: str) -> list[str]:
+    return _CREDIT_SEPARATOR.split(name)
+
+
+def _ambiguous_group(parts: list[str]) -> bool:
+    return any('&' in separator or ',' in separator for separator in parts[1::2])
+
+
+def _canonical_credit(name: str, canon: Mapping[str, str], components: Mapping[str, str],
+                      independent: frozenset[str], protected: frozenset[str]) -> str:
+    selected = canon.get(_fold(name)) or clean_artist(name)
+    if _fold(selected) in protected:
+        return selected
+    parts = _credit_parts(selected)
+    # Ampersands/commas also occur in indivisible group names. Require every
+    # constituent to have independent solo/x/feature evidence before changing
+    # any constituent; an explicit whole-group alias always stays whole.
+    if len(parts) == 1:
+        return components.get(_fold(selected)) or selected
+    if (_ambiguous_group(parts) and not all(_fold(part) in independent for part in parts[::2])):
+        return selected
+    if _fold(selected) == _fold(name):
+        parts = _credit_parts(name.strip())
+    for index in range(0, len(parts), 2):
+        part = parts[index]
+        replacement = components.get(_fold(part))
+        if replacement:
+            parts[index] = part[:len(part) - len(part.lstrip())] + replacement + part[len(part.rstrip()):]
+    return ''.join(parts)
+
 # Separator-ish junk an artist name sometimes carries on its edges (e.g. "Dennett_",
 # " - Dennett", "Dennett ~"). Trimmed from the ENDS only, never from inside a name.
 _JUNK_EDGE = r"[\s_\-–—|~]+"
@@ -67,11 +157,19 @@ class ArtistRegistry:
       • dedup: map any spelling of an artist to one canonical form (folder-safe).
       • rescue: for an Unknown track, find a known artist named in its title
         (survives junk chars, e.g. 'sicko mode (dennett_ flip)' -> 'Dennett').
-    Collabs are preserved (different string = different key). Never touches
+    Collaboration identities remain whole; proven constituent spellings share
+    their per-track majority across credits. Never touches
     rekordbox; a manual override always wins upstream in effective_artist."""
 
-    def __init__(self, canon_by_fold: dict[str, str], trusted_folds=frozenset()):
+    def __init__(self, canon_by_fold: dict[str, str], trusted_folds=frozenset(), *,
+                 cleanup_enabled: bool = True, aliases=None, components=None, independent=frozenset()):
         self._canon = canon_by_fold
+        self.cleanup_enabled = cleanup_enabled
+        self._explicit_aliases = dict(aliases or {})
+        self._components = dict(components or {})
+        self._independent = frozenset(independent)
+        self._protected_groups = frozenset(_fold(value) for value in self._explicit_aliases.values()
+                                          if len(_credit_parts(value)) > 1)
         # TRUSTED names: rekordbox-tagged artists + the user's own override values.
         # These are human-confirmed, so they can gate risky moves (the reversed
         # "TITLE - ARTIST" flip) that raw derived names must never gate — every
@@ -84,14 +182,21 @@ class ArtistRegistry:
         self._rescue_names = sorted({c for c in canon_by_fold.values() if len(c) >= 3}
                        | {k for k in canon_by_fold if len(k) >= 3},
                        key=len, reverse=True)
+        if not cleanup_enabled:
+            self._rescue_names = []
         self._rescue_re: re.Pattern[str] | None = None
 
     def canonical(self, name: str) -> str:
-        return self._canon.get(_fold(name)) or clean_artist(name)
+        if not self.cleanup_enabled:
+            return self.explicit_alias(name)
+        return _canonical_credit(name, self._canon, self._components, self._independent, self._protected_groups)
+
+    def explicit_alias(self, name: str) -> str:
+        return _explicit_alias(name, self._explicit_aliases)
 
     def names(self) -> list:
         """All canonical artist spellings (for pickers/completion)."""
-        return sorted(set(self._canon.values()), key=str.casefold)
+        return sorted({self.canonical(value) for value in self._canon.values()}, key=str.casefold)
 
     def is_trusted(self, name: str) -> bool:
         return _fold(name) in self._trusted
@@ -108,7 +213,7 @@ class ArtistRegistry:
         m = self._rescue_re.search(title)
         if not m:
             return None
-        return self._canon.get(_fold(m.group(1))) or m.group(1)
+        return self.canonical(m.group(1))
 
 
 @dataclass(frozen=True,slots=True)
@@ -117,12 +222,20 @@ class FrozenArtistRegistry:
     canon: Mapping[str,str]
     trusted: frozenset[str]
     rescue: re.Pattern[str] | None
+    cleanup_enabled: bool = True
+    aliases: Mapping[str, str] | None = None
+    components: Mapping[str, str] | None = None
+    independent: frozenset[str] = frozenset()
+    protected_groups: frozenset[str] = frozenset()
 
-    def canonical(self,name):return self.canon.get(_fold(name)) or clean_artist(name)
+    def canonical(self,name):
+        return (_canonical_credit(name, self.canon, self.components or {}, self.independent, self.protected_groups)
+                if self.cleanup_enabled else self.explicit_alias(name))
+    def explicit_alias(self,name):return _explicit_alias(name,self.aliases or {})
     def is_trusted(self,name):return _fold(name) in self.trusted
     def rescue_from_title(self,title):
         found=self.rescue.search(title) if title and self.rescue else None
-        return (self.canon.get(_fold(found.group(1))) or found.group(1)) if found else None
+        return self.canonical(found.group(1)) if found else None
 
 
 def freeze_registry(registry):
@@ -131,7 +244,9 @@ def freeze_registry(registry):
     if isinstance(registry,FrozenArtistRegistry):return registry
     regex=(re.compile(r"(?<![^\W_])("+'|'.join(re.escape(name) for name in registry._rescue_names)+r")(?![^\W_])",
                       re.IGNORECASE) if registry._rescue_names else None)
-    return FrozenArtistRegistry(MappingProxyType(dict(registry._canon)),frozenset(registry._trusted),regex)
+    return FrozenArtistRegistry(MappingProxyType(dict(registry._canon)),frozenset(registry._trusted),regex,
+        registry.cleanup_enabled,MappingProxyType(dict(registry._explicit_aliases)),
+        MappingProxyType(dict(registry._components)),registry._independent,registry._protected_groups)
 
 
 def registry_context_equal(first, second):
@@ -140,31 +255,44 @@ def registry_context_equal(first, second):
         return True
     if isinstance(first, ArtistRegistry) and isinstance(second, ArtistRegistry):
         return (first._canon == second._canon and first._trusted == second._trusted
-                and first._rescue_names == second._rescue_names)
+                and first._rescue_names == second._rescue_names
+                and first.cleanup_enabled == second.cleanup_enabled
+                and first._explicit_aliases == second._explicit_aliases
+                and first._components == second._components and first._independent == second._independent)
     if isinstance(first, FrozenArtistRegistry) and isinstance(second, FrozenArtistRegistry):
         return (first.canon == second.canon and first.trusted == second.trusted
+                and first.cleanup_enabled == second.cleanup_enabled and (first.aliases or {}) == (second.aliases or {})
+                and (first.components or {}) == (second.components or {}) and first.independent == second.independent
                 and (first.rescue.pattern if first.rescue else None)
                     == (second.rescue.pattern if second.rescue else None))
     return False
 
 
-def build_registry(base_artists, trusted_names=(), aliases=None) -> ArtistRegistry:
+def build_registry(base_artists, trusted_names=(), aliases=None, *, cleanup_enabled=True) -> ArtistRegistry:
     """Fold all real (non-Unknown) artist strings into canonical spellings. The
     winning spelling per artist is the most common one seen (tiebreak: longer,
     then alphabetical — deterministic). An artist can therefore never appear
     under two spellings — CAPS/lowercase merge to whichever has more tracks.
 
-    `trusted_names` = human-confirmed artists (rekordbox tags, user overrides) —
-    counted per-occurrence like the rest (so the user's chosen spelling carries
-    weight) AND recorded as the trusted set that gates the reversed-title flip.
+    `base_artists` supplies one selected credit per track (manual before
+    automatic). Each constituent votes once per track. `trusted_names` supplies
+    confidence/fallback names, never a second vote for the same source row.
     `aliases` = user merges {variant: target} applied on top (typo dedup)."""
+    if not cleanup_enabled:
+        names = [*base_artists, *trusted_names, *(aliases or {}).values()]
+        return ArtistRegistry({name: name for name in names if name},
+                              cleanup_enabled=False, aliases=aliases)
     groups: dict[str, Counter] = {}
+    component_groups: dict[str, Counter] = {}
+    independent = set()
     trusted_folds = set()
+    base_artists = list(base_artists)
+    trusted_names = list(trusted_names)
     for a in trusted_names:
         ca = clean_artist(a)
         if ca and ca != UNKNOWN_ARTIST:
             trusted_folds.add(_fold(ca))
-    for a in list(base_artists) + list(trusted_names):
+    for a in base_artists:
         ca = clean_artist(a)
         # A name with no letters ("2021", "3", "140") is title junk that leaked
         # through derivation, never an artist — keeping it would poison both
@@ -173,11 +301,39 @@ def build_registry(base_artists, trusted_names=(), aliases=None) -> ArtistRegist
         if not ca or ca == UNKNOWN_ARTIST or not re.search(r"[^\W\d_]", ca):
             continue
         groups.setdefault(_fold(ca), Counter())[ca] += 1
+        parts = _credit_parts(ca)
+        seen = set()
+        for component in parts[::2]:
+            component = clean_artist(component)
+            fold = _fold(component)
+            if (not component or fold in seen or not re.search(r"[^\W\d_]", component)):
+                continue
+            seen.add(fold)
+            component_groups.setdefault(fold, Counter())[component] += 1
+            if not _ambiguous_group(parts):
+                independent.add(fold)
+    for a in trusted_names:
+        ca = clean_artist(a)
+        if ca and ca != UNKNOWN_ARTIST and re.search(r"[^\W\d_]", ca):
+            groups.setdefault(_fold(ca), Counter()).setdefault(ca, 0)
     canon: dict[str, str] = {}
     for fold, ctr in groups.items():
         canon[fold] = sorted(ctr.items(), key=lambda kv: (-kv[1], -len(kv[0]), kv[0]))[0][0]
+    components = {fold: sorted(ctr.items(), key=lambda kv: (-kv[1], -len(kv[0]), kv[0]))[0][0]
+                  for fold, ctr in component_groups.items()}
     _resolve_aliases(canon,trusted_folds,aliases or {})
-    return ArtistRegistry(canon, trusted_folds)
+    _resolve_aliases(components,set(),aliases or {})
+    return ArtistRegistry(canon, trusted_folds, cleanup_enabled=cleanup_enabled, aliases=aliases,
+                          components=components, independent=independent)
+
+
+def _explicit_alias(name: str, aliases: Mapping[str, str]) -> str:
+    """Keep-originals mode follows only the user's exact saved alias edges."""
+    seen = set()
+    while name in aliases and name not in seen:
+        seen.add(name)
+        name = aliases[name]
+    return name
 
 
 def _resolve_aliases(canon, trusted, aliases):
@@ -320,6 +476,10 @@ _GENERIC = {
     "official", "deluxe", "special", "limited", "anniversary", "expanded",
     "standard", "alternate", "alternative", "bonus", "international",
 }
+# Delivery/release labels can follow a genuine named remix. They describe the
+# release rather than a later creator, but remain valid words inside a name
+# such as "DJ Ride". Do not use these to reject ordinary tagged artist names.
+_RELEASE_DESCRIPTORS = {"ep", "dj", "streaming"}
 
 
 def _ok(name: str) -> bool:
@@ -338,11 +498,63 @@ def editor_credits(title: str) -> tuple[tuple[str, str], ...]:
         while words and words[-1].casefold() in _STYLE:
             words.pop()
         candidate = " ".join(words)
-        generic = all(word.casefold() in _GENERIC or re.fullmatch(r"\d+(?:st|nd|rd|th)?", word)
+        generic = all(word.casefold() in _GENERIC
+                      or kind.casefold() in {"version", "edition"} and word.casefold() in _RELEASE_DESCRIPTORS
+                      or re.fullmatch(r"\d+(?:st|nd|rd|th)?", word)
                       for word in words)
         if _ok(candidate) and not generic:
             out.append((candidate, kind.casefold()))
     return tuple(out)
+
+
+def _canonical_credit_fragment(fragment, registry, *, trailing_kind=False):
+    words = list(re.finditer(r'\S+', fragment))
+    first = 0; last = len(words)
+    while first < last and words[first][0].casefold() in _STYLE:
+        first += 1
+    while last > first and (words[last - 1][0].casefold() in _STYLE
+            or trailing_kind and re.fullmatch(_EDIT_KW, words[last - 1][0], re.I)):
+        last -= 1
+    if first == last:
+        return fragment
+    start, end = words[first].start(), words[last - 1].end()
+    original = fragment[start:end]
+    aliased = registry.explicit_alias(original)
+    if aliased == original:
+        parts = _credit_parts(original)
+        for index in range(0, len(parts), 2):
+            value = parts[index]
+            replacement = registry.explicit_alias(value.strip())
+            parts[index] = value[:len(value) - len(value.lstrip())] + replacement + value[len(value.rstrip()):]
+        aliased = ''.join(parts)
+    replacement = registry.canonical(aliased)
+    # Title credit spelling/ornamentation is musical text. Only letter case or
+    # an explicit alias edge may change it; artist-edge junk trimming does not
+    # authorize removing a quote/underscore from a title's named version.
+    if replacement.casefold() != aliased.casefold():
+        replacement = aliased
+    return fragment[:start] + replacement + fragment[end:]
+
+
+def canonical_title_credits(title, registry):
+    """Canonicalize explicit creator spans, never arbitrary song-title text."""
+    if registry is None or not registry.cleanup_enabled:
+        return title
+    feature = re.compile(r'\b(?:feat(?:uring)?|ft)(?:\.\s*|\s+)([^()\[\]{}]+)', re.I)
+    def replace_feature(match):
+        start, end = match.span(1)
+        return (match[0][:start - match.start()]
+                + _canonical_credit_fragment(match[1], registry, trailing_kind=True)
+                + match[0][end - match.start():])
+    title = feature.sub(replace_feature, title)
+    def replace_editor(match):
+        if not editor_credits(match[0]):
+            return match[0]
+        start, end = match.span(1)
+        return (match[0][:start - match.start()]
+                + _canonical_credit_fragment(match[1], registry)
+                + match[0][end - match.start():])
+    return _EDITOR_RE.sub(replace_editor, title)
 
 
 # Junk that trails an artist name at the END of a "TITLE - ARTIST junk" string
@@ -447,7 +659,7 @@ _MIXDOWN_GROUP = (
 )
 _MIXDOWN_PATTERN = (
     rf"(?:{_MIXDOWN_GROUP}|(?<!\w){_MIXDOWN_TOKEN}"
-    rf"(?:[\s_-]+{_MIXDOWN_TOKEN})*\s*$)"
+    rf"(?:[\s_-]+{_MIXDOWN_TOKEN})*[\s_]*$)"
 )
 
 _VERSION_TOKEN = r"v\s*\.?\s*\d+(?:\.\d+)?"
@@ -636,19 +848,25 @@ def tidy_title(name: str, junk=None) -> str:
 
 
 def effective_title(track_id: str, name: str, artist: str,
-                    titles: "dict[str, str] | None" = None, junk=None) -> str:
+                    titles: "dict[str, str] | None" = None, junk=None, *, cleanup=True,
+                    source_artist: str | None = None, registry=None) -> str:
     """The title to display/export: a manual override wins verbatim, else the
     raw name with any redundant edge-artist stripped and the dead-simple
     garbage tidied away."""
     if titles and track_id in titles and titles[track_id].strip():
         return titles[track_id].strip()
+    if not cleanup:
+        return name
+    name, _primary = cleanup_credit_pair(name, artist if source_artist is None else source_artist,
+                                       registry=registry)
+    name = canonical_title_credits(name, registry)
     return tidy_title(neat_title(name, artist), junk)
 
 
 def effective_artist(track_id: str, name: str, artist_tag: str,
                      overrides: dict | None = None, derive: bool = True,
                      registry: ArtistRegistry | FrozenArtistRegistry | None = None,
-                     stem: str = "") -> str:
+                     stem: str = "", *, cleanup=True) -> str:
     """The artist to actually use: a manual override wins, else auto-derivation
     (or the raw tag if derive is off). With a registry: every result — INCLUDING
     overrides — is canonicalized to the majority spelling, so one artist can
@@ -656,10 +874,17 @@ def effective_artist(track_id: str, name: str, artist_tag: str,
     strings stay distinct). Unknowns are rescued from a known artist in the
     title, and a derived name that is NOT trusted flips to the right side of
     'TITLE - ARTIST' when THAT side IS trusted (tag/override-confirmed)."""
+    cleanup = cleanup and (registry is None or registry.cleanup_enabled)
     if overrides and track_id in overrides and overrides[track_id].strip():
         ov = overrides[track_id].strip()
-        return registry.canonical(ov) if registry else ov
+        return (registry.canonical(ov) if cleanup else registry.explicit_alias(ov)) if registry else ov
+    if not cleanup:
+        return registry.explicit_alias(artist_tag) if registry else artist_tag
+    if derive or _FEATURE_MARKER.search(artist_tag):
+        name, artist_tag = cleanup_credit_pair(name, artist_tag, registry=registry)
     base, origin = derive_artist(name, artist_tag) if derive else (artist_tag, TAG)
+    if derive:
+        _title, base = cleanup_credit_pair(name, base)
     if registry is None:
         return base
     if base and base != UNKNOWN_ARTIST:

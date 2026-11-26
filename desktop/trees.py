@@ -82,6 +82,11 @@ class CellEditDelegate(QStyledItemDelegate):
 
     def eventFilter(self, editor, event):
         event_type = event.type()
+        if event_type == QEvent.KeyPress and event.key() in (Qt.Key_Tab, Qt.Key_Backtab):
+            owner = getattr(editor, '_inline_draft_owner', None)
+            if owner is not None and owner.tab(editor,
+                    event.key() == Qt.Key_Backtab or bool(event.modifiers() & Qt.ShiftModifier)):
+                return True
         if event_type == QEvent.KeyPress and event.key() == Qt.Key_Escape:
             owner = getattr(editor, '_inline_draft_owner', None)
             if owner is not None:owner.cancelled(editor)

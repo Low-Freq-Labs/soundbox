@@ -300,8 +300,9 @@ it on launch. Live picker motion and Cancel leave the icon unchanged. The suppli
 SVG's letter outlines, dark tile, transparency and authored highlights are
 preserved. The tiny white streak in the upper gray shine now matches its gray
 surroundings; other1024px pixels/alpha remain exact.
-Sonny's original-SB icon replaces the earlier bar design; its default PNG/ICNS
-are rendered from that same vector. Only the named accent shapes/border change. The
+Sonny's original-SB icon replaces the earlier bar design. The tracked purple
+PNG/ICNS remain authored references; builds render the default white bundle icon
+from that same vector. Only the named accent shapes/border change. The
 saved icon also persists after exit using NSWorkspace custom-icon metadata on
 the app root. Contents, the signed ICNS, executable and signing identity remain
 unchanged. Isolated/development runs never customize the installed app.

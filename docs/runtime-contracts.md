@@ -134,6 +134,22 @@ proofs remain required. Pure cue-revision reuse keys every freshly read raw cell
 including opaque columns/BLOBs and exact scalar types, within bounded process
 memory; it supplies no source observation, cached row or permission.
 
+Metadata may group a bounded FIFO prefix of existing independently authorized
+field operations under one continuing source owner. Production groups contain
+at most eight fields. Each exact request must be durably admitted before its
+ordinary native apply, retaining its fresh guards, verified baseline, journal
+and per-operation recovery receipt. Grouping introduces no bulk SQL profile,
+cross-lease source proof or backup exemption. One complete fresh readback must
+verify every grouped field, counterpart and exact source/song binding before ACK.
+The worker prepares the selected scalar index; GUI ACK processing must not scan
+the complete Library. Pure ACK transformations stage without yielding, restore
+the prior GUI roots before one ordinary canonical commit, and publish the complete
+verified Library only after durable success. Source/repository replacement and
+newer intentions retain their existing fences. Failed apply/readback/storage
+keeps unresolved requests and receipts; receipt compaction advances only the
+actually completed prefix. Losing RAM grouping on restart falls back to the
+ordinary durable request/receipt replay, never assumed group success.
+
 Eligible source edits dispatch on the next event turn when the shared writer
 becomes available; stale contention timers must not add a fixed wait. Actual
 native-owner/failure deadlines retain their retry backoff. Successful saves reuse
@@ -1458,6 +1474,9 @@ derivation semantics change. Invalidating rows must also retire their checkpoint
 key; artwork policy/visibility and source authority remain independently fresh.
 
 Desktop accent roles come from `desktop.theme`, persisted as `settings.theme_accent`.
+Fresh settings use white with black on-accent lettering. Reset restores white;
+existing saved accent and lettering choices remain independently owned, without
+guessing whether an older White lettering setting was implicit or deliberate.
 Use those roles for UI chrome rather than fixed purple values. Semantic transport
 feedback stays fixed: green PLAY and orange held CUE, with gray idle rings. The supplied SVG
 wordmark stays in its 270×55 header slot; only BOX follows the accent. Waveform

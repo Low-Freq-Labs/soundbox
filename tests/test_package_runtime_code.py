@@ -1,4 +1,5 @@
 """Archive checks prove capabilities and code, including hidden PYZ contents."""
+import hashlib
 import json
 from pathlib import Path
 import plistlib
@@ -28,19 +29,30 @@ class PackagedRuntimeCode(unittest.TestCase):
     def verify(self):
         return verify_runtime_code(SimpleNamespace(toc=self.code, extract=self.code.__getitem__), root=self.root)
 
-    def test_direct_bundle_icon_bytes_participate_in_source_fingerprint(self):
+    def test_bundle_icon_generator_and_vector_participate_in_source_fingerprint(self):
         root = Path(__file__).resolve().parents[1]
-        icon = root / 'assets/Soundbox.icns'
-        self.assertIn('assets/Soundbox.icns', (root / 'Soundbox.spec').read_text())
+        self.assertIn('scripts/build_assets.py', (root / 'build_app.sh').read_text())
+        self.assertIn('icon=bundle_icon', (root / 'Soundbox.spec').read_text())
         baseline = source_fingerprint(root)
         read = Path.read_bytes
-        def changed(path):
-            data = read(path)
-            return data + b'changed bundle icon' if path == icon else data
-        # Simulate a changed direct package input without touching the real icon.
-        with mock.patch.object(Path, 'read_bytes', changed):
-            self.assertNotEqual(source_fingerprint(root), baseline)
+        for relative in ('assets/soundbox-original-sb-icon.svg', 'desktop/theme.py',
+                         'scripts/build_assets.py', 'scripts/build_notices.py',
+                         'assets/licenses/LGPL-3.0-only.txt'):
+            target = root / relative
+            def changed(path):
+                data = read(path)
+                return data + b'changed build input' if path == target else data
+            with self.subTest(path=relative), mock.patch.object(Path, 'read_bytes', changed):
+                self.assertNotEqual(source_fingerprint(root), baseline)
         self.assertEqual(source_fingerprint(root), baseline)
+
+    def test_unused_virtual_keyboard_is_excluded_without_losing_cocoa_input(self):
+        from scripts.build_composition import runtime_asset
+        for name in ('PySide6/Qt/plugins/platforminputcontexts/libqtvirtualkeyboardplugin.dylib',
+                     'QtVirtualKeyboard', 'PySide6/Qt/lib/QtVirtualKeyboardQml.framework/Versions/A/QtVirtualKeyboardQml'):
+            self.assertFalse(runtime_asset(name))
+        for name in ('PySide6/Qt/plugins/platforms/libqcocoa.dylib', 'QtGui', 'QtMultimedia'):
+            self.assertTrue(runtime_asset(name))
 
     def test_every_required_capability_and_nested_code_match_despite_bundle_paths(self):
         self.assertEqual(self.verify(), sorted(REQUIRED_RUNTIME_MODULES))
@@ -121,12 +133,26 @@ class PackagedRuntimeCode(unittest.TestCase):
         (app / 'Contents/Info.plist').write_bytes(plistlib.dumps(dict(
             SoundboxBuildProfile='personal', SoundboxSourceFingerprint='a'*64,
             SoundboxModules=[entry['id'] for entry in manifest['modules']])))
+        from scripts.build_notices import FORMAT
+        notices = resources / 'licenses/runtime'; notices.mkdir(parents=True)
+        records = {}
+        for name in ('Python-LICENSE.txt', 'GPL-3.0-only.txt', 'LGPL-3.0-only.txt'):
+            raw = ('Generated ' + name).encode()
+            (notices / name).write_bytes(raw)
+            records[name] = hashlib.sha256(raw).hexdigest()
+        (notices / 'inventory.json').write_text(json.dumps(dict(
+            format=FORMAT, distributions=[], sha256=records)))
         pyz = SimpleNamespace(toc={'soundbox.providers': None, 'soundbox.artwork': None,
                                   'soundbox_personal': None, 'yt_dlp': None})
         archive = SimpleNamespace(open_embedded_archive=lambda _name: pyz)
         with mock.patch('PyInstaller.archive.readers.CArchiveReader', return_value=archive), \
                 mock.patch('scripts.build_composition.verify_startup_scripts', return_value={}), \
                 mock.patch('scripts.build_composition.verify_runtime_code', return_value=[]):
+            inventory = notices / 'inventory.json'; original_inventory = inventory.read_bytes()
+            inventory.unlink()
+            with self.assertRaises(FileNotFoundError):
+                inspect_artifact(app, 'personal')
+            inventory.write_bytes(original_inventory)
             for relative in ('Resources/pyrekordbox/__main__.py',
                              'Frameworks/pyrekordbox/__main__.py',
                              *(f'Resources/sqlalchemy/dialects/{name}/__init__.py'

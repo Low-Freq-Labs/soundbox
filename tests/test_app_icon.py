@@ -25,8 +25,8 @@ class ApplicationIcon(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
-    def test_default_is_exact_and_other_colors_preserve_alpha_and_neutral_frame(self):
-        source = app_icon.accented_image(theme.DEFAULT_ACCENT)
+    def test_authored_purple_is_exact_and_saved_colors_preserve_alpha_and_neutral_frame(self):
+        source = app_icon.accented_image('#7b2fbe')
         original = pixels(source)
         ys,xs=np.nonzero(original[:,:,3])
         self.assertGreaterEqual(min(xs.min(),ys.min()),64)
@@ -46,6 +46,9 @@ class ApplicationIcon(unittest.TestCase):
         path = Path(__file__).parents[1]/'assets/icon_1024.png'
         np.testing.assert_array_equal(original, pixels(QImage(str(path)).convertToFormat(
             QImage.Format_RGBA8888)))
+        fresh = app_icon.accented_image(theme.DEFAULT_ACCENT)
+        self.assertEqual(fresh.pixelColor(round((128+18)*1024/292),
+                                         round((3+18)*1024/292)).name(), '#ffffff')
 
     def test_vector_border_and_lettering_follow_accent_and_highlights_survive(self):
         path = Path(__file__).parents[1]/'assets/soundbox-original-sb-icon.svg'

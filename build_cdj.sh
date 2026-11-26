@@ -3,7 +3,15 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 ./.venv/bin/python scripts/check_cdj_vendor.py
-CDJ_KIT="$PWD/soundbox-cdj-ref/toolchain-1.99"
+CDJ_KIT="${SOUNDBOX_RUST_KIT:-$PWD/soundbox-cdj-ref/toolchain-1.99}"
+if [ ! -x "$CDJ_KIT/install/bin/cargo" ]; then
+  echo "Set SOUNDBOX_RUST_KIT to the pinned Rust kit described in docs/test-release-gate.md." >&2
+  exit 2
+fi
+case "$("$CDJ_KIT/install/bin/rustc" --version)" in
+  "rustc 1.99.0 "*) ;;
+  *) echo "SoundBox requires the pinned Rust 1.99.0 toolchain." >&2; exit 2 ;;
+esac
 export CARGO_HOME="$CDJ_KIT/cargo-home"
 export CARGO_TARGET_DIR="$PWD/build/cdj"
 export RUSTC="$CDJ_KIT/install/bin/rustc"

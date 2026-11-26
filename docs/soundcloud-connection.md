@@ -93,7 +93,9 @@ likes/unlikes, reposts or edits tracks through this connection.
 
 Connecting does not clear misses, replace manually chosen artwork, clear blocks,
 or force a library-wide fetch. Existing per-track Fetch/Choose commands remain
-explicit. New uncached tracks use the connected index automatically.
+explicit. When automatic artwork is enabled, new uncached tracks use the connected
+index automatically. Fresh setup leaves that independent artwork option off;
+manual Fetch and Choose remain available.
 
 Dubplate seller/dealer/shop/trader name and handle patterns are excluded from
 likes, general results, artist suggestions, previews, direct URL fetching and

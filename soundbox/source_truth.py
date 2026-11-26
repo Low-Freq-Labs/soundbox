@@ -14,7 +14,7 @@ from types import MappingProxyType
 from typing import Mapping, Sequence
 from uuid import uuid4
 
-from . import metadata
+from . import metadata, metadata_cleanup_policy
 from .paths import decode_location
 
 TARGETS='source_truth_targets'
@@ -62,6 +62,7 @@ def capture(library,*,titles,artists,aliases,settings):
     payload=dict(format=_FORMAT,scope=scope(library),tracks=tracks,titles=titles,artists=artists,aliases=aliases,
         rules_off=metadata.normalize_title_rules_off(settings.get('title_rules_off')),
         words=settings.get('title_words',[]),info=settings.get('track_info',{}))
+    payload['cleanup_mode']=metadata_cleanup_policy.choice_for(settings,library)
     raw=_encode(payload)
     if len(raw)>_MAX_BYTES:raise ValueError('Frozen source truth exceeds its metadata safety bound')
     return raw
@@ -74,14 +75,20 @@ def build(raw,*,migration_id=None,include_equal=False):
     if data.get('format')!=_FORMAT or not isinstance(data.get('tracks'),list) or len(data['tracks'])>_MAX_TRACKS:
         raise ValueError('Invalid frozen source metadata inventory')
     tracks=data['tracks'];titles=data['titles'];artists=data['artists'];aliases=data['aliases']
+    cleanup_mode=data.get('cleanup_mode','clean')
+    if type(cleanup_mode) is not str or cleanup_mode not in metadata_cleanup_policy.MODES:
+        raise ValueError('Invalid frozen metadata cleanup choice')
     for values in (titles,artists,aliases):
         if not isinstance(values,dict) or any(type(k) is not str or type(v) is not str for k,v in values.items()):
             raise ValueError('Invalid frozen source curation')
     derivation=data.get('derivation',{})
-    def inputs(track):return derivation.get(_sha([data['scope'],track['local_id'],track['native_id'],track['uuid'],track['path']]),track)
-    bases=[metadata.derive_artist(inputs(t)['name'],inputs(t)['artist'])[0] for t in tracks]
+    def inputs(track):
+        return derivation.get(_sha([data['scope'],track['local_id'],track['native_id'],track['uuid'],track['path']]),track)
+    bases=[(artists[t['local_id']].strip() if artists.get(t['local_id'],'').strip() else
+            metadata.derive_artist(inputs(t)['name'],inputs(t)['artist'])[0]
+            if cleanup_mode=='clean' else inputs(t)['artist']) for t in tracks]
     trusted=[inputs(t)['artist'] for t in tracks if inputs(t)['artist']]+[value for value in artists.values() if value.strip()]
-    registry=metadata.build_registry(bases,trusted,aliases)
+    registry=metadata.build_registry(bases,trusted,aliases,cleanup_enabled=cleanup_mode=='clean')
     junk=metadata.junk_patterns(data['rules_off'],data['words'])
     native_ids=Counter(t['native_id'] for t in tracks if t['uuid'])
     uuids=Counter(t['uuid'] for t in tracks if t['uuid'])
@@ -93,17 +100,26 @@ def build(raw,*,migration_id=None,include_equal=False):
     for track in tracks:
         local=track['local_id']
         derived=inputs(track)
+        pair=metadata.cleanup_credit_pair(derived['name'],derived['artist'],registry=registry) if cleanup_mode=='clean' else None
+        old_base=('title_base' in derived and (pair is None or pair==(derived['name'],derived['artist'])))
         if local in local_ids:raise ValueError('Duplicate frozen logical track identity')
         local_ids.add(local)
         display_artist=metadata.effective_artist(local,titles.get(local) or derived['name'],derived['artist'],
             artists,registry=registry,stem=decode_location(track['location_uri']).stem)
         title=(titles[local].strip() if titles.get(local,'').strip() else metadata.tidy_title(derived['title_base'],junk)
-               if 'title_base' in derived else metadata.effective_title(local,derived['name'],display_artist,titles,junk))
+               if old_base else metadata.effective_title(local,derived['name'],display_artist,titles,junk,
+                    source_artist=derived['artist'],registry=registry))
         info=deepcopy(data['info'].get(local,{}))
+        if cleanup_mode=='original':
+            title,display_artist=metadata_cleanup_policy.original_values(local,track['name'],track['artist'],
+                titles=titles,artists=artists,aliases=aliases,info=info)
+        elif not titles.get(local,'').strip():
+            title=metadata.canonical_title_credits(title,registry)
         if 'title' in info:title=info.pop('title')
         if 'artist' in info:display_artist=info.pop('artist')
         if type(title) is not str or type(display_artist) is not str:raise ValueError('Visible metadata overlay must be text')
-        artist='' if display_artist==metadata.UNKNOWN_ARTIST else display_artist
+        literal_original=(cleanup_mode=='original' and display_artist==track['artist'])
+        artist='' if display_artist==metadata.UNKNOWN_ARTIST and not literal_original else display_artist
         differences=[field for field,current,desired in (('title',track['name'],title),('artist',track['artist'],artist))
                      if current!=desired]
         issue=('Native identity is unavailable' if not track['uuid'] else

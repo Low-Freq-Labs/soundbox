@@ -126,6 +126,31 @@ class LiveTheme(unittest.TestCase):
         self.assertEqual(self.frame.settings['theme_text_custom'], '#123456')
         global_style.assert_not_called()
 
+    def test_fresh_white_default_has_black_lettering_and_reset_keeps_saved_choices(self):
+        from desktop.app import _DEFAULT_SETTINGS
+        self.frame.settings = copy.deepcopy(_DEFAULT_SETTINGS)
+        self.frame._apply_theme_color(self.frame.settings['theme_accent'])
+        self.app.processEvents()
+        self.assertEqual((theme.PURPLE, theme.ON_ACCENT), ('#ffffff', '#000000'))
+        self.assertEqual(self.fill(self.frame.primary), '#ffffff')
+        self.assertEqual(self.frame.primary.palette().color(QPalette.ButtonText), QColor('#000000'))
+        for mode, lettering in (('white', '#ffffff'), ('black', '#000000'), ('custom', '#123456')):
+            with self.subTest(mode=mode):
+                self.frame.settings.update(theme_accent='#7b2fbe', theme_text_mode=mode,
+                                           theme_text_custom='#123456')
+                self.frame._apply_theme_color(self.frame.settings['theme_accent'])
+                self.assertEqual((theme.PURPLE, theme.ON_ACCENT), ('#7b2fbe', lettering))
+                self.frame._schedule_settings_save.reset_mock()
+                self.frame._reset_theme_color()
+                self.assertEqual((theme.PURPLE, theme.ON_ACCENT), ('#ffffff', lettering))
+                self.assertEqual(self.frame.settings['theme_text_mode'], mode)
+                self.assertEqual(self.frame.settings['theme_text_custom'], '#123456')
+                self.frame._schedule_settings_save.assert_called_once_with(
+                    'theme_accent', 'theme_text_mode', 'theme_text_custom')
+        self.frame.settings.pop('theme_text_mode')
+        self.frame._reset_theme_color()
+        self.assertEqual((theme.PURPLE, theme.ON_ACCENT), ('#ffffff', '#000000'))
+
     def test_hidden_controls_catch_up_on_show_and_cue_inline_color_is_preserved(self):
         hidden = QFrame(); layout = QVBoxLayout(hidden)
         button = QPushButton(''); button.setObjectName('Primary'); layout.addWidget(button)

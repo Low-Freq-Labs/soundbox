@@ -9,12 +9,13 @@ from uuid import uuid4
 
 from PySide6.QtCore import QObject,QTimer
 
-from soundbox import alias_intents,engine,metadata,metadata_provenance as provenance,mutation_domain,shared_imports,source_truth
+from soundbox import alias_intents,engine,metadata,metadata_cleanup_policy,metadata_provenance as provenance,mutation_domain,shared_imports,source_truth
 from soundbox import rekordbox_metadata_store as native
 from soundbox.rekordbox_write import WriteProofError,assert_rekordbox_closed
 from soundbox.state_repository import VerificationChanged
 from .task_owner import TaskOwner
 from .workers import OneShotTask
+from .metadata_batch import MetadataReadbackGroup, prefix as batch_prefix, staged_patch
 from .tag_controller import device_blocks_library_work
 
 KEY='pending_metadata_edits'
@@ -38,9 +39,12 @@ def _matches_track(job,track):
 
 
 class MetadataController(QObject):
-    def __init__(self,window,*,store_factory=None,loader=None):
+    def __init__(self,window,*,store_factory=None,loader=None,batch_size=None):
         super().__init__(window);self.window=window;self.tags=window.tag_controller
         self.factory=store_factory;self.loader=loader
+        self.batch_size=(8 if store_factory is None else 1) if batch_size is None else batch_size
+        if type(self.batch_size) is not int or not 1<=self.batch_size<=32:raise ValueError('Invalid metadata group size')
+        self._readback_group=None
         self.closing=False;self.not_before=0.0
         self.tasks=TaskOwner(self);self._truth_index=None
         self._truth_index_owner=None
@@ -56,6 +60,7 @@ class MetadataController(QObject):
         self._state_commit_pending=False;self._state_commit_error='';self._state_commit_token=None
         self._attention_message=''
         self._retirement_ack=None
+        self._retirement_group_ack=None
         self.timer=QTimer(self);self.timer.setSingleShot(True);self.timer.timeout.connect(self.pump)
         self.tags.idle.connect(self.schedule);self.tags.changed.connect(self.schedule)
 
@@ -86,6 +91,7 @@ class MetadataController(QObject):
             if self._state_commit_token is not token:return
             self._state_commit_token=None;self._state_commit_pending=False;self._state_commit_error=message
             self.timer.stop();self.status(message,attention=True)
+            self._release_readback_group()
         try:accepted=commit(replacements,removals,saved,rejected)
         except (OSError,ValueError,RuntimeError) as exc:
             rejected(exc);return False
@@ -197,6 +203,19 @@ class MetadataController(QObject):
         w=self.window;ledger=w.settings.get(ACKS,[])
         if (self.closing or w._shutting_down or w._state_maintenance or getattr(w,'_state_publication',False)
                 or self._background_state_busy() or self._retirement_error() or not ledger or ledger[0]['error']):return
+        if self._retirement_group_ack is not None:
+            captured,count,error=self._retirement_group_ack;self._retirement_group_ack=None
+            if ledger[:len(captured)]!=captured:return
+            updated=ledger[count:]
+            if error:updated=[{**updated[0],'error':error},*updated[1:]]
+            before=w.settings;w.settings={**before,ACKS:updated}
+            def committed():
+                if error:self.status('Metadata receipt retirement needs attention',attention=True)
+                else:self.schedule()
+            self._commit_background_state({'settings':before},{('settings',ACKS):updated},
+                committed=committed,failed=lambda:self.status('Metadata receipt retirement needs storage attention',attention=True),
+                message='Metadata receipt retirement needs storage attention')
+            return
         if self._retirement_ack is not None:
             captured,result=self._retirement_ack;self._retirement_ack=None
             if ledger[0]!=captured:return
@@ -213,6 +232,27 @@ class MetadataController(QObject):
                 committed=committed,failed=failed,message='Metadata receipt retirement needs storage attention')
             return
         if self.tasks.pending:return
+        selected=[]
+        for row in ledger[:self.batch_size]:
+            if row['error'] or (row['entry']['source'],row['entry']['library_id'])!=(ledger[0]['entry']['source'],ledger[0]['entry']['library_id']):break
+            selected.append(row)
+        if len(selected)>1:
+            captured=deepcopy(selected);epoch=self._truth_epoch()
+            def retire():
+                count=0
+                for row in captured:
+                    try:native.retire_acknowledged_receipt(self.tags.data_root,row['entry'])
+                    except Exception as exc:return count,str(exc)
+                    count+=1
+                return count,''
+            worker=OneShotTask(retire,log_label='Acknowledged metadata group receipt retirement')
+            def completed(task):
+                if self._truth_epoch()!=epoch or w.settings.get(ACKS,[])[:len(captured)]!=captured:return
+                count,error=(0,str(task.result)) if isinstance(task.result,Exception) else task.result
+                self._retirement_group_ack=(captured,count,error)
+                if self._background_state_busy() or getattr(w,'_state_publication',False):self.schedule()
+                else:self._resume_receipt_retirement()
+            self.tasks.adopt(worker,completed);worker.start();return
         captured=deepcopy(ledger[0]);entry=captured['entry']
         worker=OneShotTask(lambda:native.retire_acknowledged_receipt(self.tags.data_root,entry),
                            log_label='Acknowledged metadata receipt retirement')
@@ -226,8 +266,57 @@ class MetadataController(QObject):
 
     def _background_state_busy(self):
         w=self.window
-        return bool(self.tags.source_job_owned or self.tags.prep_priority or w._refresh_worker is not None
+        return bool(self.tags.source_job_owned and not self._owns_group_source() or self.tags.prep_priority or w._refresh_worker is not None
                     or device_blocks_library_work(w))
+
+    def _owns_group_source(self):
+        group=self._readback_group
+        return bool(group and group.reserved and getattr(self.tags,'_source_ack_tokens',None)=={group.token}
+                    and not self.tags.busy and not getattr(self.tags,'checking',False)
+                    and not self.tags.state_commit_owned)
+
+    def _release_readback_group(self):
+        group=self._readback_group;self._readback_group=None
+        if group is not None and group.staging and group.stage_before is not None:
+            for name,value in group.stage_before.items():setattr(self.window,name,value)
+        if group is not None and group.reserved:self.tags.release_source_ack(group.token)
+
+    def _reserve_readback_group(self,group):
+        if not group.reserved:
+            self.tags.reserve_source_ack(group.token);group.reserved=True
+
+    def _group_continuation(self,group):
+        """Capture only complete consecutive frozen targets in this FIFO prefix."""
+        w=self.window;plan=w.settings.get(source_truth.MIGRATION)
+        if not plan or plan.get('format')==_BUILDING or not plan.get('active'):return None
+        targets=w.settings.get(source_truth.TARGETS,{})
+        remaining=list(group.jobs);rows=[]
+        for key in plan['order'][plan['cursor']:]:
+            row=targets[key]
+            if len(remaining)<len(row['fields']):break
+            selected=remaining[:len(row['fields'])]
+            if not all((job['local_id'],job['native_id'],job['track_uuid'],job['path'],job['field'],job['value'])==
+                    (row['local_id'],row['native_id'],row['uuid'],row['path'],field,row[field])
+                    for job,field in zip(selected,row['fields'],strict=True)):break
+            rows.append((key,deepcopy(row)));del remaining[:len(selected)]
+            if not remaining:return plan['id'],plan['cursor'],rows
+        return None
+
+    def _advance_group(self,group,library):
+        captured=getattr(group,'continuation',None)
+        if captured is None:return None
+        plan_id,cursor,rows=captured;w=self.window;plan=w.settings.get(source_truth.MIGRATION)
+        if (not plan or plan.get('id')!=plan_id or plan.get('cursor')!=cursor
+                or plan.get('order',[])[cursor:cursor+len(rows)]!=[key for key,row in rows]):return None
+        for key,row in rows:
+            if w.settings.get(source_truth.TARGETS,{}).get(key)!=row:return None
+            matches=group.readback['group_selections'].get((row['native_id'],row['uuid'],row['path']),())
+            if len(matches)!=1 or matches[0][4:]!=(row['title'],row['artist']):return None
+            local,native_id,uuid,path,title,artist=matches[0]
+            track=library.tracks_by_id.get(local)
+            if track is None or (track.native_id,track.source_uuid,track.source_native_path or str(track.path),track.name,track.artist)!=(
+                    native_id,uuid,path,title,artist):return None
+        return {**plan,'cursor':cursor+len(rows),'active':None}
 
     def stage_source_scope(self,incoming,*,previous=None,bootstrap=False):
         """Stage RAM only; caller saves source selection and curation together.
@@ -319,7 +408,8 @@ class MetadataController(QObject):
             if not junk_ready:junk=w._title_junk();junk_ready=True
             owned=[(job['field'],job['value']) for job in pending.get(local,[]) if _matches_track(job,track)]
             revised,titles,artists=provenance.reconcile(origin,title=track.name,artist=track.artist,
-                titles=titles,artists=artists,owned=owned,junk=junk,copy_map=copy_map)
+                titles=titles,artists=artists,owned=owned,junk=junk,copy_map=copy_map,
+                cleanup=metadata_cleanup_policy.choice_for(w.settings,incoming)=='clean')
             if revised is not origin:
                 if origins is existing:origins=dict(existing)
                 origins[identity]=revised
@@ -387,7 +477,8 @@ class MetadataController(QObject):
             return False
         junk=w._title_junk();identity=uuid4().hex;cached_context=self._derived_frozen
         context_owner=self._derived_context
-        policy=(tuple(w.settings.get('title_rules_off',())),tuple(w.settings.get('title_words',())))
+        cleanup=metadata_cleanup_policy.choice_for(w.settings,w.lib)=='clean'
+        policy=(tuple(w.settings.get('title_rules_off',())),tuple(w.settings.get('title_words',())),cleanup)
         def build():
             frozen=(cached_context[1] if cached_context is not None and
                 all(a is b for a,b in zip(cached_context[0],context)) else
@@ -395,7 +486,7 @@ class MetadataController(QObject):
             result=[]
             for row,origin,title,artist,info in inputs:
                 desired=provenance.derive(row,origin=origin,title_override=title,artist_override=artist,
-                    info=info,context=frozen,junk=junk)
+                    info=info,context=frozen,junk=junk,cleanup=cleanup)
                 result.append((row,desired))
             return result,source_truth._sha(inputs),frozen
         def completed(task):
@@ -405,7 +496,8 @@ class MetadataController(QObject):
             if isinstance(task.result,Exception):self.status(str(task.result),attention=True);self.timer.start(2000);return
             if w.settings.get(alias_intents.NEXT) is not None:self.schedule();return
             if (self._derived_context is not context_owner or
-                    policy!=(tuple(w.settings.get('title_rules_off',())),tuple(w.settings.get('title_words',())))):
+                    policy!=(tuple(w.settings.get('title_rules_off',())),tuple(w.settings.get('title_words',())),
+                             metadata_cleanup_policy.choice_for(w.settings,w.lib)=='clean')):
                 self.schedule();return
             current_main=w.settings.get(source_truth.MIGRATION)
             if current_main is not main:self.schedule();return
@@ -900,7 +992,8 @@ class MetadataController(QObject):
                 uuid=track.source_uuid,path=track.source_native_path or str(track.path)))
             fields=self.display_fields(track)
             row=w._row_for(track) if hasattr(w,'_row_for') else engine.track_row(track,w.overrides,w.titles,
-                registry=w.lib.artist_registry,junk=w._title_junk())
+                registry=w.lib.artist_registry,junk=w._title_junk(),
+                cleanup=metadata_cleanup_policy.choice_for(w.settings,w.lib)=='clean')
             row.update({field:value for field,value in w.settings.get('track_info',{}).get(track.track_id,{}).items()
                         if field in ('title','artist')})
             visible[identity]=dict(title=fields.get('title',row['title']),artist=fields.get('artist',row['artist']))
@@ -995,7 +1088,8 @@ class MetadataController(QObject):
             merged_origins=alias_intents.merge_origins(origins,captured_origins,before.get(alias_intents.ORIGINS,{}))
             explicit_titles={row['local_id'] for row in current['edits'].values() if 'title' in row['fields']}
             titles,merged_origins=alias_intents.protect_titles(targets,w.titles,merged_origins,
-                current_bindings=alias_intents.title_bindings(w.lib),junk=w._title_junk(),explicit_titles=explicit_titles)
+                current_bindings=alias_intents.title_bindings(w.lib),junk=w._title_junk(),explicit_titles=explicit_titles,
+                cleanup=metadata_cleanup_policy.choice_for(w.settings,w.lib)=='clean')
             before_titles=w.titles
             w.settings={**before,alias_intents.NEXT:{**current,'state':'ready','plan':descriptor},
                         alias_intents.TARGETS:targets,alias_intents.ORIGINS:merged_origins}
@@ -1072,13 +1166,18 @@ class MetadataController(QObject):
             target_key=descriptor['order'][descriptor['cursor']];target=targets[target_key]
             if target['info']:raise ValueError('Frozen Track Info fields need their separate native save profile')
             queue=[];operations={}
-            for field in target['fields']:
-                _intent_value(target[field],field);identity=uuid4().hex;operations[field]=identity
-                queue.append(dict(id=identity,source=descriptor['scope']['source'],library_id=descriptor['scope']['library_id'],
-                    local_id=target['local_id'],native_id=target['native_id'],track_uuid=target['uuid'],path=target['path'],
-                    field=field,value=target[field],request=None,retry=False,error=''))
-                if target.get('curation',{}).get(field) is not None:
-                    queue[-1]['curation']=target['curation'][field]
+            for selected_key in descriptor['order'][descriptor['cursor']:]:
+                selected=targets[selected_key]
+                if selected['info'] or queue and len(queue)+len(selected['fields'])>self.batch_size:break
+                for field in selected['fields']:
+                    _intent_value(selected[field],field);identity=uuid4().hex
+                    if selected_key==target_key:operations[field]=identity
+                    queue.append(dict(id=identity,source=descriptor['scope']['source'],library_id=descriptor['scope']['library_id'],
+                        local_id=selected['local_id'],native_id=selected['native_id'],track_uuid=selected['uuid'],path=selected['path'],
+                        field=field,value=selected[field],request=None,retry=False,error=''))
+                    if selected.get('curation',{}).get(field) is not None:
+                        queue[-1]['curation']=selected['curation'][field]
+                if self.batch_size==1:break
             if not queue:raise ValueError('Frozen metadata target has no supported changes')
             before=w.settings;active=dict(target=target_key,operations=operations)
             w.settings={**before,source_truth.MIGRATION:{**descriptor,'active':active},KEY:queue}
@@ -1189,7 +1288,9 @@ class MetadataController(QObject):
         track=w.lib.tracks_by_id.get(track_id)
         if track is None or track_id in getattr(w.lib,'source_binding_issues',{}):
             w._flash_status('Refresh the song identity before editing metadata',12);return False
-        previous=engine.track_row(track,w.overrides,w.titles,registry=w.lib.artist_registry,junk=w._title_junk())
+        cleanup=metadata_cleanup_policy.choice_for(w.settings,w.lib)=='clean'
+        previous=engine.track_row(track,w.overrides,w.titles,registry=w.lib.artist_registry,junk=w._title_junk(),
+            cleanup=metadata_cleanup_policy.choice_for(w.settings,w.lib)=='clean')
         previous.update({field:value for field,value in w.settings.get('track_info',{}).get(track_id,{}).items()
                          if field in ('title','artist')})
         previous.update(self.display_fields(track))
@@ -1204,23 +1305,26 @@ class MetadataController(QObject):
                and (job['source'],job['library_id'])==(scope['source'],scope['library_id']) and _matches_track(job,track)]
         if prior_origin and track.artist in [prior_origin['native_artist'],*owned]:automatic=prior_origin['automatic']
         else:
-            bases=[metadata.derive_artist(t.name,t.artist)[0] for t in w.lib.tracks_by_id.values()]
+            bases=[metadata.derive_artist(t.name,t.artist)[0] if cleanup else t.artist for t in w.lib.tracks_by_id.values()]
             trusted=[t.artist for t in w.lib.tracks_by_id.values() if t.artist]+list(w.overrides.values())
             automatic=metadata.effective_artist(track_id,w.titles.get(track_id) or track.name,track.artist,
-                registry=metadata.build_registry(bases,trusted),stem=track.path.stem)
+                registry=metadata.build_registry(bases,trusted,cleanup_enabled=cleanup),stem=track.path.stem,cleanup=cleanup)
         owned_titles=[job['value'] for job in self.pending if job['field']=='title' and job['local_id']==track_id
                and (job['source'],job['library_id'])==(scope['source'],scope['library_id']) and _matches_track(job,track)]
         automatic_title=(prior_origin['automatic_title'] if prior_origin and track.name in
-            [prior_origin['native_title'],*owned_titles] else metadata.effective_title(track_id,track.name,previous['artist'],junk=w._title_junk()))
+            [prior_origin['native_title'],*owned_titles] else metadata.effective_title(track_id,track.name,previous['artist'],
+                junk=w._title_junk(),cleanup=cleanup,source_artist=track.artist,registry=w.lib.artist_registry))
         if prior_origin and 'provenance' in prior_origin and track.name in [prior_origin['native_title'],*owned_titles]:
-            automatic_title=metadata.tidy_title(prior_origin['provenance']['title_base'],w._title_junk())
+            automatic_title=(metadata.canonical_title_credits(metadata.tidy_title(prior_origin['provenance']['title_base'],w._title_junk()),
+                              w.lib.artist_registry) if cleanup else prior_origin['provenance']['raw']['title'])
         origin=dict(scope=scope,local_id=track_id,native_id=track.native_id,uuid=track.source_uuid,
                     path=track.source_native_path or str(track.path),automatic=automatic,native_artist=track.artist,
                     automatic_title=automatic_title,native_title=track.name,
                     title_shield=prior_origin.get('title_shield','') if prior_origin else '')
         if prior_origin and 'provenance' in prior_origin:origin['provenance']=prior_origin['provenance']
         elif prior_origin is None:
-            origin=provenance.seed(origin,title=track.name,artist=track.artist,display_artist=previous['artist'])
+            origin=provenance.seed(origin,title=track.name,artist=track.artist,display_artist=previous['artist'],
+                cleanup=cleanup,registry=w.lib.artist_registry)
         origin=provenance.edit(origin,changes)
         titles,artists=dict(w.titles),dict(w.overrides)
         for field,value in changes.items():
@@ -1230,13 +1334,17 @@ class MetadataController(QObject):
             else:values.pop(track_id,None)
         registry=w.lib.artist_registry
         if 'artist' in changes:
-            bases=[metadata.derive_artist(t.name,t.artist)[0] for t in w.lib.tracks_by_id.values()]
+            bases=[(artists[t.track_id].strip() if artists.get(t.track_id,'').strip() else
+                    metadata.derive_artist(t.name,t.artist)[0] if cleanup else t.artist)
+                   for t in w.lib.tracks_by_id.values()]
             trusted=[t.artist for t in w.lib.tracks_by_id.values() if t.artist]+[v for v in artists.values() if v.strip()]
-            registry=metadata.build_registry(bases,trusted,w.aliases)
-        effective=engine.track_row(track,artists,titles,registry=registry,junk=w._title_junk())
+            registry=metadata.build_registry(bases,trusted,w.aliases,cleanup_enabled=cleanup)
+        effective=engine.track_row(track,artists,titles,registry=registry,junk=w._title_junk(),
+            cleanup=metadata_cleanup_policy.choice_for(w.settings,w.lib)=='clean')
         if 'artist' in changes and not changes['artist'].strip():
             effective['artist']=registry.canonical(origin['automatic']) if registry else origin['automatic']
-            effective['title']=metadata.effective_title(track_id,track.name,effective['artist'],titles,w._title_junk())
+            effective['title']=metadata.effective_title(track_id,track.name,effective['artist'],titles,w._title_junk(),
+                cleanup=cleanup,source_artist=track.artist,registry=registry)
         if 'title' in changes and not changes['title'].strip():effective['title']=origin['automatic_title']
         info=dict(w.settings.get('track_info',{}).get(track_id,{}))
         for field in ('title','artist'):
@@ -1247,14 +1355,18 @@ class MetadataController(QObject):
         if 'artist' not in changes:effective['artist']=previous['artist']
         if 'title' not in changes:effective['title']=previous['title']
         display_artist=effective['artist']
-        if effective['artist']==metadata.UNKNOWN_ARTIST:effective['artist']=''
+        literal_original=(not cleanup and (effective['artist']==track.artist or
+            'artist' in changes and not changes['artist'].strip()
+            and effective['artist']==origin.get('provenance',{}).get('raw',{}).get('artist')))
+        if effective['artist']==metadata.UNKNOWN_ARTIST and not literal_original:effective['artist']=''
         try:
             for field in ('title','artist'):_intent_value(effective[field],field)
         except ValueError as exc:w._flash_status(str(exc),12);return False
         shield_row={**origin,'title':effective['title'],'artist':effective['artist'],'display_artist':display_artist}
         titles,protected_origins=alias_intents.protect_titles({origin_identity:shield_row},titles,{origin_identity:origin},
             current_bindings=alias_intents.title_bindings(w.lib,allow_drafts=True),junk=w._title_junk(),
-            explicit_titles={track_id} if 'title' in changes and changes['title'].strip() else ())
+            explicit_titles={track_id} if 'title' in changes and changes['title'].strip() else (),
+            cleanup=metadata_cleanup_policy.choice_for(w.settings,w.lib)=='clean')
         origin=protected_origins[origin_identity]
         wanted=[]
         for field,original in (('title',track.name),('artist',track.artist)):
@@ -1334,7 +1446,7 @@ class MetadataController(QObject):
 
     def schedule(self):
         if self.closing or self.window._shutting_down or self._state_commit_pending:return
-        if self._retirement_ack is not None and not self._background_state_busy():
+        if (self._retirement_ack is not None or self._retirement_group_ack is not None) and not self._background_state_busy():
             self.timer.start(0);return
         if self.background_paused and not self.pending and not self.window.settings.get(ACKS) and not self._paused_progress_pending():
             self._show_paused_status();return
@@ -1350,6 +1462,7 @@ class MetadataController(QObject):
                      and {**current,'error':''}=={**job,'error':''}),None)
 
     def fail(self,job,message,*,companion=None):
+        self._release_readback_group()
         self.timer.stop();index=self._retains(job)
         if index is not None:
             queue=list(self.pending);queue[index]={**queue[index],'error':str(message)}
@@ -1413,6 +1526,9 @@ class MetadataController(QObject):
     def pump(self):
         w=self.window
         if self.closing or w._shutting_down or self._state_commit_pending:return
+        group=self._readback_group
+        if group is not None and not group.current(self.pending,self._truth_epoch(),self._truth_source_context()):
+            self._release_readback_group();group=None
         if self._state_commit_error:self.status(self._state_commit_error,attention=True);return
         if w._state_maintenance or getattr(w,'_state_publication',False):
             if self.pending or self.migration_pending or w.settings.get(ACKS):self.timer.start(2000)
@@ -1444,16 +1560,24 @@ class MetadataController(QObject):
         if not self.pending:
             if self._resume_derived():return
             self._source_truth_step();return
-        if self.pending[0]['error']:
-            self.status('Metadata save needs attention — '+self.pending[0]['error'],attention=True);return
-        if (self.tags.source_job_owned or self.tags.prep_priority or w._refresh_worker is not None
+        failed_job=next((row for row in self.pending if row['error']),None)
+        if failed_job is not None:
+            self.status('Metadata save needs attention — '+failed_job['error'],attention=True);return
+        if (self.tags.source_job_owned and not self._owns_group_source() or self.tags.prep_priority or w._refresh_worker is not None
                 or w._state_maintenance or device_blocks_library_work(w)):self.timer.start(2000);return
         imports=getattr(w,'shared_import_controller',None)
         if imports and imports.source_priority:self.timer.start(2000);return
         reason=self.reason()
         if reason:self.status(reason,attention=True);return
         if time.monotonic()<self.not_before:self.schedule();return
-        job=deepcopy(self.pending[0]);lib=w.lib
+        if group is None and self.batch_size>1:
+            jobs=batch_prefix(self.pending,self.batch_size)
+            if len(jobs)>1:
+                group=MetadataReadbackGroup(jobs,self._truth_epoch(),self._truth_source_context())
+                group.continuation=self._group_continuation(group)
+                self._readback_group=group
+        index=group.next_index(self.pending) if group is not None else 0
+        job=deepcopy(self.pending[index]);lib=w.lib
         bindings_owner=w.settings.get(shared_imports.BINDINGS)
         captured_bindings=deepcopy(bindings_owner) if bindings_owner is not None else None
         if (str(lib.source),lib.source_library_id)!=(job['source'],job['library_id']):
@@ -1538,34 +1662,53 @@ class MetadataController(QObject):
             if job['retry']:return dict(request=store.retry_request(job['request']))
             store.apply(job['request'])
             retirement=getattr(store,'retirement_entry',None)
+            entry=retirement(job['request']) if retirement else None
+            if group is not None and len(group.applied)+1<len(group.jobs):
+                return dict(batch_applied=True,retirement=entry)
             library=self._readback(lib)
             if captured_bindings is not None:library=shared_imports.project(library,captured_bindings,unavailable={})
             if job['local_id'] in library.source_binding_issues:
                 raise WriteProofError('The selected song registration needs reconciliation; its metadata intention is preserved')
             selected=None;match_count=0
+            group_bindings={(row['native_id'],row['track_uuid'],row['path']) for row in group.jobs} if group is not None else set()
+            selected_identities={(native,uuid) for native,uuid,_path in group_bindings}
+            selected_identities.add((job['native_id'],job['track_uuid']))
+            group_selections={}
             def indexed_rows():
                 nonlocal selected,match_count
                 for local,track in library.tracks_by_id.items():
-                    if (track.native_id,track.source_uuid)==(job['native_id'],job['track_uuid']):
+                    identity=(track.native_id,track.source_uuid)
+                    if identity in selected_identities:
                         path=track.source_native_path or str(track.path)
-                        if path==job['path']:
+                        binding=(*identity,path)
+                        if binding in group_bindings:
+                            group_selections.setdefault(binding,[]).append((local,*binding,track.name,track.artist))
+                        if identity==(job['native_id'],job['track_uuid']) and path==job['path']:
                             match_count+=1
                             if selected is None:selected=(local,track.native_id,track.source_uuid,path,track.name,track.artist)
                     yield local,track
             pin_index=source_truth.prepare_pin_index(library,rows=indexed_rows())
             return dict(library=library,selected=selected,match_count=match_count,
                         curation_pin_index=pin_index,
-                        retirement=retirement(job['request']) if retirement else None,
+                        retirement=entry,group_readback=group is not None,
+                        group_selections={binding:tuple(values) for binding,values in group_selections.items()},
                         projected_bindings_owner=bindings_owner,
                         projected_scope=(str(lib.source),lib.source_library_id))
-        def completed(worker):
-            if worker.error:self.fail(job,worker.error);return
+        def completed(worker,job=job,grouped_ack=False):
+            if worker.error:
+                self._release_readback_group();self.fail(job,worker.error);return
             if worker.result.get('validation_retry'):
                 self.not_before=time.monotonic()+.1;self.status('Checking saved song updates…');self.schedule();return
             if worker.result.get('waiting'):
                 self.not_before=time.monotonic()+2;self.status('Metadata pending — quit rekordbox to save',attention=True);self.schedule();return
-            if self._retains(job)!=0:return
-            if self.queue_error():self.fail(job,self.queue_error());return
+            expected_index=0 if grouped_ack or group is None else index
+            if self._retains(job)!=expected_index:
+                self._release_readback_group();return
+            # Subsequent synchronous ACK transforms see intentionally staged
+            # progress, which is not canonical until the one final patch. The
+            # complete exact queue was checked before this non-yielding stage.
+            if not (grouped_ack and group is not None and group.staging) and self.queue_error():
+                self.fail(job,self.queue_error());return
             if not w.lib or (str(w.lib.source),w.lib.source_library_id)!=(job['source'],job['library_id']):
                 self.fail(job,'Saved in the original library; switch back to finish metadata');return
             if worker.result.get('projected_bindings_owner') is not None and (
@@ -1574,12 +1717,27 @@ class MetadataController(QObject):
                 self.fail(job,'Song registration identities changed while saving; retry to verify the saved metadata');return
             before=w.settings[KEY];queue=list(before)
             if 'request' in worker.result:
-                queue[0]={**queue[0],'request':worker.result['request'],'retry':False}
+                queue[expected_index]={**queue[expected_index],'request':worker.result['request'],'retry':False}
                 prior=w.settings;w.settings={**prior,KEY:queue}
                 self._commit_background_state({'settings':prior},{('settings',KEY):queue},
                     committed=self.schedule,failed=lambda:self.fail(job,'The exact metadata request could not be saved'),
                     message='The exact metadata request could not be saved; retry after fixing storage')
                 return
+            if group is not None and not grouped_ack:
+                if self._readback_group is not group or not group.current(self.pending,self._truth_epoch(),self._truth_source_context()):
+                    self._release_readback_group();return
+                try:group.record(job,worker.result.get('retirement'))
+                except ValueError as exc:self._release_readback_group();self.fail(job,str(exc));return
+                self._reserve_readback_group(group)
+                if worker.result.get('batch_applied'):
+                    self.schedule();return
+                if worker.result.get('group_readback'):
+                    group.library=worker.result['library'];group.readback=dict(worker.result)
+                    from types import SimpleNamespace
+                    head=deepcopy(self.pending[0])
+                    try:completed(SimpleNamespace(error='',result=group.result_for(head)),job=head,grouped_ack=True)
+                    except Exception as exc:self.fail(head,'Metadata acknowledgement needs reconciliation: '+str(exc))
+                    return
             library=worker.result['library']
             selected=worker.result.get('selected');matches=[]
             if isinstance(selected,tuple) and len(selected)==6 and worker.result.get('match_count')==1:
@@ -1623,6 +1781,9 @@ class MetadataController(QObject):
                 except WriteProofError as exc:self.fail(job,str(exc));return
                 if len(w.settings.get(ACKS,[]))>=256:self.fail(job,'Metadata receipt retirement queue is full');return
             prior_settings=w.settings;w.settings=dict(prior_settings);origin_identity=None
+            if group is not None and group.stage_before is None:
+                group.stage_before=dict(settings=prior_settings,titles=prior_titles,overrides=prior_artists)
+                group.staging=True
             if retirement is not None:
                 w.settings[ACKS]=[*w.settings.get(ACKS,[]),dict(entry=retirement,error='')]
             if prior_origins:
@@ -1640,7 +1801,8 @@ class MetadataController(QObject):
                         (job['source'],job['library_id']) and _matches_track(row,matches[0])]
                     origin,w.titles,w.overrides=provenance.reconcile(origin,title=matches[0].name,
                         artist=matches[0].artist,titles=w.titles,artists=w.overrides,owned=owned,junk=w._title_junk(),
-                        fields=(job['field'],),retired_overlay=retired_overlay)
+                        fields=(job['field'],),retired_overlay=retired_overlay,
+                        cleanup=metadata_cleanup_policy.choice_for(w.settings,library)=='clean')
                     alias_intents.validate_origins({identity:origin})
                     w.settings[alias_intents.ORIGINS]={**prior_origins,
                         identity:origin}
@@ -1653,10 +1815,17 @@ class MetadataController(QObject):
                         operations[repair['field']]=repair['id']
                     w.settings[source_truth.MIGRATION]={**prior_descriptor,'active':{**active,'operations':operations}}
             w.settings[KEY]=([repair] if repair else [])+queue[1:]
+            if (group is not None and not repair and len(group.staged)+1==len(group.jobs)):
+                advanced=self._advance_group(group,library)
+                if advanced is not None:w.settings[source_truth.MIGRATION]=advanced
             replacements={('settings',KEY):w.settings[KEY]};removals=[];missing=object()
             if w.settings.get(ACKS) is not prior_acks:replacements[('settings',ACKS)]=w.settings[ACKS]
             if w.settings.get(source_truth.MIGRATION) is not prior_descriptor:
-                replacements[('settings',source_truth.MIGRATION,'active','operations')]=w.settings[source_truth.MIGRATION]['active']['operations']
+                current_descriptor=w.settings[source_truth.MIGRATION]
+                if current_descriptor.get('active') is None:
+                    replacements[('settings',source_truth.MIGRATION,'cursor')]=current_descriptor['cursor']
+                    replacements[('settings',source_truth.MIGRATION,'active')]=None
+                else:replacements[('settings',source_truth.MIGRATION,'active','operations')]=current_descriptor['active']['operations']
             if origin_identity is not None:
                 replacements[('settings',alias_intents.ORIGINS,origin_identity)]=w.settings[alias_intents.ORIGINS][origin_identity]
             local=job['local_id']
@@ -1674,6 +1843,8 @@ class MetadataController(QObject):
                 w.settings=prior_settings;w.titles=prior_titles;w.overrides=prior_artists
                 self.fail(job,'Metadata saved in rekordbox; saved curation needs reconciliation: '+str(exc));return
             def acknowledged():
+                if group is not None and self._readback_group is group:
+                    group.acknowledged.update(group.staged);self._release_readback_group()
                 projected=worker.result.get('projected_bindings_owner')
                 scope=worker.result.get('projected_scope')
                 if projected is not None and (w.settings.get(shared_imports.BINDINGS) is not projected
@@ -1694,15 +1865,33 @@ class MetadataController(QObject):
                     BACKGROUND_PAUSED_STATUS if self.background_paused else '')
                 if not self.closing and not w._shutting_down:
                     if projected is not None:
-                        w._publish_metadata_library(library,(job['local_id'],),
+                        w._publish_metadata_library(library,changed_ids,
                             projected_bindings_owner=projected,projected_scope=scope)
-                    else:w._publish_metadata_library(library,(job['local_id'],))
+                    else:w._publish_metadata_library(library,changed_ids)
                 self.schedule()
-            self._commit_background_state({'settings':prior_settings,'titles':prior_titles,'overrides':prior_artists},
+            before=dict(settings=prior_settings,titles=prior_titles,overrides=prior_artists)
+            changed_ids=(job['local_id'],)
+            if group is not None:
+                group.stage_paths.update((*replacements,*removals));group.staged.add(job['id'])
+                if len(group.staged)<len(group.jobs):
+                    next_job=deepcopy(self.pending[0])
+                    from types import SimpleNamespace
+                    try:completed(SimpleNamespace(error='',result=group.result_for(next_job)),job=next_job,grouped_ack=True)
+                    except Exception as exc:self.fail(next_job,'Metadata acknowledgement needs reconciliation: '+str(exc))
+                    return
+                replacements,removals=staged_patch(w,group.stage_paths)
+                before=group.stage_before;group.staging=False;group.stage_before=None
+                changed_ids=tuple(dict.fromkeys(row['local_id'] for row in group.jobs))
+            self._commit_background_state(before,
                 replacements,removals=removals,committed=acknowledged,
                 failed=lambda:self.fail(job,'Metadata saved in rekordbox; local acknowledgement failed. Retry after fixing storage.'),
                 message='Metadata saved in rekordbox; local acknowledgement needs storage attention. Retry to finish.')
-        if not self.tags._run_source_job('metadata',work,completed):self.timer.start(2000)
+        if group is not None and group.library is not None:
+            from types import SimpleNamespace
+            completed(SimpleNamespace(error='',result=group.result_for(job)),grouped_ack=True)
+            return
+        options={'source_ack_token':group.token} if group is not None and group.reserved else {}
+        if not self.tags._run_source_job('metadata',work,completed,**options):self.timer.start(2000)
 
     def retry(self):
         if (self._state_commit_pending or self.closing or self.tags.busy or getattr(self.tags,'checking',False)
@@ -1744,17 +1933,20 @@ class MetadataController(QObject):
                 if targets is not None:self.window.settings[source_truth.TARGETS]=targets
                 return False
             self.schedule();return True
-        before=self.window.settings[KEY];queue=list(before);queue[0]={**queue[0],'error':'','retry':True}
-        if 'companion_conflict' in queue[0]:
-            job=queue[0];scope=dict(source=job['source'],kind='rekordbox-db',library_id=job['library_id'])
+        before=self.window.settings[KEY];queue=list(before)
+        retry_index=next((index for index,row in enumerate(queue) if row['error']),0)
+        queue[retry_index]={**queue[retry_index],'error':'','retry':True}
+        if 'companion_conflict' in queue[retry_index]:
+            job=queue[retry_index];scope=dict(source=job['source'],kind='rekordbox-db',library_id=job['library_id'])
             identity=alias_intents.key(scope,dict(local_id=job['local_id'],native_id=job['native_id'],uuid=job['track_uuid'],path=job['path']))
             if identity not in alias_intents.title_bindings(self.window.lib):
                 self.window._flash_status('The song identity changed; its original metadata pair is preserved',12);return False
             companion=self._expected_companion(job)
             if companion is None:return False
-            queue[0]['companion_conflict']=dict(field=companion[0],value=companion[1],accepted=True)
+            queue[retry_index]['companion_conflict']=dict(field=companion[0],value=companion[1],accepted=True)
         self.window.settings[KEY]=queue
         if not self.window._save_state():self.window.settings[KEY]=before;return False
         self.not_before=0;self.schedule();return True
 
-    def stop(self):self.closing=True;self.timer.stop();self.tasks.drain()
+    def stop(self):
+        self.closing=True;self.timer.stop();self.tasks.drain();self._release_readback_group()

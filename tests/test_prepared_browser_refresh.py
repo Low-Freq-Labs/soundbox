@@ -409,3 +409,27 @@ class PreparedRegistryInputs(unittest.TestCase):
         self.origins['duplicate']=self.origins['1'];self.assert_matches_fresh()
         self.origins.pop('duplicate');self.assert_matches_fresh()
         self.origins.pop('1');self.assert_matches_fresh()
+
+    def test_each_manual_artist_replaces_one_track_vote_and_value_change_invalidates_cache(self):
+        self.overrides['1']='Chosen Artist'
+        bases,trusted,previous=prepared_browser.registry_inputs(self.library,self.origins,self.overrides,self.previous)
+        self.assertEqual(bases,['Chosen Artist','Artist'])
+        self.assertIn('Artist',trusted)
+        self.overrides['1']='A Different Artist'
+        bases,_trusted,current=prepared_browser.registry_inputs(self.library,self.origins,self.overrides,previous)
+        self.assertEqual(bases,['A Different Artist','Artist'])
+        self.assertEqual(current['changed_ids'],frozenset({'1'}))
+
+    def test_exact_fulfilled_manual_artist_replaces_automatic_vote_until_native_field_changes(self):
+        origin=metadata_provenance.edit(self.origins['1'],{'artist':'Chosen Artist'})
+        captured=metadata_provenance.snapshot(origin,'artist',{'1':'Chosen Artist'})
+        origin=metadata_provenance.acknowledge(origin,dict(id='a'*32,field='artist',
+            value='Chosen Artist',curation=captured))
+        self.origins['1']={**origin,'native_artist':'Chosen Artist'}
+        self.library.tracks_by_id['1'].artist='Chosen Artist'
+        bases,_trusted,previous=prepared_browser.registry_inputs(self.library,self.origins,{})
+        self.assertEqual(bases,['Chosen Artist','Artist'])
+        self.library.tracks_by_id['1'].artist='Outside change'
+        bases,_trusted,current=prepared_browser.registry_inputs(self.library,self.origins,{},previous)
+        self.assertEqual(bases,['Outside change','Artist'])
+        self.assertEqual(current['changed_ids'],frozenset({'1'}))

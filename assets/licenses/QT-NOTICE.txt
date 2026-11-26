@@ -1,0 +1,18 @@
+SoundBox uses Qt 6.11.1 and Qt for Python (PySide6 / Shiboken) 6.11.1.
+Copyright The Qt Company Ltd. and contributors.
+
+The included Qt libraries and Python bindings are used under the GNU Lesser
+General Public License, version 3. The full LGPLv3 and GPLv3 texts accompany
+this notice. This notice does not replace the applicable component notices.
+
+Upstream sources and third-party attributions:
+https://download.qt.io/official_releases/qt/6.11/6.11.1/submodules/
+https://code.qt.io/cgit/pyside/pyside-setup.git/tree/?h=v6.11.1
+https://doc.qt.io/qt-6.11/licenses-used-in-qt.html
+
+The application dynamically loads its bundled Qt frameworks. Library replacement,
+modification and reverse engineering to debug such modifications are permitted
+by the applicable dependency licenses. Rebuilding/re-signing a modified macOS
+bundle may be necessary. Build instructions and application source are available
+at https://github.com/Low-Freq-Labs/soundbox . No developer signing key is required
+for a locally rebuilt copy.

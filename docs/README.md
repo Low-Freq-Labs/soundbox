@@ -6,6 +6,9 @@
 - [Runtime contracts](runtime-contracts.md): detailed source/state/lifecycle safety rules.
 - [Gotchas](GOTCHAS.md): implementation traps; [Keyboard](KEYBOARD.md): action/hold semantics.
 - [Release gate](test-release-gate.md) · [Public/personal boundaries](release-boundaries.md)
+- [First launch](first-launch.md): library selection, cleanup/artwork choices and curation rules.
+- [macOS installer](macos-installer.md): app-only beta installation, upgrades and signing scope.
+- [Personal beta RC checklist](rc-beta-checklist.md): full-feature shakedown plan, RB6/7 matrix and clean-user acceptance.
 - [Roadmap](ROADMAP.md): committed sequence; [Ideas](IDEAS.md): uncommitted UX proposals.
 - [Project layout](PROJECT_LAYOUT.md): fixtures, generated output and protected retention.
 - [Performance evidence](performance-audit.md): dated measurements and remaining costs.

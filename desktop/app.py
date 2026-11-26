@@ -236,7 +236,7 @@ _DEFAULT_SETTINGS = {
     "quantize": False,
     "beat_count_mode": 0,
     "theme_accent": theme.DEFAULT_ACCENT,
-    "theme_text_mode": "white",
+    "theme_text_mode": theme.DEFAULT_TEXT_MODE,
     "theme_text_custom": theme.DEFAULT_ACCENT_TEXT,
     "stock_ipod_models": {},  # stable device identity -> confirmed model
     "stock_ipod_identity": {},  # observed display facts, never write authority
@@ -396,7 +396,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
     Controllers coordinate source/device work; task owners retain their workers.
     Ordinary pages prepare eagerly, while device pages initialize on demand.
     """
-    def __init__(self, providers=None, *, isolated_dir=None):
+    def __init__(self, providers=None, *, isolated_dir=None, repository=None, initial_state=None):
         super().__init__()
         self._isolated = isolated_dir is not None
         from soundbox.desktop_runtime import prepare_desktop_runtime
@@ -411,7 +411,9 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         bind_provider = getattr(self.providers.connections, 'bind_root', None)
         if callable(bind_provider):
             bind_provider(data_dir)
-        self._state_repository = StateRepository(self._data_file)
+        self._state_repository = repository if repository is not None else StateRepository(self._data_file)
+        if self._state_repository.path != self._data_file:
+            raise ValueError('Initial repository belongs to a different SoundBox state area')
         self._state_maintenance = False
         self._state_publication = False
         self._state_committer = None
@@ -568,7 +570,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                                                   save_local=self._save_local_grid)
         # Apply saved chrome before building thousands of child widgets. Loading
         # state again later would also lose the repository's recovery receipt.
-        self._initial_state = self._state_repository.load()
+        self._initial_state = (initial_state if initial_state is not None
+                               else self._state_repository.load())
         self.settings.update(self._initial_state.get('settings') or {})
         self._prepare_library_processes()
         self._apply_theme_color(self.settings.get('theme_accent'), save=False)
@@ -951,6 +954,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         if self.lib is None:
             return
         from .prepared_browser import registry_inputs
+        from soundbox.metadata_cleanup_policy import choice_for
+        self.lib.metadata_cleanup_enabled = choice_for(self.settings, self.lib) == 'clean'
         bases,trusted,self._artist_registry_prepared=registry_inputs(
             self.lib,self.settings.get('source_truth_artist_origins',{}),self.overrides,
             getattr(self,'_artist_registry_prepared',None))
@@ -961,14 +966,15 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         # An acknowledged override can move the same trusted vote into its
         # origin row without changing any canonical/trusted lookup semantics.
         inputs=(frozenset(Counter(bases).items()),frozenset(Counter(trusted).items()),
-                frozenset(self.aliases.items()))
+                frozenset(self.aliases.items()), self.lib.metadata_cleanup_enabled)
         if inputs==getattr(self,'_artist_registry_inputs',None) and previous is not None:
             self.lib.artist_registry=previous
             if invalidate_rows:self._invalidate_rows()
             return
-        registry = metadata.build_registry(bases, trusted, self.aliases)
+        registry = metadata.build_registry(bases, trusted, self.aliases,
+            cleanup_enabled=self.lib.metadata_cleanup_enabled)
         self.lib.artist_registry = previous if metadata.registry_context_equal(previous,registry) else registry
-        unaliased = (metadata.build_registry(bases, trusted)
+        unaliased = (metadata.build_registry(bases, trusted, cleanup_enabled=self.lib.metadata_cleanup_enabled)
             if self.aliases and self.lib.source_kind == 'rekordbox-db' else self.lib.artist_registry)
         previous_unaliased = getattr(self,'_metadata_unaliased_registry',None)
         self._metadata_unaliased_registry = (previous_unaliased
@@ -1014,7 +1020,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         if r is None:
             r = engine.track_row(t, self.overrides, self.titles,
                                  registry=self.lib.artist_registry if self.lib else None,
-                                 junk=self._title_junk())
+                                 junk=self._title_junk(),
+                                 cleanup=self.lib.metadata_cleanup_enabled if self.lib else True)
             self._row_cache[t.track_id] = r
         result = dict(r)
         result['bpm_estimated'] = False
@@ -1155,7 +1162,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             return
 
         def build():
-            return {t.track_id: engine.track_row(t, ov, ti, registry=reg, junk=junk)
+            return {t.track_id: engine.track_row(t, ov, ti, registry=reg, junk=junk,
+                                               cleanup=lib.metadata_cleanup_enabled)
                     for t in tracks}
 
         w = OneShotTask(build)
@@ -1290,6 +1298,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             drafts = vars(self).get('_inline_drafts')
             if drafts is not None:
                 drafts.gesture += 1
+                if event_type == QEvent.MouseButtonPress and ev.button() == Qt.LeftButton:
+                    drafts.finish_outside_press(obj)
                 if event_type == QEvent.ApplicationDeactivate:drafts.inactive = True
                 elif event_type == QEvent.ApplicationActivate:drafts.inactive = False
         tags_button = getattr(self, 'my_tags', None)
@@ -1863,9 +1873,10 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         src = self.titles.get(t.track_id) or t.name
         artist = metadata.effective_artist(t.track_id, src, t.artist, self.overrides,
                                            True, self.lib.artist_registry if self.lib else None,
-                                           stem=t.path.stem)
+                                           stem=t.path.stem, cleanup=self.lib.metadata_cleanup_enabled if self.lib else True)
         title = metadata.effective_title(t.track_id, t.name, artist, self.titles,
-                                         self._title_junk())
+                                         self._title_junk(), cleanup=self.lib.metadata_cleanup_enabled if self.lib else True,
+                                         source_artist=t.artist, registry=self.lib.artist_registry if self.lib else None)
         label = f"{artist} — {title}" if artist and artist != "Unknown Artist" else title
         self.player_bar.play_track(
             t.track_id, t.path, title=label, bpm=t.bpm,
@@ -2082,7 +2093,9 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             if not accepted:
                 self._invalidate_rows((track_id,))
                 QTimer.singleShot(0,self,self._reload_current_view)
-            elif self.art_cache.status_kind(track_id)!='cover':self._art_fetch_one(track_id)
+            elif (self.settings.get('auto_artwork', True)
+                  and self.art_cache.status_kind(track_id)!='cover'):
+                self._art_fetch_one(track_id)
             return accepted
         store = self.overrides if field == "artist" else self.titles
         missing=object();previous=store.get(track_id,missing)
@@ -2106,7 +2119,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             self._invalidate_rows((track_id,))  # title override changed this row's computed title
         # Fixing the name should re-hunt for art unless a REAL cover is already
         # confirmed — a miss OR an avatar both deserve a retry with the fix.
-        if self.lib and track_id in self.lib.tracks_by_id \
+        if self.settings.get('auto_artwork', True) \
+                and self.lib and track_id in self.lib.tracks_by_id \
                 and self.art_cache.status_kind(track_id) != "cover":
             self._art_fetch_one(track_id)
         return True
@@ -3315,6 +3329,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         Source selection explicitly resets navigation; ordinary readback and
         metadata acknowledgements retain the user's latest presentation choice.
         """
+        from soundbox.metadata_cleanup_policy import choice_for
+        self.lib.metadata_cleanup_enabled = choice_for(self.settings, self.lib) == 'clean'
         # A fresh library can have different add-times than the one it replaces
         # (the instant-paint snapshot vs the live rekordbox read), so the per-path
         # landed-time cache MUST be dropped — otherwise a birthtime computed off
@@ -3393,6 +3409,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             scalar_inputs,
             tuple(sorted(self.overrides.items())), tuple(sorted(self.titles.items())),
             tuple(sorted(self.aliases.items())), tuple(self._title_junk()),
+            self.lib.metadata_cleanup_enabled,
         )
         reuse = display_inputs == getattr(self, '_display_inputs', None)
         previous_registry=getattr(self,'_display_registry',None)
@@ -3969,7 +3986,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 continue
             a = metadata.effective_artist(t.track_id, t.name, t.artist,
                                           self.overrides, True, reg,
-                                          stem=t.path.stem)
+                                          stem=t.path.stem, cleanup=self.lib.metadata_cleanup_enabled)
             if a == "Unknown Artist":
                 items.append((t.track_id, self.titles.get(t.track_id) or t.name))
         if not items:
@@ -4021,12 +4038,13 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         source_scope = _artist_source_scope(self.lib)
         overrides = dict(self.overrides)
         reg = self.lib.artist_registry
+        cleanup = self.lib.metadata_cleanup_enabled
 
         def scan():
             from collections import Counter
             counts = Counter(metadata.effective_artist(
                 t.track_id, t.name, t.artist, overrides, True, reg,
-                stem=t.path.stem) for t in tracks)
+                stem=t.path.stem, cleanup=cleanup) for t in tracks)
             return dict(counts), metadata.suggest_merges(dict(counts))
 
         w = OneShotTask(scan)
@@ -4310,9 +4328,10 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         src = self.titles.get(tid) or t.name
         artist = metadata.effective_artist(
             tid, src, t.artist, self.overrides, True,
-            self.lib.artist_registry, stem=t.path.stem)
+            self.lib.artist_registry, stem=t.path.stem, cleanup=self.lib.metadata_cleanup_enabled)
         return metadata.effective_title(tid, t.name, artist, self.titles,
-                                        self._title_junk())
+                                        self._title_junk(), cleanup=self.lib.metadata_cleanup_enabled,
+                                        source_artist=t.artist, registry=self.lib.artist_registry if self.lib else None)
 
     def _confirm_duplicate_add(self, name: str, dupes: list[str]) -> bool:
         """Ok/Skip prompt when a drop contains tracks already in the playlist.
@@ -8395,7 +8414,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         try:
             for i, (_k, _l, hidden) in enumerate(COLUMNS):
                 self.table.setColumnHidden(i, hidden)
-            for i, w in enumerate([360, 170, 64, 70, 56, 64, 84, 80, 150, 110]):
+            for i, w in enumerate([360, 170, 46, 62, 46, 60, 104, 80, 150, 110]):
                 self.table.setColumnWidth(i, w)
         finally:
             self._browser_column_fit = False
@@ -8815,7 +8834,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 t = self.lib.tracks_by_id[tid]
                 artist = metadata.effective_artist(
                     tid, t.name, t.artist, self.overrides, True,
-                    self.lib.artist_registry, stem=t.path.stem)
+                    self.lib.artist_registry, stem=t.path.stem, cleanup=self.lib.metadata_cleanup_enabled)
                 groups.setdefault(artist, []).append(tid)
         out = []
         for artist in sorted(groups, key=str.casefold):
@@ -8843,7 +8862,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             configure(self.art_cache.source_exclusions())
         if getattr(self, "lib", None) is not None and not getattr(self, "_shutting_down", False):
             self._refresh_model_art()
-            if any(self.art_cache.source_excluded(tid) for tid in self.lib.tracks_by_id):
+            if (self.settings.get('auto_artwork', True)
+                    and any(self.art_cache.source_excluded(tid) for tid in self.lib.tracks_by_id)):
                 self._start_art_fill(restart=True)
 
     def _open_art_review(self):
@@ -8858,7 +8878,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             title = self.titles.get(tid) or track.name
             artist = metadata.effective_artist(
                 tid, title, track.artist, self.overrides, True,
-                self.lib.artist_registry, stem=track.path.stem)
+                self.lib.artist_registry, stem=track.path.stem, cleanup=self.lib.metadata_cleanup_enabled)
             origin = self.art_cache.index[tid].get("origin")
             label = {"manual": "Manual", "auto": "Automatic"}.get(origin, "Unrecorded history")
             priority = 0 if origin == "auto" else 2 if origin == "manual" else 1
@@ -9017,7 +9037,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         def current_artist(tid):
             track = self.lib.tracks_by_id.get(tid) if self.lib else None
             return bool(track and metadata.effective_artist(tid, track.name, track.artist,
-                self.overrides, True, self.lib.artist_registry, stem=track.path.stem) == c["artist"])
+                self.overrides, True, self.lib.artist_registry, stem=track.path.stem,
+                cleanup=self.lib.metadata_cleanup_enabled) == c["artist"])
 
         def landed(worker, current_ids):
             res = worker.result
@@ -9070,7 +9091,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         binding = track_binding(self, tid)
         title = self.titles.get(tid) or t.name
         artist = metadata.effective_artist(tid, title, t.artist, self.overrides, True,
-                                           self.lib.artist_registry, stem=t.path.stem)
+                                           self.lib.artist_registry, stem=t.path.stem, cleanup=self.lib.metadata_cleanup_enabled)
         dlg = ArtPickerDialog(artist, title, self, provider=self.providers.artwork)
         try:
             dlg.exec()
@@ -9149,7 +9170,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             return
         title = self.titles.get(tid) or t.name
         artist = metadata.effective_artist(tid, title, t.artist, self.overrides, True,
-                                           self.lib.artist_registry, stem=t.path.stem)
+                                           self.lib.artist_registry, stem=t.path.stem, cleanup=self.lib.metadata_cleanup_enabled)
         self._run_oneshot(tid, lambda: self.providers.artwork.fetch_best(artist, title))
 
     @_provider_action('artwork.search')
@@ -9161,7 +9182,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         def artist_for(current):
             title=self.titles.get(tid) or current.name
             return metadata.effective_artist(tid,title,current.artist,self.overrides,True,
-                self.lib.artist_registry,stem=current.path.stem)
+                self.lib.artist_registry,stem=current.path.stem,cleanup=self.lib.metadata_cleanup_enabled)
         artist=artist_for(track)
         if not artist or artist==metadata.UNKNOWN_ARTIST:
             self._flash_status('Set the track’s artist before choosing its profile picture',8);return
@@ -9187,8 +9208,9 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         """Auto-fetch runs ONLY when the library gained tracks the cache has
         never seen (new rekordbox adds) — and the fill worker's to-do list is
         exactly those uncached tracks, so ONLY the new songs get searched.
-        Everything else (re-scans, per-track fetches) is user-triggered."""
-        if self.lib is None:
+        Automatic metadata-edit and exclusion retries check the same setting at
+        their admission points. Explicit fetches and re-scans stay available."""
+        if self.lib is None or not self.settings.get('auto_artwork', True):
             return
         idx = self.art_cache.index
         visible_ids = [tid for tid in self.lib.tracks_by_id
@@ -10734,7 +10756,22 @@ def main():
         QMessageBox.warning(None, "SoundBox already running",
                             "Another SoundBox instance owns this library. Close it before opening another.")
         return
-    win = MainWindow()
+    state_path = data_dir / 'library.json'
+    # A legacy/damaged installation is handled by ordinary repository recovery,
+    # never reclassified as a fresh setup or silently replaced by empty choices.
+    from soundbox.onboarding import has_existing_state
+    existing = has_existing_state(data_dir)
+    if existing:
+        win = MainWindow()
+    else:
+        repository = StateRepository(state_path)
+        initial_state = repository.load()
+        if repository.writable:
+            from .onboarding import run_first_launch
+            initial_state = run_first_launch(repository, initial_state)
+            if initial_state is None:
+                return
+        win = MainWindow(repository=repository, initial_state=initial_state)
     app.aboutToQuit.connect(win.shutdown)  # also covers Cmd+Q / menu quit
     win.show()
     sys.exit(app.exec())

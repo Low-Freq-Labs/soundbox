@@ -1,8 +1,10 @@
 # Shared app and optional personal modules
 
-Sonny deferred further public splitting/release work on November9,2026 until the
-personal app is finished. Preserve the implemented profiles and provider boundary;
-this is no new distribution or dependency/service clearance.
+Sonny requested an initial personal-build tester rollout on November25,2026,
+resuming the installer/update work deferred November9. This scope preserves the
+shared/provider boundary and excludes his library, photos, credentials and native
+authorities. Build tooling is not independent dependency/service clearance or
+acceptance for another user's native library. Those checks remain separate.
 
 Allocation requested October26,2026; the November8 checkpoint used accepted
 personal build169 and its separately validated public package. Those dated checks
@@ -87,7 +89,7 @@ or completed dependency clearance.
 | Default-photo pool and balanced assignments | Keep | Same | Personal photos are user data, never bundled |
 | Existing curated JPEGs and provenance | Keep readable | Same | Removing provider never removes stored art |
 | Embedded artwork import from local audio | Planned | Same when built | Not a shipped feature; read-only extraction, explicit precedence |
-| Automatic online cover discovery for new tracks | Omit | Retain via optional provider | Starts only with the personal provider |
+| Automatic online cover discovery for new tracks | Omit | Independent first-launch opt-in | Starts only with an admitted personal provider and the saved automatic-artwork choice; existing installations retain their choice |
 | Fetch cover art now / background / stop / re-scan | Omit online actions | Retain via provider | Gate command and scheduler, not just menu |
 | Online thumbnail candidate search in cover picker | Omit | Retain via provider | Local picker remains present in both |
 | SoundCloud connection and likes-first artwork matching | Omit | Optional SoundCloud card in Connections | App credentials/tokens in Keychain; public-profile likes aid general artwork search without browser authorization or website redirect changes; metadata index outside curation/backup; live service acceptance is separate from offline validation |

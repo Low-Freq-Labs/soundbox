@@ -850,7 +850,7 @@ def _effective_track_metadata(
         artist_overrides,
         derive_artists,
         cast("metadata.ArtistRegistry | None", library.artist_registry),
-        stem=source.stem,
+        stem=source.stem, cleanup=library.metadata_cleanup_enabled,
     )
     title = metadata.effective_title(
         track.track_id,
@@ -858,8 +858,10 @@ def _effective_track_metadata(
         artist,
         title_overrides,
         getattr(library, "title_junk", None),
+        cleanup=library.metadata_cleanup_enabled,
+        source_artist=track.artist, registry=library.artist_registry,
     )
-    return title or source.stem, artist
+    return (title or source.stem) if library.metadata_cleanup_enabled else title, artist
 
 
 def _new_track_info(

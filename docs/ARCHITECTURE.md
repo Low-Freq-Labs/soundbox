@@ -35,6 +35,21 @@ Ordinary UI preferences use the same ordered lane with an explicit leaf
 allowlist and latest-value coalescing. Canonical persistence boolean save APIs still mean durable success. Controller
 gesture admission separately reports owned RAM staging; it never acknowledges a
 canonical or native save merely because work was queued.
+`desktop.metadata_batch` groups a bounded prefix of existing metadata intentions
+under that same source owner. Production groups contain at most eight field
+operations; every request is durable before its independently guarded native
+apply. One complete fresh metadata readback verifies the group. Its worker builds
+the selected scalar index, so GUI acknowledgements do not rescan the Library.
+Synchronous acknowledgement staging restores the original GUI roots before one
+ordered canonical commit; only durable success publishes the complete Library.
+Each operation retains its own journal and recovery receipt. Partial failure,
+source replacement and newer gestures leave unresolved work recoverable rather
+than treating a partially applied group as complete.
+`desktop.onboarding` holds a fresh source's first publication until its explicit
+Clean/Keep and background-art choices are durably saved. Preview reads do not
+resolve media paths. `soundbox.metadata_cleanup_policy` binds that choice to the
+source/kind/library identity; `rekordbox_installations` observes installed app
+versions without activating a source authority or admitting another native schema.
 `desktop.ipod_export_capture` uses an ordered read-only checkpoint on that lane
 to freeze a durably saved selected generation while bulk metadata work is paused
 or running. It does not drain unrelated source queues or write a new canonical
@@ -89,6 +104,10 @@ visible occurrence. Compatible refresh keeps typed text/caret/selection; reset
 can reattach only to the exact current target without overriding newer input or
 focus. An obsolete target keeps copyable text in the Unsaved edits menu rather
 than saving it onto a replacement song.
+Outside left clicks finish an owned editor through its existing save admission,
+including non-focusable chrome. Browser viewport clicks retain Qt's native
+commit/selection ordering. Tab and Backtab traverse visible editable Title and
+Artist cells by exact song/occurrence after commit; read-only columns are skipped.
 Browser menu actions capture detached source/song identities; Edit also retains
 its visible duplicate occurrence and resolves a fresh index after a nested menu.
 Artists right-click uses the clicked row/group unless it belongs to the existing
@@ -359,7 +378,7 @@ before FAT32/exFAT MBR formatting, reusing a correctly typed full-capacity sole
 first partition only for same-filesystem quick erase. Other layouts or filesystem
 changes repartition; post-format physical/map/filesystem checks remain.
 Track.info and retained settings.track_info overlays feed display/export;
-browsercache schema4 and libcache schema13 preserve these fields without
+browsercache schema5 and libcache schema13 preserve these fields without
 analysis/art rebuilds. In tested source, native Title/Artist edits use
 `desktop.metadata_controller` and an independently admitted native store;
 unsupported native Track Info fields refuse rather than report a local-only save.
@@ -1143,8 +1162,10 @@ and policy changes invalidate all rows. Background warms compute only misses.
 
 The shared status row reserves the operation label's animated width and the
 counter's complete total-width, so repeated updates do not move the controls.
-Per-file acquisition/copy/verification phases and spaced byte totals live in
-the status tooltip; the operation callback alone owns visible progress. Static
+Per-file acquisition/copy/verification phases and measured byte totals appear in
+the status details, including the current filename and within-file progress for
+device transfers. The operation callbacks own visible progress; only joined
+final completion reaches100%. Static
 messages resize to fit and stop any old pulse. Transient expiry is bound to the
 presentation generation. Analysis/artwork use separate counters, yield to device
 ownership (including Verify), and restore a still-active pause after returning
@@ -1599,8 +1620,10 @@ refresh, preserving compressed waveform payloads.
 
 `desktop.theme` resolves the saved `theme_accent` into base/light/dark/subtle
 roles. `theme_text_mode` (White/Black/Custom) and `theme_text_custom` independently
-control text on accent-colored selections/buttons; White is the default and
-custom colors survive mode/accent changes. `ThemeProgressBar` paints the selected
+control text on accent-colored selections/buttons. Fresh settings use a white
+accent with black lettering; saved accent and lettering choices remain unchanged.
+Reset restores the white accent while retaining saved lettering, including custom
+colors. `ThemeProgressBar` paints the selected
 accent-text role only over its fill and normal light lettering over the empty
 region, so a white accent with black text remains readable at every percentage.
 General Settings applies changes across
@@ -1853,8 +1876,9 @@ for single/bulk alias merge and unmerge and accepted existing artist suggestions
 It performs no provider request. One save retains the changed curation, immutable
 paired inputs and source-bound origins before worker planning. Active requests,
 operation IDs and receipts remain unchanged; an unstarted successor coalesces
-later gestures. Only one row pair enters the bounded native FIFO at a time, so
-a batch is not limited to256 accepted songs. Missing predecessors retain their
+later gestures. The durable migration cursor expands a bounded prefix of row
+pairs into the existing native FIFO; readback groups do not impose a256-song
+batch limit. Missing predecessors retain their
 full frozen derivation context; only unfinished or unresolved intentions carry
 forward. Completed old-path rows do not become new unresolved work.
 
@@ -1877,6 +1901,22 @@ overlays retire in that same ACK save, preserving other fields/newer inputs.
 A later independent native value supersedes old ownership, so a return to
 an old spelling cannot reactivate it. Raw NAME guesses remain untrusted even
 after their inferred artist was materialized into the native Artist field.
+
+The source-bound `metadata_cleanup_policy` selects Clean or Keep originals;
+the choice never grants native write authority. `Library.metadata_cleanup_enabled`
+and its artist registry carry the accepted choice through browser rows, playback
+labels, artwork queries, detached export snapshots and worker IPC. Keep returns
+the source title/artist without automatic cleanup, majority casing, editor rescue
+or filename inference; explicit overrides and exact saved alias chains remain.
+Clean freezes both raw fields before either native field changes. Explicit
+ft/feat/featuring contributors move from the artist tag to a title credit;
+direct collaborations and named remix/edition identities remain distinct.
+Component spelling votes count each track once, with trusted names supplying
+recognition rather than extra votes. Only identified title-credit spans receive
+that spelling; explicit manual titles remain exact.
+Registry preparation and browser/prepared-view cache keys include the choice,
+so a previous Clean projection cannot supply Keep rows. Firmware exporters retain
+their separate media/format/ownership rules.
 
 Existing title cleanup controls stage their policy and frozen successor together
 before presentation. Fresh native refresh stages sparse ACK reconciliation in
@@ -1912,7 +1952,8 @@ Maintenance/publication holds rearm without admission; shutdown stops wakeups.
 
 Alias graph resolution reaches a stable terminal without a depth cap. Legacy
 cycles use a deterministic representative, and folded-key conflicts no longer
-depend on JSON key order. Browser-cache schema4 retires pre-change derived rows.
+depend on JSON key order. The November13 browser-cache schema4 retired that
+checkpoint's pre-change derived rows; the current cache schema is described above.
 The November13 offline comparison reproduced all3449 frozen current/retained
 Title/Artist pairs byte for byte. Focused fixture and peer validation remain
 separate from the full gate and runtime handoff; HANDOFF records their status.

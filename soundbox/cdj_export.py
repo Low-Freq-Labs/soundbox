@@ -403,10 +403,13 @@ def _selection_hint(library, playlists, track_rows, *, titles=None, artists=None
         tracks = []
         for t in library.resolve(playlist):
             if t.track_id not in track_rows:
+                artist = effective_artist(t.track_id,t.name,t.artist,artists,True,library.artist_registry,t.path.stem,
+                                          cleanup=library.metadata_cleanup_enabled)
                 track_rows[t.track_id]=[t.track_id, t.source_uuid, str(t.path), t.bpm, t.key,
                     t.source_cue_revision,
-                    effective_title(t.track_id,t.name,t.artist,titles,library.title_junk),
-                    effective_artist(t.track_id,t.name,t.artist,artists,True,library.artist_registry,t.path.stem),
+                    effective_title(t.track_id,t.name,artist,titles,library.title_junk,
+                                    cleanup=library.metadata_cleanup_enabled, source_artist=t.artist,
+                                    registry=library.artist_registry), artist,
                     getattr(library,'info_overrides',{}).get(t.track_id,{})]
             tracks.append(track_rows[t.track_id])
         rows.append([manifest.playlist_key(playlist),playlist.name,playlist.folder_path,tracks])

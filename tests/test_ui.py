@@ -4505,19 +4505,25 @@ class TitleJunkSetting(unittest.TestCase):
 class ColumnPersistence(unittest.TestCase):
     def test_widths_and_visibility_roundtrip(self):
         t = _win.table
-        # Free the Key width before enlarging BPM; independent drags may not
-        # borrow from Title when the row already fills the viewport.
+        # Free enough width before enlarging BPM; independent drags may not
+        # borrow from Title when the row already fills the viewport. The fresh
+        # Key width alone is smaller than the requested BPM growth.
         t.setColumnHidden(4, True)
+        t.setColumnHidden(5, True)
         t.setColumnWidth(3, 123)
+        self.assertEqual(t.columnWidth(3), 123)
         _win._save_columns()
         t.setColumnWidth(3, 60)
         t.setColumnHidden(4, False)
+        t.setColumnHidden(5, False)
         _win._restore_columns()
         self.assertEqual(t.columnWidth(3), 123)
         self.assertTrue(t.isColumnHidden(4))
+        self.assertTrue(t.isColumnHidden(5))
         # sort indicator is cleared on restore (never launch pre-sorted)
         self.assertEqual(t.horizontalHeader().sortIndicatorSection(), -1)
         t.setColumnHidden(4, False)
+        t.setColumnHidden(5, False)
         _win._save_columns()
 
 

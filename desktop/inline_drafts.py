@@ -160,6 +160,69 @@ class InlineDrafts(QObject):
         if session is not None:
             session.focus_out_reason = reason
 
+    def finish_outside_press(self, receiver):
+        """A click on non-focusable chrome still finishes the active edit.
+
+        The viewport keeps Qt's own commit/selection ordering: committing before
+        its mouse handler can move a sorted row out from under the click.
+        """
+        if not isinstance(receiver, QWidget) or receiver.window() is not self.window:
+            return
+        for session in tuple(self.sessions.values()):
+            editor = session.editor()
+            if (session.ended or editor is None or not isValid(editor) or not editor.hasFocus()
+                    or receiver is editor or editor.isAncestorOf(receiver)
+                    or receiver in (session.view, session.view.viewport())):
+                continue
+            self.finish(editor, session.view)
+
+    @staticmethod
+    def finish(editor, view):
+        delegate = view.itemDelegate()
+        delegate.commitData.emit(editor)
+        if isValid(editor):
+            delegate.closeEditor.emit(editor, QAbstractItemDelegate.NoHint)
+
+    def tab(self, editor, backwards):
+        session = self.sessions.get(id(editor))
+        if session is None or session.ended:
+            return False
+        view = session.view
+        index = QModelIndex(session.index)
+        if not index.isValid():
+            return False
+        header = view.horizontalHeader() if hasattr(view, 'horizontalHeader') else view.header()
+        columns = [header.logicalIndex(at) for at in range(header.count())
+                   if not header.isSectionHidden(header.logicalIndex(at))]
+        if backwards:
+            columns.reverse()
+        row = index.siblingAtColumn(0)
+        after = False
+        while row.isValid():
+            for column in columns:
+                candidate = row.siblingAtColumn(column)
+                if candidate == index:
+                    after = True
+                    continue
+                if after and candidate.flags() & Qt.ItemIsEditable:
+                    target = target_for(self.window, view, candidate)
+                    if target is None:
+                        continue
+                    self.finish(editor, view)
+                    destination = self.find(view, target)
+                    if destination.isValid():
+                        view.setCurrentIndex(destination)
+                        view.edit(destination)
+                    return True
+            if hasattr(view, 'indexBelow'):
+                row = view.indexAbove(row) if backwards else view.indexBelow(row)
+            else:
+                next_row = row.row() + (-1 if backwards else 1)
+                while 0 <= next_row < index.model().rowCount() and view.isRowHidden(next_row):
+                    next_row += -1 if backwards else 1
+                row = index.model().index(next_row, 0)
+        return False
+
     def eventFilter(self, editor, event):
         if event.type() == QEvent.FocusOut:
             self.focus_out(editor, event.reason())

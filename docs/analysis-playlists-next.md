@@ -8,8 +8,10 @@ of author. Direct native registration and initial shared full BPM/Grid+Key/
 waveforms on bare stereo PCM16/24 WAV44.1/48kHz now have separate accepted
 production authorities and are installed. Bare unlocked MPEG-1 CBR/no-Info/Xing
 stereo44.1kHz MP3 initial full analysis has its own independently accepted domain;
-see [the MP3 work record](mp3-shared-analysis.md). Other profiles, partial-component and
-existing-analysis replacement/gain/metadata remain gated. The dated native
+see [the MP3 work record](mp3-shared-analysis.md). Other profiles, partial-component
+publication, existing-analysis replacement and gain remain outside these
+initial-analysis authorities. Ordinary metadata edits use their separately
+accepted native domain. The dated native
 references below retain their original scope; they are not current missing-work
 claims or permission to broaden a writer.
 Actual installed provenance and validation are in [HANDOFF](HANDOFF.md).
@@ -72,7 +74,8 @@ same DSP and quality. BPM ranges are 70–180 default, 48–95, 58–115, 68–1
 
 Each local stage captures a source snapshot while hashing, pinned to the waveform's
 full audio SHA after the initial waveform capture. The helper retains up to thirty
-minutes /96million mono samples, checks rate/channel budgets before allocation,
+minutes /96million mono samples, admits full-source durations from 4 seconds through
+24 hours, checks rate/channel budgets before allocation,
 and bounds every append. It streams the remaining tail through EOF, checking
 finite samples, stable format and declared duration even after the head fills.
 Tracks within those bounds are analyzed completely; beyond the head the last measured

@@ -819,7 +819,7 @@ def plan(
                     track.track_id, override or track.name, track.artist,
                     artist_overrides, derive_artists,
                     cast("metadata.ArtistRegistry | None", lib.artist_registry),
-                    stem=src.stem,
+                    stem=src.stem, cleanup=lib.metadata_cleanup_enabled,
                 )
                 # The on-device filename is ALWAYS the SoundBox Track Title —
                 # override, else the tidied rekordbox name — NEVER the on-disk
@@ -829,7 +829,8 @@ def plan(
                 # collision downstream gets a short source-hash suffix.
                 title = metadata.effective_title(
                     track.track_id, track.name, artist, title_overrides,
-                    getattr(lib, "title_junk", None))
+                    getattr(lib, "title_junk", None), cleanup=lib.metadata_cleanup_enabled,
+                    source_artist=track.artist, registry=lib.artist_registry)
                 display = (title, artist)
                 display_by_track[track.track_id] = display
             previous_display = display_by_source.get(src_key)

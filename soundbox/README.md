@@ -5,8 +5,8 @@ Qt-free library, source protocols, analysis and device exporters.
 - `library.py` / `engine.py`: source-neutral models and composition.
 - `state_repository.py` / `state_records.py` / `state_io.py`: canonical state, records and atomic publication; `artwork_identity.py` binds cover ownership and guarded saved-owner adoption.
 - `native_transaction.py`, `cache_io.py`, `ipod_policy.py`: shared mechanics; domain rules stay separate. `artwork_observation.py` observes current cover choices without granting writer authority.
-- `rekordbox_*.py`: independently authorized native edit domains; `playlist_track_order.py` / `playlist_membership_replay.py` compose accepted membership commands and compact their exact final effects; companion snapshots grant no second write permission.
-- `source_truth.py` / `alias_intents.py` / `metadata_provenance.py`: frozen pairs, raw scalar/ACK ownership and durable merges/resets.
+- `rekordbox_*.py`: independently authorized native edit domains; `rekordbox_installations.py` observes installed versions without granting permission. Membership replay composes accepted commands; companion snapshots grant no second write authority.
+- `source_truth.py` / `alias_intents.py` / `metadata_provenance.py`: frozen pairs, raw scalar/ACK ownership and durable merges/resets; `metadata_cleanup_policy.py` binds Clean/Keep choices to exact sources, independently of write authority.
 - `mutation_domain.py`: revision-observed JSON containers for worker validation; plain snapshots grant no source authority.
 - `worker_process.py` / `library_codec.py`: owned Qt-free helper transport; `cache_process.py` and `native_reader_process.py` keep encoding/readback outside GUI Python contention.
 - `source_acquisition.py` / `source_verification.py`: stable captured bytes and identity proofs.

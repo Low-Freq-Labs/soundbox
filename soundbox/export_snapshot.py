@@ -95,7 +95,9 @@ class ExportSnapshot:
             _removal_memberships(data['removed_by_playlist']).items()}
         library = Library(tracks, **data)
         if registry is not None:
-            library.artist_registry = ArtistRegistry(registry['canon'], registry['trusted'])
+            library.artist_registry = ArtistRegistry(registry['canon'], registry['trusted'],
+                cleanup_enabled=registry.get('cleanup_enabled', True), aliases=registry.get('aliases', {}),
+                components=registry.get('components', {}), independent=registry.get('independent', ()))
         setattr(library, 'export_source_paths', self.sources)
         setattr(library, 'info_overrides', info)
         setattr(library, 'media_facts', facts)
@@ -196,7 +198,10 @@ def capture_export(library: Library, playlists=(), *, standalone=(), extra=(),
         removed_by_playlist=_removal_memberships(library.removed_by_playlist,
             None if complete else selected_pids),
         title_junk=library.title_junk,
-        registry=(dict(canon=registry._canon, trusted=list(registry._trusted))
+        metadata_cleanup_enabled=library.metadata_cleanup_enabled,
+        registry=(dict(canon=registry._canon, trusted=list(registry._trusted),
+                       cleanup_enabled=registry.cleanup_enabled, aliases=registry._explicit_aliases,
+                       components=registry._components, independent=list(registry._independent))
                   if isinstance(registry, ArtistRegistry) else None),
         titles={key: value for key, value in (titles or {}).items() if key in ids},
         artists={key: value for key, value in (artists or {}).items() if key in ids},

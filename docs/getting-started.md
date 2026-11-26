@@ -2,10 +2,19 @@
 
 SoundBox is a macOS desktop app for browsing/preparing a rekordbox library and exporting selected playlists to USB or supported iPods.
 
-## Prerequisites
+## Installer
+
+The first-tester installer is an Apple Silicon macOS package; installation and
+updates replace the app without copying anyone else's library or settings. See
+[installer/signing scope](macos-installer.md). A new installation uses three short
+[setup pages](first-launch.md): choose the library, choose cleanup or original
+metadata, and independently opt into automatic artwork. Native writing on another
+library/version still requires its own supported acceptance.
+
+## Prerequisites for source builds
 
 Apple Silicon, macOS 14+, Python 3.14, CMake 3.24+, Apple's command-line developer tools, and the pinned dependencies.
-CDJ rendering/analysis uses the existing isolated Rust toolchain; the [release guide](test-release-gate.md) describes provisioning and private offline fixtures.
+CDJ rendering/analysis uses the pinned isolated Rust toolchain. `SOUNDBOX_RUST_KIT` can select an equivalent kit outside the developer checkout; its `install/bin` holds cargo/rustc/rustdoc. The [release guide](test-release-gate.md) describes provisioning and separate private offline test fixtures. An installed app needs neither Python nor a Rust kit.
 
 ## Run from source
 

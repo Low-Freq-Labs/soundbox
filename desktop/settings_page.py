@@ -35,8 +35,8 @@ LOG = logging.getLogger("soundbox")
 
 class SettingsPageMixin:
     def _apply_theme_color(self, value, *, save=False):
-        mode = self.settings.get('theme_text_mode', 'white')
-        mode = mode if mode in ('white', 'black', 'custom') else 'white'
+        mode = self.settings.get('theme_text_mode', theme.DEFAULT_TEXT_MODE)
+        mode = mode if mode in ('white', 'black', 'custom') else theme.DEFAULT_TEXT_MODE
         custom = theme.normalize_accent_text(self.settings.get('theme_text_custom'))
         self.settings.update(theme_text_mode=mode, theme_text_custom=custom)
         text_color = {'white': '#ffffff', 'black': '#000000', 'custom': custom}[mode]
@@ -67,6 +67,9 @@ class SettingsPageMixin:
 
     def _choose_theme_color(self):
         self._theme_picker(text=False)
+
+    def _reset_theme_color(self):
+        self._apply_theme_color(theme.DEFAULT_ACCENT, save=True)
 
     def _theme_picker(self, *, text):
         original = (theme.PURPLE, theme.ON_ACCENT)
@@ -111,7 +114,7 @@ class SettingsPageMixin:
     def _sync_theme_text_controls(self):
         if not hasattr(self, '_theme_text_mode'):
             return
-        mode = self.settings.get('theme_text_mode', 'white')
+        mode = self.settings.get('theme_text_mode', theme.DEFAULT_TEXT_MODE)
         self._theme_text_mode.blockSignals(True)
         self._theme_text_mode.setCurrentIndex(max(0, self._theme_text_mode.findData(mode)))
         self._theme_text_mode.blockSignals(False)
@@ -129,6 +132,8 @@ class SettingsPageMixin:
         """Push current settings onto the loaded library (a pure display/export
         filter — never modifies rekordbox)."""
         if self.lib is not None:
+            from soundbox.metadata_cleanup_policy import choice_for
+            self.lib.metadata_cleanup_enabled = choice_for(self.settings, self.lib) == 'clean'
             self.lib.hide_untracked = bool(self.settings.get("hide_untracked"))
             self.lib.info_overrides = self.settings.get('track_info',{})
             self.lib.hide_nokey = bool(self.settings.get("hide_nokey", True))
@@ -303,8 +308,8 @@ class SettingsPageMixin:
         self._theme_color.hex_committed.connect(lambda value: self._apply_theme_color(value, save=True))
         reset_color = QPushButton("Reset")
         reset_color.setCursor(Qt.PointingHandCursor)
-        reset_color.setToolTip('Restore the default purple accent')
-        reset_color.clicked.connect(lambda: self._apply_theme_color(theme.DEFAULT_ACCENT, save=True))
+        reset_color.setToolTip('Restore the default white accent')
+        reset_color.clicked.connect(self._reset_theme_color)
         appearance_row.addWidget(self._theme_color)
         appearance_row.addWidget(reset_color)
         bl.addWidget(self._settings_row("Theme color", appearance,
@@ -419,8 +424,25 @@ class SettingsPageMixin:
             "Pick a backup .zip — or library.json inside its extracted folder. "
             "SoundBox checks the backup and keeps recovery data if needed."))
 
+        bl.addWidget(self._settings_section("UPDATES"))
+        self._update_check_button = QPushButton('Check for Updates…')
+        self._update_check_button.setCursor(Qt.PointingHandCursor)
+        self._update_check_button.clicked.connect(self._check_for_updates)
+        bl.addWidget(self._settings_row('Soundbox updates', self._update_check_button,
+            'Check the official release only when you click. Quit Soundbox normally before opening the installer.'))
+        self._update_check_status = QLabel('')
+        self._update_check_status.setWordWrap(True)
+        self._update_check_status.setTextFormat(Qt.PlainText)
+        bl.addWidget(self._update_check_status)
+
         # --- COVER ART -------------------------------------------------------
         gl.addWidget(self._settings_section("COVER ART"))
+        if self.providers.allows('artwork.search'):
+            self._chk_auto_artwork = QCheckBox()
+            self._chk_auto_artwork.toggled.connect(self._on_auto_artwork_changed)
+            gl.addWidget(self._settings_row(
+                "Find missing covers automatically", self._chk_auto_artwork,
+                "Find covers in the background. You can still choose or fetch artwork yourself."))
         review = QPushButton("Review covers…")
         review.setCursor(Qt.PointingHandCursor)
         review.clicked.connect(self._open_art_review)
@@ -792,6 +814,66 @@ class SettingsPageMixin:
             self._run_state_task(
                 lambda: backup.export_backup(self._data_file.parent, dest), restoring=False)
 
+    def _check_for_updates(self):
+        if self._shutting_down or getattr(self, '_update_check_worker', None) is not None:
+            return
+        from soundbox import release_updates
+        available = getattr(self, '_available_update', None)
+        if isinstance(available, release_updates.Release):
+            from PySide6.QtCore import QUrl
+            from PySide6.QtGui import QDesktopServices
+            if QDesktopServices.openUrl(QUrl(available.download_url)):
+                self._available_update = None
+                self._update_check_button.setText('Check for Updates…')
+                self._update_check_status.setText(
+                    'Installer download opened in your browser. Quit Soundbox normally before opening it.')
+            else:
+                self._update_check_status.setText('The browser could not open the installer download.')
+            return
+        from .task_owner import TaskOwner
+        from .workers import OneShotTask
+        try:
+            installed = release_updates.current_build()
+            if installed.profile != 'personal':
+                raise ValueError('This update channel is only available for personal builds')
+        except (OSError, ValueError) as exc:
+            self._update_check_status.setText(str(exc))
+            return
+        owner = getattr(self, '_update_check_tasks', None)
+        if owner is None:
+            owner = self._update_check_tasks = TaskOwner(self)
+        if owner.stopping:
+            return
+        self._update_check_button.setEnabled(False)
+        self._update_check_status.setText('Checking the official release…')
+        worker = OneShotTask(lambda: release_updates.latest_release(installed),
+                             log_label='Explicit update check')
+        self._update_check_worker = worker
+        def finished(captured):
+            if getattr(self, '_update_check_worker', None) is not captured:
+                return
+            self._update_check_worker = None
+            if self._shutting_down or captured.cancellation.is_set():
+                return
+            self._update_check_button.setEnabled(True)
+            result = captured.result
+            if isinstance(result, Exception):
+                self._update_check_status.setText('Could not check for updates. Try again later.')
+                return
+            if result is None:
+                self._update_check_status.setText('No newer release is available.')
+                return
+            if not isinstance(result, release_updates.Release):
+                self._update_check_status.setText('The update service returned an unexpected result.')
+                return
+            self._available_update = result
+            self._update_check_button.setText('Download installer')
+            self._update_check_status.setText(
+                f'Version {result.version} (build {result.build}) is available. '
+                'Download it in your browser, then quit Soundbox normally before opening the installer.')
+        owner.adopt(worker, finished)
+        worker.start()
+
     def _on_backup_done(self, res):
         from PySide6.QtWidgets import QMessageBox
         if isinstance(res, Exception):
@@ -1005,6 +1087,11 @@ class SettingsPageMixin:
         if not hasattr(self, "_chk_hide"):
             return
         self._sync_theme_text_controls()
+        if hasattr(self, '_chk_auto_artwork'):
+            self._chk_auto_artwork.blockSignals(True)
+            self._chk_auto_artwork.setChecked(bool(self.settings.get('auto_artwork', True)))
+            self._chk_auto_artwork.setEnabled(self.providers.allows('artwork.search'))
+            self._chk_auto_artwork.blockSignals(False)
         if hasattr(self, '_analysis_controls'):
             self._analysis_controls.set_preferences(self.settings.get('analysis'))
         for w, val in ((self._chk_hide, self.settings.get("hide_untracked")),
@@ -1020,6 +1107,12 @@ class SettingsPageMixin:
             button.blockSignals(False)
         self._set_secs_label()
         self._sync_settings_enabled()
+
+    def _on_auto_artwork_changed(self, enabled):
+        self.settings['auto_artwork'] = bool(enabled)
+        self._schedule_settings_save('auto_artwork')
+        if enabled:
+            self._maybe_autostart_art_fill()
 
     def _on_waveform_mode_changed(self, mode: str):
         normalized = str(mode).upper()

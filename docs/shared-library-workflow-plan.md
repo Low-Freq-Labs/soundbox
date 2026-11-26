@@ -1,6 +1,6 @@
 # Shared library, analysis and player corrections
 
-Current-status review November23,2026; exact installed provenance and validation
+Current-status review November25,2026; exact installed provenance and validation
 are recorded in HANDOFF. The November8 personal169 checkpoint, responsiveness
 build167/runtime `3fb0ff60…`, whole-app build165/runtime `7ffde716…`, build163,
 source release `4a3d29a` and build160/runtime `7bbe8577…` are prior delivery evidence.
@@ -14,6 +14,15 @@ their original boundaries, not current production availability.
 Later exact-library v5 Title/Artist saves and preserved backfill were independently
 accepted; scheduling pause does not revoke that authority. Other native Track Info
 fields, artwork, broader analysis/replacement and gain remain separate work.
+The current metadata source candidate batches a bounded prefix of existing
+field operations, retaining independent durable requests, verified native
+baselines and recovery receipts while sharing one complete fresh readback and
+canonical ACK. Exact-source Clean/Keep choices control display, native intentions
+and export together. Keep preserves source scalars and explicit manual choices;
+Clean's feature-credit and constituent-spelling rules retain raw provenance and
+manual titles. Fresh onboarding saves its choice before first publication, but
+that consent does not provision an exact-library native authority. Compatibility
+and activation for another person's library remain deferred, separate work.
 SoundBox's local artwork choices now bind to the exact source and song identity;
 opening another source never adopts unowned legacy art. Compatible refreshes
 retain accepted manual choices, while source changes retire the old publishers.

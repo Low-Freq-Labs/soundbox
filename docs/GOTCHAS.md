@@ -194,6 +194,11 @@ fixtures and recovery needed by unfinished operations.
   browser selection. Setting an unchanged QLineEdit maximum length can clear its
   modified flag; do that only when the limit changes. Publication must not steal
   focus from newer input, another window or a modal dialog.
+  Outside left clicks on non-focusable window chrome also finish an owned
+  editor through normal admission. Keep viewport clicks in Qt's native
+  commit/selection order; precommitting can move sorted rows beneath the click.
+  Tab/Backtab resolve the next visible editable Title/Artist target after commit,
+  retaining exact occurrence checks and skipping read-only cells.
 - A local recursive helper captures its own closure cell. If it also captures
   Qt item wrappers, it may keep a borrowed invisible-root wrapper after the tree's
   C++ destruction. Release synchronous tree helper cells in `finally`; do not
@@ -916,6 +921,11 @@ test, after unchanged source-identity and native/manual provenance guards.
   scrolling disabled; when selected fields exceed the minimum-width budget,
   enable scrolling in the regular/Artists views rather than strand columns.
   Fit against the full browser viewport on Resize/Show, including after resizing in Settings. Do not fit against a hidden Artists viewport's stale geometry.
+  Fresh layouts show Title, Artist, Art, BPM, Key, Time and Format. Their fixed
+  widths after Title are170/46/62/46/60/104 logical points; Title fills the rest.
+  BPM needs62 points for full three-digit/two-decimal values with native item padding.
+  Format ends at the viewport edge with the overlay thumb inside it. Saved
+  header order, widths and visibility override these fresh defaults.
   TrackModel's fixed role constants belong outside its hot data() callback;
   unsupported paint roles need no row/key work or Qt enum lookup.
 - **The shared sidebar has two independent resize directions.** The horizontal
@@ -1814,8 +1824,24 @@ their accepted selected export/recovery contract is below and in the CDJ guide.
   Apply the guard to late-waveform recooks too, not only cache misses, and
   recheck after waits before decoding a queued track. A failed stat must defer
   background work; it is not evidence that a source is local.
-- Title pipeline order: effective ARTIST is computed from the RAW/overridden name
-  FIRST, then `effective_title = override | tidy(neat(name, artist), junk)`. Junk
+- The source-bound Keep originals choice bypasses automatic title/artist cleanup,
+  casing votes, title/editor rescue and filename inference across display,
+  artwork lookup and export. Preserve explicit edits and exact saved aliases.
+  Carry the choice in the Library/registry and immutable exports, and include it
+  in browser/prepared-view cache contexts. Missing legacy policy retains Clean;
+  malformed or unchosen entries within an existing policy cannot opt into Clean.
+- Clean starts from the complete raw title/artist pair: `feat.`, `ft.` and
+  `featuring` guests move into the title while direct comma, `&` and `x`
+  collaborations stay whole and ordered in Artist. Keep the frozen raw pair
+  through partial writes and restart; an own
+  primary-artist ACK cannot discard its earlier featured credit. Explicit
+  manual titles win. Then derive the effective artist before title tidying.
+  Each track contributes one chosen artist vote: active manual assignment,
+  exact fulfilled manual ACK, then automatic derivation. Trusted names provide
+  confidence rather than extra votes. Count each constituent once per track;
+  raw TAG credits add confidence without extra votes. Exact group aliases win,
+  and ambiguous comma/`&` groups require independent evidence for every
+  component. Cache inputs include the manual value, not just override presence. Junk
   rules: `metadata.BUILTIN_TITLE_RULES` + user words; `Library.title_junk=None`
   means defaults. The five defaults are mixdown, copy/version, BPM/key,
   render/file, and exact `(Original Mix)` removal. Legacy custom copies of that
@@ -1827,6 +1853,11 @@ their accepted selected export/recovery contract is below and in the CDJ guide.
   unrelated empty brackets. Other custom plain words/phrases likewise match
   only as a complete trailing unit or complete paired-bracket contents. Raw
   regex remains the explicitly advanced, run-as-written escape hatch.
+- Generic EP, DJ and streaming version/edition labels are release descriptors,
+  not creators. They must not replace a native artist or an earlier named
+  remixer. Named editions and collaborations still derive their credited names;
+  manual title/artist choices win. Trailing mixdown underscores must clean in
+  the same pass without removing the named remix/edition credit.
 - `manifest._excluded(pl, hidden, removals)` supplies the existing filesystem/
   iPod signature, entry, diff and prune exclusions. Preserve those semantics and
   current Library visibility when adding an export veto. Native CDJ capture

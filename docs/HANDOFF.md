@@ -1,6 +1,58 @@
 # SoundBox current handoff
 
-## Current delivery — November25,2026
+## Candidate — cleanup and first-tester preparation
+
+Sonny's November26 request is to finish this existing delivery, then hand over
+the [full personal beta RC checklist](rc-beta-checklist.md) for execution in a new
+context. The broader shakedown is planned, not executed. It retains all personal
+features, including online artwork, and stages current6.8.7.0303, latest6 patch
+and latest7 acceptance. No rekordbox upgrade or new live test is authorized by
+the planning document itself.
+
+The current working tree adds library-bound cleanup choices, three first-launch
+pages, independent opt-in automatic artwork, white fresh/Reset appearance and
+reference browser columns. It also fixes feature-credit placement, majority case
+within collaborations, inline click-away/Tab editing, and bounded native metadata
+readback/ACK groups. A native app-only installer and explicit official update check
+are implemented. These changes are not yet the installed personal178 described
+below; do not infer installed or friend-library acceptance from source checks.
+
+Read-only backup/current-library comparisons preserve the original ZIP and all
+matched manual corrections. The final current plan has181 changed tracks:
+183 case-only fields,9 feature fields,9 existing explicit-alias credit fields and
+one demonstrated descriptor/artist correction. No unexpected manual reversal or
+new lost feature credit remains in that comparison. Original-corpus pure planning
+and the independent current curation oracle have different purposes.
+
+The same frozen39-field native-copy workload measures59.568→28.551s with exact
+selected/unselected pairs, identity/path/XML and durable-empty-queue checks.
+A generated1,200-track run completes all2,400 native writes and ACKs in214.254s.
+See [performance evidence](performance-audit.md) for limits and failed-attempt
+accounting. Original remote ZIPs and live source/audio/curation remain untouched.
+Completed owned DB/XML/derived diagnostic copies have been retired; compact
+receipts remain under `cleanup-corpus-20261125`, `cleanup-portability-20261126`
+and `friend-ready-20261125` in the private SoundBox Logs directory.
+
+The complete bare `./check.sh --render` passed5,876 tests on the final source:
+5,798 offscreen and78 Cocoa, zero skips/expected failures. Lint, engine mypy167,
+native/Rust builds, required offline fixtures and inspected render passed.
+Automatic artwork opt-out now covers metadata-edit and exclusion-triggered
+retries while explicit Fetch/Rescan remain available. Fresh BPM width62 prevents
+native decimal clipping; saved widths remain intact. App/package build and
+runtime handoff are still pending. Sonny explicitly deferred the friend's version/admission check; do not
+ask for it again during this pass. First-tester native cleanup remains gated on
+independent exact-library acceptance; no Sonny authority is
+bundled and no new authority was minted. Known signed beta packaging is locally
+self-signed, with no Developer ID Installer certificate or notarization. Dependency
+notice collection is not complete transitive/service redistribution clearance.
+No installer has been published for this candidate. Do not send it as a fully
+accepted fresh-library cleanup release while these gates remain open.
+
+The real app remains user-controlled; do not terminate it or restore an older
+snapshot. The setup visual diagnostic at23:17 was an isolated generated dialog,
+not a restart of the installed application. Current installation proof follows.
+
+## Current installed delivery — November25,2026
 
 Branch `main`; installed runtime code commit
 `6dd50fdebce5add34af140ccc374db4a580d51b6`. The final publication receipt records

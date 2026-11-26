@@ -30,7 +30,7 @@ def serve(channel: PipeChannel, _root: Path) -> None:
                 if job is not None or len(message) != 6:
                     raise ProtocolError('Native reader already owns an unfinished snapshot')
                 _kind, _version, nonce, operation, scope, raw_counts = message
-                if (type(nonce) is not str or len(nonce) != 32 or operation not in ('metadata', 'live')
+                if (type(nonce) is not str or len(nonce) != 32 or operation not in ('metadata', 'live', 'preview')
                         or not isinstance(scope, tuple) or len(scope) != (3 if operation == 'metadata' else 1)
                         or any(type(value) is not str for value in scope) or not Path(scope[0]).is_absolute()):
                     raise ProtocolError('Invalid native source scope')
@@ -85,6 +85,8 @@ def serve(channel: PipeChannel, _root: Path) -> None:
                 previous = Library(job['paths'], [], scope[0], source_kind=scope[1],
                     source_library_id=scope[2], source_binding_issues=job['bindings'])
                 library = rekordbox_db.load_metadata_readback(previous)
+            elif job['operation'] == 'preview':
+                library = rekordbox_db.load_live(Path(scope[0]), resolve_media_paths=False)
             else:
                 library = rekordbox_db.load_live(Path(scope[0]), retain_tracks=job['retained'])
             if library.artist_registry is not None:

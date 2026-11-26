@@ -45,8 +45,10 @@ loading state; preparation never reads or hydrates audio.
 Encrypted before/after DB/XML and exact owned native-resource backups precede
 mutation. An interruption tag and durable returned Trash locations bind moved
 files without scanning unrelated Trash audio. SQLite’s owned hot-journal recovery
-precedes source-state classification; uncommitted files/resources/XML restore
-without overwriting a changed occupant. Committed native/file disposal is verified
+precedes source-state classification. Uncommitted files/resources/XML use the
+existing rollback; its late foreign-occupant replacement gap remains open in the
+[critical audit](critical-audit-2026-11.md#confirmed-critical-findings--current-disposition).
+Do not claim that path is replacement-safe. Committed native/file disposal is verified
 independently. Unknown states keep evidence and block other source domains.
 GUI receipt-save failure retains the confirmed intent for idempotent retry.
 Normal shutdown joins the source worker; accepted intentions survive restart.

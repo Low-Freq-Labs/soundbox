@@ -228,6 +228,8 @@ class Library:
     source_binding_issues: dict[str, str] = field(default_factory=dict)
     # Read-only creation choices include categories that have no tags yet.
     source_tag_categories: list[TagCategory] = field(default_factory=list)
+    # Source-bound display/export choice, never source-write authority.
+    metadata_cleanup_enabled: bool = True
 
     @property
     def track_count(self) -> int:

@@ -24,12 +24,20 @@ class AccentTheme(unittest.TestCase):
         self.assertEqual(theme.PURPLE, '#168fc0')
         self.assertNotIn('#7B2FBE', theme.QSS)
         self.assertNotIn('@ON_ACCENT@', theme.QSS)
-        theme.set_accent('#ffee00')
+        theme.set_accent('#ffee00', '#ffffff')
         self.assertIn('selection-color: #ffffff', theme.QSS)
         for value in (None, '', 'red', '#invalid', '#fff; color: red'):
             theme.set_accent(value)
             self.assertEqual(theme.PURPLE, theme.DEFAULT_ACCENT.lower())
-            self.assertEqual(theme.PURPLE_LIGHT, '#a855f7')
+            self.assertEqual(theme.PURPLE, '#ffffff')
+            self.assertEqual(theme.PURPLE_LIGHT, '#ffffff')
+            self.assertEqual(theme.ON_ACCENT, '#000000')
+
+    def test_saved_purple_retains_its_original_roles_and_lettering(self):
+        theme.set_accent('#7b2fbe', '#ffffff')
+        self.assertEqual((theme.PURPLE, theme.PURPLE_LIGHT, theme.PURPLE_DARK),
+                         ('#7b2fbe', '#a855f7', '#5b21b6'))
+        self.assertEqual(theme.ON_ACCENT, '#ffffff')
 
     def test_logo_keeps_header_size_and_recolors_only_its_accent_layer(self):
         logo = Wordmark()

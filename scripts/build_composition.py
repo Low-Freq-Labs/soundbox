@@ -31,6 +31,8 @@ UNUSED_DEPENDENCY_MODULES = (
 )
 REQUIRED_RUNTIME_MODULES = (
     "soundbox.providers", "soundbox.artwork", "soundbox.mp3_scan",
+    "soundbox.onboarding", "soundbox.metadata_cleanup_policy", "soundbox.release_updates",
+    "desktop.onboarding", "desktop.metadata_batch",
     "soundbox.native_mp3_analysis_plan", "soundbox.rekordbox_cbr_analysis_store",
     "soundbox.immutable_plan_proof",
     "desktop.native_timing",
@@ -54,11 +56,12 @@ def source_fingerprint(root: Path = ROOT) -> str:
     for directory in ("soundbox", "desktop", "soundbox_personal", "native", "profiles", "assets"):
         files.extend(p for p in (root / directory).rglob("*")
                      if p.is_file() and p.suffix in (".py", ".c", ".cpp", ".mm", ".h", ".metal", ".json", ".svg", ".icns", ".rs", ".toml", ".lock", ".sql"))
+    files.extend((root / "assets" / "licenses").glob("*.txt"))
     files.extend(root / name for name in (
         "soundbox_app.py", "Soundbox.spec", "build_app.sh", "build_native.sh", "build_cdj.sh",
         "native/CMakeLists.txt",
         "requirements-core.txt", "requirements-personal.txt", "pyproject.toml",
-        "scripts/build_composition.py", "scripts/app_provenance.py", "scripts/check_cdj_vendor.py"))
+        "scripts/build_composition.py", "scripts/build_assets.py", "scripts/build_notices.py", "scripts/app_provenance.py", "scripts/check_cdj_vendor.py"))
     digest = hashlib.sha256()
     for path in sorted(files):
         digest.update(str(path.relative_to(root)).encode() + b"\0")
@@ -82,6 +85,11 @@ def runtime_submodule(name: str) -> bool:
     """Keep development tools and unused dependency backends out of bundles."""
     return not any(name == package or name.startswith(package + ".")
                    for package in (*DEVELOPER_PACKAGES, *UNUSED_DEPENDENCY_MODULES))
+
+
+def runtime_asset(name: str) -> bool:
+    """Cocoa uses native text input; the optional virtual keyboard is unused."""
+    return 'qtvirtualkeyboard' not in name.casefold()
 
 
 def collection_options(package: str) -> dict:
@@ -213,6 +221,8 @@ def inspect_artifact(app: Path, profile: str) -> dict:
                  "library.json", ".sc_creds.json"}
     for path in app.rglob("*"):
         parts = path.relative_to(app).parts
+        if not runtime_asset(str(path.relative_to(app))):
+            raise ValueError(f'Unused virtual-keyboard artifact leaked: {path}')
         if forbidden.intersection(parts):
             raise ValueError(f"Developer/personal artifact leaked: {path}")
         if (path.name == '__main__.py' and path.parent.name == 'pyrekordbox'
@@ -233,10 +243,13 @@ def inspect_artifact(app: Path, profile: str) -> dict:
     ids = [module["id"] for module in manifest["modules"]]
     if info.get("SoundboxModules") != ids:
         raise ValueError("Module provenance mismatch")
+    from scripts.build_notices import verify as verify_notices
+    notices = verify_notices(app)
     return {"profile": profile, "modules": ids, "python_module_count": len(modules),
             "verified_runtime_modules": verified_runtime,
             "startup_scripts": startup_scripts,
-            "personal_packages": present, "source_sha256": manifest["source_sha256"]}
+            "personal_packages": present, "source_sha256": manifest["source_sha256"],
+            "runtime_notices": notices}
 
 
 def main() -> None:

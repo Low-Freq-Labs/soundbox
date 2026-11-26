@@ -14,7 +14,6 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import plistlib
 import shutil
 import sqlite3
 from typing import Iterator
@@ -96,9 +95,8 @@ def _assert_closed() -> None:
 
 
 def _installed_version() -> str:
-    info = Path('/Applications/rekordbox 6/rekordbox.app/Contents/Info.plist')
-    with info.open('rb') as handle:
-        return str(plistlib.load(handle).get('CFBundleShortVersionString', ''))
+    from .rekordbox_installations import installed_version
+    return installed_version()
 
 
 def _schema(conn) -> str:

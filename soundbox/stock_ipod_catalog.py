@@ -77,9 +77,12 @@ def _labels(track: Track, library: Library, derive_artists: bool,
     title = str((title_overrides or {}).get(track.track_id) or track.name)
     artist = metadata.effective_artist(
         track.track_id, title, track.artist, artist_overrides or {}, derive_artists,
-        registry=cast("metadata.ArtistRegistry | None", library.artist_registry), stem=track.path.stem)
+        registry=cast("metadata.ArtistRegistry | None", library.artist_registry), stem=track.path.stem,
+        cleanup=library.metadata_cleanup_enabled)
     title = metadata.effective_title(track.track_id, track.name, artist, title_overrides,
-                                     getattr(library, "title_junk", None)) or track.path.stem
+                                     getattr(library, "title_junk", None),
+                                     cleanup=library.metadata_cleanup_enabled,
+                                     source_artist=track.artist, registry=library.artist_registry) or track.path.stem
     return {(str(track.name).strip(), str(track.artist).strip()),
             (title.strip(), artist.strip())}
 
@@ -100,9 +103,12 @@ def catalog_metadata(track: Track, library: Library, *, derive_artists: bool = T
     if display is None or 'title' not in display or 'artist' not in display:
         raw_title = (title_overrides or {}).get(track.track_id) or track.name
         artist = metadata.effective_artist(track.track_id, raw_title, track.artist, artist_overrides,
-            derive_artists, cast("metadata.ArtistRegistry | None", library.artist_registry), stem=track.path.stem)
+            derive_artists, cast("metadata.ArtistRegistry | None", library.artist_registry), stem=track.path.stem,
+            cleanup=library.metadata_cleanup_enabled)
         row.update(title=metadata.effective_title(track.track_id, track.name, artist, title_overrides,
-                                                getattr(library, "title_junk", None)), artist=artist)
+                                                getattr(library, "title_junk", None),
+                                                cleanup=library.metadata_cleanup_enabled,
+                                                source_artist=track.artist, registry=library.artist_registry), artist=artist)
     row.update(getattr(library, "info_overrides", {}).get(track.track_id, {}))
     if display is not None:
         row.update(display)

@@ -823,7 +823,7 @@ class ArtFillWorker(QThread):
                 title = (self.title_overrides or {}).get(tid) or track.name
                 artist = metadata.effective_artist(
                     tid, title, track.artist, self.artist_overrides, True,
-                    self.lib.artist_registry, stem=track.path.stem)
+                    self.lib.artist_registry, stem=track.path.stem, cleanup=self.lib.metadata_cleanup_enabled)
                 if entry.get("fallback") == "excluded-source" and entry.get("fallback_artist") == artist:
                     continue
                 snapshot = self.cache.cover_snapshot(tid)
@@ -867,7 +867,7 @@ class ArtFillWorker(QThread):
             title = (self.title_overrides or {}).get(t.track_id) or t.name
             artist = metadata.effective_artist(
                 t.track_id, title, t.artist, self.artist_overrides, True,
-                self.lib.artist_registry, stem=t.path.stem)
+                self.lib.artist_registry, stem=t.path.stem, cleanup=self.lib.metadata_cleanup_enabled)
             try:
                 with provider_operation(self.provider,lambda:self._stop):
                     res = self.provider.fetch_best(artist, title)

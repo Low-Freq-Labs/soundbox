@@ -16,7 +16,7 @@ Native macOS library/prep/player app bridging rekordbox to USB, stock iPod and R
 - Speed work preserves complete first frames, coordinated audio/waveform readiness, selection/drafts and durable saves; earlier partial readiness or pop-in is a QOL regression.
 - Keep the engine Qt-free, production independent of research/tests, and personal code behind provider admission.
 - Reuse cohesive internal modules; keep authority-specific source SQL, recovery and exporter rules separate.
-- Target Sonny's one current installation. Retire obsolete compatibility after checking or migrating his actual saved state, backups, devices and recovery; do not keep speculative support for other installations.
+- Support Sonny's current installation and the explicitly requested first-tester rollout. Discover per-user paths and bind permissions to each actual library; never distribute Sonny's credentials, curation, photos, devices or authority files. Retire obsolete compatibility only after checking the relevant saved state, backups and recovery; unsupported rekordbox versions remain guarded.
 - Native source edits require their own accepted exact-library authority, fresh guards and shared writer/lock/journal.
 - Supported library/prep edits must persist in the shared rekordbox DB. SoundBox's current effective titles, artists and organization are authoritative migration inputs; preserve them before any native refresh or write. Local-only success is unfinished work.
 - Playback/export preserves source audio; only separately accepted conversion and user-confirmed removal may change originals.
