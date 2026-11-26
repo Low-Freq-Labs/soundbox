@@ -1,35 +1,58 @@
 # SoundBox current handoff
 
-## Release state — November25,2026
+## Current delivery — November25,2026
 
-Sonny requested full wrap-up: complete the release gate, commit/push main and
-finish guarded installation. The final runtime source fingerprint is
+Branch `main`; installed runtime code commit
+`6dd50fdebce5add34af140ccc374db4a580d51b6`. The final publication receipt records
+repository HEAD separately: its follow-up changes installation evidence only.
+`/Applications/Soundbox.app` is signed personal178/ABI9, with all246 runtime
+modules and both startup scripts independently compared against source.
+Runtime source fingerprint:
 `deb3144eae02439bc8bb147c305be9d9ec3a005dc3259b035a39abffe54c8252`.
-The complete bare `./check.sh --render` passed on1034 frozen non-Markdown
-source/test/build inputs:5731 tests, zero skips/expected failures, exact complete
-inventory across offscreen5653 and Cocoa78 cases. Pyflakes, engine mypy163, native
-builds, pinned CDJ Rust checks, fixtures and the inspected render passed.
-`release-gate.json` binds the reports and source freeze. Publication and the new
-installation remain pending below until their actual completion receipts exist.
+Executable SHA256:
+`a4e524ecdd2924ee0efb49f4d970ab00e106df7a7c89c4ae8d3ff531d4dada3a`.
+The clean6dd50fd provenance remains unchanged by the documentation follow-up.
 
-The currently installed `/Applications/Soundbox.app` remains signed personal177/
-ABI9, source
-`d74bd2fabc2168628745b90d2995804f40187c66efdb2dfae8765dabbadf6640`,
-executable SHA256
-`90ec40807aa1ae1c7afa751437efcb927240571987f6131cf02ad667983983b0`.
-Its last observed normal startup00:07 loaded3299 tracks/86 playlists with native
-CoreAudio/Metal, saved white icon,0 preparation and0 cover fetch/failures.
-Sonny quit normally; keep the real app closed during validation and replacement.
-The planned delivery uses new-binary isolated/native verification, exact closed-
-state preservation, then a normal relaunch and passive startup/curation check.
-Keep the previous app until that check passes. D74's historical normal startup
-is separate evidence. No automated real-app input or termination is authorized.
+Normal relaunch22:15:27 loaded3299 tracks/86 playlists, native CoreAudio/Metal,
+the saved white icon,0 preparation tasks and0 cover fetch/failures. PID59806
+and its actual installed executable/log descriptors bind the passive startup
+proof. Sonny handled the macOS Keychain prompt locally. The app remains open;
+no automated real-app input or termination occurred. Existing one absent native
+import binding/two missing file locations remain unchanged; no repair was run.
 
-Release receipts: `~/Library/Logs/Soundbox/wrapup-20261125/`.
-The final delivery/publication receipts will bind actual installed code/executable,
-source commit, final repository HEAD, protected state and cleanup separately.
-Documentation-only installation evidence does not require rebuilding or restamping
-an unchanged signed binary.
+The complete bare `./check.sh --render` passed on1034 frozen non-Markdown inputs:
+5731 tests, zero skips/expected failures, exact complete inventory across
+5653 offscreen and78 Cocoa cases. Pyflakes, engine mypy163, native builds,
+pinned CDJ Rust checks, required fixtures and the inspected render passed.
+Signed composition and isolated native/process/private SQL/ORM/AES checks passed.
+Documentation/configuration review covers every indexed path, with full current
+first-party reads distinguished from archive scope/hazard and vendor integrity
+checks; external links, legal and hardware acceptance are not certified.
+
+Guarded closed capture/install verified all103426 protected state entries before
+relaunch. Active verification preserves exact portable curation, artwork, song
+records, preferences and original/recovery epochs. Eight explicitly reviewed
+paths differ: three caches republished identical bytes;16 Graveyard snapshot DB
+digests refreshed with all534 rows/every other field exact;10 fallback half-hour
+retry tokens advanced997548→997592; the same-account public likes index removed
+only1226037592, preserving every remaining row/value/order with count6156→6155
+and its timestamp; macOS republished identical preferences. The Graveyard digest
+was not independently recomputed from the live DB. No curation restoration,
+native source experiment or device write occurred during this wrap-up.
+
+The original e244 closed baseline and75fe launch anchor were preserved. Root
+reviewed the exact differences; separately reviewed verifier2b1a390e freshly
+reproduced the approved proof before retirement. Its19 generated guards passed.
+The sole previous app, bound capture and exclusive stage are retired after normal
+runtime acceptance. Completed packaging/diagnostics are retired under the standing
+cleanup policy; only compact receipts remain.
+
+Release, per-file review, delivery, cleanup and publication receipts:
+`~/Library/Logs/Soundbox/wrapup-20261125/`.
+`release-gate.json` binds the complete test reports/freeze;
+`delivery/verify-active.json` and `delivery/completion-active.json` bind actual
+normal startup, preservation and rollback retirement. `publication.json` records
+final local/remote HEAD and the clean worktree after push.
 
 ## Delivered behavior and final corrections
 
@@ -109,9 +132,10 @@ conversions, unresolved/pending-acceptance recovery, the SONNY reusable proof,
 and `build/check` outputs. Never restore older curation or replay historical
 repair/install helpers as current authority.
 
-After accepted installation and normal-startup verification, retire the sole temporary previous
-app, bound installation capture/stage, duplicate packaging and completed private
-diagnostics. Keep compact receipts only; do not recreate retired archives.
+The sole temporary previous app, bound installation capture/stage, duplicate
+packaging and completed private diagnostics are retired after accepted installation
+and normal-startup verification. Keep compact receipts only; do not recreate
+retired archives.
 Earlier d74 delivery/preservation/cleanup receipts remain under
 `~/Library/Logs/Soundbox/export-sync-20261125/`; older histories are dated evidence,
 not rollback inventories or permissions. Follow [runtime contracts](runtime-contracts.md).
