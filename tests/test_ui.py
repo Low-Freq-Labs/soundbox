@@ -1093,17 +1093,27 @@ class StockIpodUI(unittest.TestCase):
             _win._exporting = old_exporting
 
     def test_stock_device_header_has_requested_tabs(self):
-        self.assertEqual(
-            [button.text() for button in _win.device_tab_buttons[:3]],
-            ["Device", "Songs", "Playlists"],
-        )
-        for button in _win.device_tab_buttons:
-            button.setVisible(True)
+        from types import SimpleNamespace
+        from PySide6.QtWidgets import QTreeWidgetItem
+        from desktop.trees import DEVPATH_ROLE, DEVROLE_ROLE
+        dev='/Volumes/HEADER-STOCK-FIXTURE'
+        item=QTreeWidgetItem(['Stock iPod'])
+        item.setData(0,DEVPATH_ROLE,dev);item.setData(0,DEVROLE_ROLE,'')
+        old_path,old_role=_win._current_device_path,_win._current_device_role
         try:
-            _win.device_tab_buttons[2].setChecked(True)
-            self.assertTrue(_win.device_tab_buttons[2].isChecked())
-            self.assertEqual(_win.stock_ipod_pages.stack.currentIndex(), 2)
+            with (mock.patch.dict(_win._device_profiles,{dev:SimpleNamespace(kind='stock_ipod',has_stock_ipod=True)}),
+                  mock.patch.object(_win,'_read_stock_device_view') as read):
+                _win._on_device_click(item,0)
+                read.assert_called_once_with(dev,_win._device_profiles[dev])
+                self.assertEqual(_win._current_device_role,'')
+                self.assertEqual(
+                    [button.text() for button in _win.device_tab_buttons[:3]],
+                    ['Device','Songs','Playlists'])
+                _win.device_tab_buttons[2].setChecked(True)
+                self.assertTrue(_win.device_tab_buttons[2].isChecked())
+                self.assertEqual(_win.stock_ipod_pages.stack.currentIndex(),2)
         finally:
+            _win._current_device_path,_win._current_device_role=old_path,old_role
             for button in _win.device_tab_buttons:
                 button.setVisible(False)
 
@@ -1129,21 +1139,39 @@ class StockIpodUI(unittest.TestCase):
         finally:
             tree.close()
 
-    def test_usb_columns_share_visibility_width_and_order_with_browser(self):
+    def test_usb_playlist_columns_preserve_stock_frame_when_browser_columns_change(self):
         header = _win.table.horizontalHeader()
         before = header.saveState()
+        previous=(_win.size(),_win.isVisible(),_win.stack.currentIndex())
         try:
+            _win.stack.setCurrentIndex(0);_win.show();_app.processEvents()
             _win.table.setColumnHidden(8,False)
+            _win.table.setColumnHidden(2,True)
             _win.table.setColumnWidth(3,92)
             _win._sync_artist_columns()
             tree = _win.usb_device_pages.playlist_tree
-            for column in range(header.count()):
-                self.assertEqual(tree.isColumnHidden(column),_win.table.isColumnHidden(column))
-                self.assertEqual(tree.columnWidth(column),_win.table.columnWidth(column))
-            self.assertEqual(tree.headerItem().text(0),'Track Title')
+            stock = _win.stock_ipod_pages.playlist_tree
+            for width in (1100,1500):
+                _win.resize(width,_win.height());_app.processEvents()
+                self.assertEqual(tree.columnCount(),3)
+                self.assertEqual([tree.headerItem().text(i) for i in range(3)],
+                                 ['Playlist / Track','Tracks','Type'])
+                for column in range(3):
+                    self.assertFalse(tree.isColumnHidden(column))
+                    self.assertEqual(tree.isColumnHidden(column),stock.isColumnHidden(column))
+                    self.assertEqual(tree.header().visualIndex(column),stock.header().visualIndex(column))
+                self.assertEqual((tree.columnWidth(1),tree.columnWidth(2)),(70,150))
+                self.assertEqual(_win.artists_view.isColumnHidden(2),_win.table.isColumnHidden(2))
+                self.assertEqual(_win.artists_view.columnWidth(3),_win.table.columnWidth(3))
+            table_width=header.sectionSize(1)
+            tree.setColumnWidth(1,81)
+            self.assertEqual(header.sectionSize(1),table_width)
+            tree.setColumnWidth(1,70)
         finally:
             header.restoreState(before)
             _win._sync_artist_columns()
+            size,visible,page=previous
+            _win.resize(size);_win.stack.setCurrentIndex(page);_win.setVisible(visible)
 
     def test_usb_playlist_refits_browser_columns_when_window_resizes(self):
         previous = (_win.stack.currentIndex(),_win.device_content_stack.currentIndex(),
@@ -1193,8 +1221,12 @@ class StockIpodUI(unittest.TestCase):
             parent = pages.playlist_tree.topLevelItem(0)
             parent.setExpanded(True)
             row = parent.child(0)
-            self.assertEqual([row.text(i) for i in (0,1,3,4,5,6)],
-                ['Device title','Device artist','140.00','8A','2:17','WAV'])
+            self.assertEqual([row.text(i) for i in range(3)],['1. Device title','','USB'])
+            details=pages._display_rows[song.id]
+            self.assertEqual([details[key] for key in ('title','artist','bpm','key','time','format')],
+                             ['Device title','Device artist','140.00','8A','2:17','WAV'])
+            self.assertEqual(row.data(0,Qt.UserRole),song)
+            self.assertEqual(row.toolTip(0),'Device title\nDevice artist\n/Contents/device.wav')
             pages.playlist_tree.setCurrentItem(row)
             received = []
             pages.song_requested.connect(received.append)
@@ -1204,7 +1236,8 @@ class StockIpodUI(unittest.TestCase):
             _app.processEvents()
             self.assertEqual(pages.stack.currentIndex(),1)
             self.assertTrue(pages.playlist_tree.topLevelItem(0).isExpanded())
-            self.assertEqual(pages.playlist_tree.currentItem().text(0),'Device title')
+            self.assertEqual(pages.playlist_tree.currentItem().text(0),'1. Device title')
+            self.assertEqual(pages.playlist_tree.currentItem().data(0,Qt.UserRole),song)
         finally:
             pages.close()
 
@@ -1300,16 +1333,18 @@ class StockIpodUI(unittest.TestCase):
         from types import SimpleNamespace
         from desktop.devices import DeviceFacts
         from desktop.usb_device_view import UsbSnapshot, UsbPlaylist
+        from desktop.trees import DEVPATH_ROLE
         dev = '/Volumes/SYNTHETIC-USB-VIEW'
         previous = (_win._current_device_path, dict(_win._device_profiles),
                     dict(_win._usb_view_cache), dict(_win._usb_device_rows),
-                    set(_win._usb_view_requests), _win.device_content_stack.currentIndex())
+                    set(_win._usb_view_requests), _win.device_content_stack.currentIndex(),
+                    _win._current_device_role)
         snapshot = UsbSnapshot(Path(dev), 77, DeviceFacts(capacity_bytes=1000),
                                (UsbPlaylist('Set', 'Playlists/Set.m3u8', (('Track','/Music/a.wav'),)),))
         profile = SimpleNamespace(has_stock_ipod=False, label='USB', rockbox_export=True)
         class Item:
             def data(self, _column, _role):
-                return dev
+                return dev if _role==DEVPATH_ROLE else None
         try:
             _win._device_profiles[dev] = profile
             _win._usb_view_cache[dev] = snapshot
@@ -1330,10 +1365,11 @@ class StockIpodUI(unittest.TestCase):
                 item = _win.usb_device_pages.playlist_tree.topLevelItem(0)
                 self.assertEqual(item.childCount(), 0)
                 item.setExpanded(True)
-                self.assertEqual(item.child(0).text(0), 'Track')
+                self.assertEqual(item.child(0).text(0), '1. Track')
         finally:
-            current, profiles, cache, rows, requests, page = previous
+            current, profiles, cache, rows, requests, page, role = previous
             _win._current_device_path = current
+            _win._current_device_role = role
             _win._device_profiles = profiles
             _win._usb_view_cache = cache
             _win._usb_device_rows = rows
@@ -1409,8 +1445,9 @@ class StockIpodUI(unittest.TestCase):
 
     def test_footer_controls_stay_anchored_across_device_phases_and_counts(self):
         bar = _win.progress.parentWidget()
-        previous = (bar.minimumWidth(), bar.maximumWidth(), bar.size())
+        previous = (bar.minimumWidth(), bar.maximumWidth(), bar.size(),_win.isVisible())
         try:
+            _win.show();_app.processEvents()
             _win.progress.show()
             _win.cancel_btn.show()
             for width in (1240, 540):
@@ -1428,7 +1465,7 @@ class StockIpodUI(unittest.TestCase):
                     self.assertEqual(_win.progress.width(), 208)
                     self.assertTrue(bar.rect().contains(_win.cancel_btn.geometry()))
         finally:
-            minimum, maximum, size = previous
+            minimum, maximum, size, visible = previous
             bar.setMinimumWidth(minimum)
             bar.setMaximumWidth(maximum)
             bar.resize(size)
@@ -1436,6 +1473,7 @@ class StockIpodUI(unittest.TestCase):
             _win.cancel_btn.hide()
             _win._stop_pulse()
             _win._set_status_text("Ready")
+            _win.setVisible(visible)
 
     def test_file_phases_do_not_replace_or_resize_overall_sync_status(self):
         from soundbox.device_operations import DeviceCommand, DeviceOperationState, Phase
@@ -2056,6 +2094,11 @@ class StockIpodUI(unittest.TestCase):
             events.append("worker stopped")
 
         worker = OneShotTask(work)
+        def retire_worker():
+            # Keep ownership on every assertion/error path; a fixture failure
+            # must never abort the unrelated remainder of the test process.
+            release.set();worker.wait();worker.deleteLater()
+        self.addCleanup(retire_worker)
         worker.start()
         self.assertTrue(entered.wait(1))
         stub = SimpleNamespace(
@@ -2065,14 +2108,14 @@ class StockIpodUI(unittest.TestCase):
             _save_columns=lambda: None, _set_status_text=lambda text: None,
             tag_controller=SimpleNamespace(shutdown=lambda: None),
             grid_controller=SimpleNamespace(shutdown=lambda: None),
+            usb_setup_controller=SimpleNamespace(stop=lambda: events.append('setup stopped')),
             worker=worker, findChildren=lambda kind: [],
         )
         QTimer.singleShot(0, lambda: events.append("Qt remained responsive"))
         QTimer.singleShot(25, release.set)
         MainWindow.shutdown(stub)
         self.assertFalse(worker.isRunning())
-        self.assertEqual(events, ["Qt remained responsive", "worker stopped"])
-        worker.deleteLater()
+        self.assertEqual(events, ['setup stopped',"Qt remained responsive", "worker stopped"])
 
     def test_idle_eject_ignores_known_missing_media_without_verification(self):
         self.enterContext(mock.patch.dict(_win._device_coordinator.mounts,
@@ -2190,17 +2233,19 @@ class StockIpodUI(unittest.TestCase):
 
     def test_dual_boot_device_click_opens_stock_dashboard_tabs(self):
         from types import SimpleNamespace
+        from desktop.trees import DEVPATH_ROLE
 
         dev = "/Volumes/IPOD"
         old_profile = _win._device_profiles.get(dev)
         old_reader = _win._read_stock_device_view
         old_current = _win._current_device_path
+        old_role = _win._current_device_role
         calls = []
 
         class _Item:
             @staticmethod
             def data(_column, _role):
-                return dev
+                return dev if _role==DEVPATH_ROLE else None
 
         _win._device_profiles[dev] = SimpleNamespace(
             kind="dual_boot", has_stock_ipod=True)
@@ -2215,6 +2260,7 @@ class StockIpodUI(unittest.TestCase):
         finally:
             _win._read_stock_device_view = old_reader
             _win._current_device_path = old_current
+            _win._current_device_role = old_role
             if old_profile is None:
                 _win._device_profiles.pop(dev, None)
             else:
@@ -2222,11 +2268,13 @@ class StockIpodUI(unittest.TestCase):
 
     def test_device_click_uses_preloaded_dashboard_without_another_read(self):
         from types import SimpleNamespace
+        from desktop.trees import DEVPATH_ROLE
 
         dev = "/Volumes/PRELOADED-IPOD"
         old_profile = _win._device_profiles.get(dev)
         old_cache = _win._stock_view_cache.get(dev)
         old_current = _win._current_device_path
+        old_role = _win._current_device_role
         old_apply = _win._on_stock_device_view
         old_read = _win._read_stock_device_view
         applied = []
@@ -2235,7 +2283,7 @@ class StockIpodUI(unittest.TestCase):
         class _Item:
             @staticmethod
             def data(_column, _role):
-                return dev
+                return dev if _role==DEVPATH_ROLE else None
 
         cached = (object(), None)
         try:
@@ -2253,6 +2301,7 @@ class StockIpodUI(unittest.TestCase):
             _win._on_stock_device_view = old_apply
             _win._read_stock_device_view = old_read
             _win._current_device_path = old_current
+            _win._current_device_role = old_role
             if old_profile is None:
                 _win._device_profiles.pop(dev, None)
             else:
@@ -2365,7 +2414,7 @@ class StockIpodUI(unittest.TestCase):
     def test_ipod_row_is_available_while_dashboard_loads(self):
         from types import SimpleNamespace
         from desktop.devices import DeviceFacts
-        from desktop.trees import DEVPATH_ROLE
+        from desktop.trees import DEVPATH_ROLE,DEVROLE_ROLE
         from soundbox.device_profile import DeviceProfile
 
         dev = "/Volumes/PUBLISH-AFTER-PRELOAD"
@@ -2393,15 +2442,18 @@ class StockIpodUI(unittest.TestCase):
                     capacity_bytes=256_000_000_000)),
             ):
                 _win._on_devices_scanned(rows)
-                self.assertEqual(_win.device_tree.topLevelItemCount(), 1)
+                self.assertEqual(_win.device_tree.topLevelItemCount(), 2)
 
                 self.assertNotIn("Loading", _win.device_tree.topLevelItem(0).text(0))
                 self.assertFalse(_win.device_tree.topLevelItem(0).isDisabled())
+                self.assertEqual(_win.device_tree.topLevelItem(0).data(0,DEVROLE_ROLE),'')
+                self.assertEqual(_win.device_tree.topLevelItem(1).data(0,DEVPATH_ROLE),dev)
+                self.assertEqual(_win.device_tree.topLevelItem(1).data(0,DEVROLE_ROLE),'ipod_usb')
                 # Preload completion clears the bottom loading status.
                 _win._stock_view_cache[dev] = (object(), None)
                 _win._on_devices_scanned(rows)
 
-            self.assertEqual(_win.device_tree.topLevelItemCount(), 1)
+            self.assertEqual(_win.device_tree.topLevelItemCount(), 2)
             item = _win.device_tree.topLevelItem(0)
             self.assertEqual(item.data(0, DEVPATH_ROLE), dev)
             self.assertEqual(item.text(0),
@@ -4825,6 +4877,7 @@ class TaskOwnership(unittest.TestCase):
             _save_columns=lambda: None, _set_status_text=lambda text: None,
             tag_controller=SimpleNamespace(shutdown=lambda: events.append('cues drained')),
             grid_controller=SimpleNamespace(shutdown=lambda: events.append('grids drained')),
+            usb_setup_controller=SimpleNamespace(stop=lambda: events.append('setup stopped')),
             _artists_refresh=mock.Mock(),
             findChildren=parent.findChildren,
             player_bar=SimpleNamespace(stop=lambda: None,
@@ -4835,7 +4888,7 @@ class TaskOwnership(unittest.TestCase):
             MainWindow.shutdown(stub)
             self.assertTrue(owner.stopping)
             self.assertEqual(owner.pending, 0)
-            self.assertEqual(events, ['grids drained', 'cues drained', "child retired", "player closed"])
+            self.assertEqual(events, ['setup stopped','grids drained', 'cues drained', "child retired", "player closed"])
         finally:
             release.set()
             owner.drain()

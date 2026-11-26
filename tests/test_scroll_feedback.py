@@ -16,6 +16,12 @@ class ScrollFeedback(unittest.TestCase):
     @classmethod
     def setUpClass(cls):cls.app=QApplication.instance() or QApplication([]);cls.controller=install(cls.app)
 
+    def wait_for_idle_feedback(self):
+        QTest.qWait(_SCROLL_FEEDBACK_IDLE_MS + 40)
+        # qWait can return after a slow GUI callback with an already-due timer
+        # still queued. Dispatch that event turn before observing its effect.
+        self.app.processEvents()
+
     def test_trackpad_momentum_keeps_overlay_thumb_in_live_theme_color_then_returns_to_idle(self):
         table=QTableWidget(100,1);table.setItem(0,0,QTableWidgetItem('Track'))
         edge=BrowserScrollBar(table,table.horizontalHeader());table.resize(400,240);table.show();self.app.processEvents()
@@ -34,7 +40,7 @@ class ScrollFeedback(unittest.TestCase):
                 self.app.sendEvent(table.viewport(),end)
                 self.assertTrue(edge.bar.property('wheelScrolling'))
                 self.assertTrue(edge.bar._soundbox_scroll_feedback.isActive())
-                QTest.qWait(_SCROLL_FEEDBACK_IDLE_MS + 40)
+                self.wait_for_idle_feedback()
                 self.assertFalse(edge.bar.property('wheelScrolling'))
                 self.assertFalse(edge.bar._soundbox_scroll_feedback.isActive())
                 # A conventional mouse has no phase/end event. Its feedback
@@ -42,7 +48,7 @@ class ScrollFeedback(unittest.TestCase):
                 wheel=QWheelEvent(QPointF(30,60),QPointF(30,60),QPoint(),QPoint(0,-120),Qt.NoButton,Qt.NoModifier,Qt.NoScrollPhase,False)
                 self.app.sendEvent(table.viewport(),wheel)
                 self.assertTrue(edge.bar.property('wheelScrolling'))
-                QTest.qWait(_SCROLL_FEEDBACK_IDLE_MS + 40);self.assertFalse(edge.bar.property('wheelScrolling'))
+                self.wait_for_idle_feedback();self.assertFalse(edge.bar.property('wheelScrolling'))
         finally:
             table.close();table.deleteLater();theme.set_accent(*previous);self.controller.update();self.app.processEvents()
 
@@ -72,7 +78,7 @@ class ScrollFeedback(unittest.TestCase):
                 QTest.qWait((8,16,25,33,67)[index%5])
                 self.assertTrue(edge.bar.property('wheelScrolling'))
             self.assertEqual(changes,[True])
-            QTest.qWait(_SCROLL_FEEDBACK_IDLE_MS + 40)
+            self.wait_for_idle_feedback()
             self.assertEqual(changes,[True,False])
             self.assertEqual(geometry,[])
         finally:
@@ -90,7 +96,7 @@ class ScrollFeedback(unittest.TestCase):
                 self.controller._scroll_feedback(edge.bar)
                 QTest.qWait(50)
                 self.assertTrue(edge.bar.property('wheelScrolling'))
-            QTest.qWait(_SCROLL_FEEDBACK_IDLE_MS + 40)
+            self.wait_for_idle_feedback()
             self.assertFalse(edge.bar.property('wheelScrolling'))
         finally:
             table.close();table.deleteLater();self.app.processEvents()
@@ -139,7 +145,7 @@ class ScrollFeedback(unittest.TestCase):
                     self.assertEqual(edge.bar.value(), edge.native.value())
                     end = QWheelEvent(QPointF(30,60),QPointF(30,60),QPoint(),QPoint(),
                                       Qt.NoButton,Qt.NoModifier,Qt.ScrollEnd,False)
-                    self.app.sendEvent(view.viewport(), end);QTest.qWait(_SCROLL_FEEDBACK_IDLE_MS + 40)
+                    self.app.sendEvent(view.viewport(), end);self.wait_for_idle_feedback()
                     self.assertFalse(edge.bar.property('wheelScrolling'))
                     self.assertTrue(contains(edge.bar.grab().toImage(), theme.BORDER))
                 window.hide()

@@ -98,6 +98,29 @@ class TagDrag(unittest.TestCase):
                 self.assertFalse(self.drop(mime=mime).accepted)
         self.assertEqual(self.orders, [])
 
+    def test_label_threshold_reaches_platform_drag_with_tag_only_mime(self):
+        # Exercise the shared helper too: mocking it hid its rejection of the
+        # tag-only MIME, so the gesture previously never reached macOS at all.
+        self.state(enabled=False)
+        label = self.button._drag_labels['0']
+        point = label.rect().center()
+        with mock.patch('desktop.trees.QDrag') as platform_drag:
+            QTest.mousePress(label, Qt.LeftButton, pos=point)
+            event = QMouseEvent(QEvent.MouseMove, QPointF(point + QPoint(20, 0)),
+                                QPointF(label.mapToGlobal(point + QPoint(20, 0))),
+                                Qt.NoButton, Qt.LeftButton, Qt.NoModifier)
+            QApplication.sendEvent(label, event)
+            platform_drag.assert_called_once_with(self.button.content)
+            drag = platform_drag.return_value
+            mime = drag.setMimeData.call_args.args[0]
+            self.assertFalse(mime.hasText())
+            self.assertTrue(mime.hasFormat('application/x-soundbox-tag-order-v1'))
+            drag.exec.assert_called_once_with(Qt.MoveAction, Qt.IgnoreAction)
+            self.assertTrue(self.drop(mime=mime).accepted)
+            QTest.mouseRelease(label, Qt.LeftButton, pos=point)
+        self.assertEqual(self.orders[0][0], ('1', '2', '3', '4', '0', '5'))
+        self.assertEqual(self.assignments, [])
+
     def test_external_missing_context_duplicate_ids_and_uuids_never_reorder(self):
         self.assertFalse(self.drop(origin=object()).accepted)
         self.button.set_state(self.tags, [set()])
@@ -122,3 +145,17 @@ class TagDrag(unittest.TestCase):
         self.assertEqual(tuple(self.button.checkboxes), order)
         self.assertEqual(self.button.checkboxes['0'].checkState(), Qt.PartiallyChecked)
         self.assertTrue(self.button._order_available()); self.assertEqual(self.assignments, [])
+
+    def test_accepted_moves_reuse_controls_and_allow_same_or_different_tag_immediately(self):
+        original = dict(self.button.checkboxes)
+        handles = dict(self.button._drag_labels)
+        catalog = {tag.tag_id:tag for tag in self.tags}
+        for source, target, after in (('0','4',True), ('0','1',False), ('5','2',False)):
+            self.assertTrue(self.drop(source, target, after=after).accepted)
+            order, _binding = self.orders[-1]
+            self.state(tags=[catalog[key] for key in order])
+            self.assertTrue(self.button._order_available())
+            self.assertTrue(all(self.button.checkboxes[key] is box for key, box in original.items()))
+            self.assertTrue(all(self.button._drag_labels[key] is handle for key, handle in handles.items()))
+        self.assertEqual(len(self.orders), 3)
+        self.assertEqual(self.assignments, [])

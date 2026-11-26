@@ -1,5 +1,7 @@
 """Fresh commits reuse their own exact final readback; replays retain full proof."""
 from dataclasses import replace
+import json
+import os
 from pathlib import Path
 import shutil
 from types import SimpleNamespace
@@ -109,6 +111,40 @@ class FreshPlaylistTransition(unittest.TestCase):
             if phase=='xml-published':raise RuntimeError('fresh final guard')
         with mock.patch.object(store,'_fault',side_effect=interrupted),self.assertRaisesRegex(RuntimeError,'fresh final guard'):
             self.writer.apply_with_transition(request)
+        self.assertEqual(self.writer.recover(),'rolled-back')
+        self.assertEqual(self.writer.snapshot()['nodes'][0]['Name'],'Existing')
+
+    def test_same_lease_archive_tampering_with_restored_mtime_stops_commit(self):
+        for filename in ('before.db','after.db','before.xml','after.xml'):
+            with self.subTest(filename=filename):
+                source=self.f.root/('live-guard-'+filename);shutil.copytree(self.f.database.parent,source)
+                writer=store.PlaylistStore(replace(self.writer.authority,database=str(source/'master.db')),
+                    self.f.root/('lease-guard-'+filename))
+                request=store.request_for(writer.snapshot(),'rename',identity='1000',name='Guarded change')
+                before=writer.database.read_bytes(),writer.xml.read_bytes()
+                def damage(phase):
+                    if phase!='sql-applied':return
+                    path=writer.root/('playlist-'+request['operation_id'])/filename
+                    stamp=path.stat()
+                    with path.open('r+b') as handle:
+                        handle.seek(min(123,stamp.st_size-1));old=handle.read(1)
+                        handle.seek(-1,1);handle.write(bytes([old[0]^1]))
+                    os.utime(path,ns=(stamp.st_atime_ns,stamp.st_mtime_ns))
+                with mock.patch.object(store,'_fault',side_effect=damage):
+                    with self.assertRaisesRegex(RecoveryRequired,'backup failed verification'):
+                        writer.apply_with_transition(request)
+                self.assertEqual((writer.database.read_bytes(),writer.xml.read_bytes()),before)
+                self.assertTrue(writer.journal.exists())
+                with self.assertRaises(RecoveryRequired):writer.recover()
+
+    def test_noncanonical_historical_journal_retains_exact_archive_semantics(self):
+        request=self.request()
+        def interrupted(phase):
+            if phase=='xml-published':raise RuntimeError('historic format')
+        with mock.patch.object(store,'_fault',side_effect=interrupted):
+            with self.assertRaisesRegex(RuntimeError,'historic format'):self.writer.apply(request)
+        saved=json.loads(self.writer.journal.read_bytes())
+        self.writer.journal.write_text(json.dumps(saved,indent=4,ensure_ascii=True))
         self.assertEqual(self.writer.recover(),'rolled-back')
         self.assertEqual(self.writer.snapshot()['nodes'][0]['Name'],'Existing')
 

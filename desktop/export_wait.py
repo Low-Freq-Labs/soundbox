@@ -10,6 +10,49 @@ from .cdj import _source_edits_pending,_source_edits_error
 from .devices import device_facts
 
 
+def selected_artwork_pending(host, track_ids):
+    """Only an earlier explicit choice for these songs delays their capture."""
+    owner=getattr(host,'_art_requests',None)
+    return bool(owner is not None and owner.manual_pending()
+                and any(owner.manual_pending(tid) for tid in track_ids))
+
+
+def defer_selected_artwork(host, device, track_ids, *, current, ready, failed,
+                          batch=None, batch_target=None):
+    """Use the ordinary cancellable source FIFO while selected manual art saves.
+
+    No device is owned, no other song's art fetch is awaited, and no old fallback
+    is frozen ahead of a manual choice already accepted by the desktop.
+    """
+    ids=tuple(track_ids)
+    if not selected_artwork_pending(host,ids):return False
+    waiting=getattr(host,'_source_sync_waiting',None)
+    if waiting is None:waiting=[];host._source_sync_waiting=waiting
+    request=dict(kind='catalog-artwork',dev=device,batch=batch,batch_target=batch_target,
+                 cancelled=False,terminal=False)
+    waiting.append(request)
+    def remove():
+        request['terminal']=True
+        if request in waiting:waiting.remove(request)
+        if getattr(host,'_source_sync_waiting',None) is waiting and not waiting:
+            host._source_sync_waiting=None
+    def poll():
+        if (request['cancelled'] or request['terminal'] or host._shutting_down
+                or getattr(host,'_source_sync_waiting',None) is not waiting):return
+        if (host._state_maintenance or getattr(host,'_export_batch',None) is not batch or not current()
+                or batch is not None and (not _batch_owned(host,request) or batch.get('cancelled',False))):
+            remove();failed(RuntimeError('The selected artwork, library or iPod changed before Sync'));return
+        if (waiting[0] is not request or host._device_operation_owned()
+                or selected_artwork_pending(host,ids)):
+            if waiting[0] is request and not host._device_operation_owned():
+                host._start_pulse('Saving selected artwork');host.cancel_btn.setVisible(True)
+            QTimer.singleShot(100,host,poll);return
+        remove()
+        try:ready()
+        except Exception as error:failed(error)
+    poll();return True
+
+
 def _batch_owned(host, request):
     batch=request.get('batch')
     return bool(batch is not None and getattr(host,'_export_batch',None) is batch

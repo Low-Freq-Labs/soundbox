@@ -28,6 +28,8 @@ class TagDefinitionController(QObject):
         self.rename_factory = rename_store_factory
         self.loader = loader
         self.closing = False
+        # Creation and ordering share the same ACK-to-publication handoff;
+        # a durable queue removal cannot expose an older catalog to new input.
         self._creation_publication = None
         self._creation_publication_error = ''
         self.not_before = 0.0
@@ -70,6 +72,9 @@ class TagDefinitionController(QObject):
             if not isinstance(queue, list) or len(queue) > 256:
                 raise ValueError('Invalid queue')
             seen, tag_ids, tag_uuids = set(), set(), set()
+            ordering=bool(queue) and all(self._ordering(job.get('request'))
+                for job in queue if isinstance(job,dict))
+            chains={};scope=None;identities={};uuids={}
             for job in queue:
                 if (not isinstance(job, dict) or set(job) != {'source', 'library_id', 'request', 'error'}
                         or not isinstance(job['source'], str) or not Path(job['source']).is_absolute()
@@ -77,12 +82,32 @@ class TagDefinitionController(QObject):
                         or not isinstance(job['error'], str)):
                     raise ValueError('Invalid intent')
                 self._validate(job['request'])
-                if (job['request']['library_id'] != job['library_id'] or job['request']['operation_id'] in seen
-                        or job['request']['tag_id'] in tag_ids or job['request']['tag_uuid'] in tag_uuids):
+                request=job['request']
+                if (request['library_id'] != job['library_id'] or request['operation_id'] in seen
+                        or not ordering and (request['tag_id'] in tag_ids or request['tag_uuid'] in tag_uuids)):
                     raise ValueError('Invalid intent identity')
-                seen.add(job['request']['operation_id'])
-                tag_ids.add(job['request']['tag_id'])
-                tag_uuids.add(job['request']['tag_uuid'])
+                seen.add(request['operation_id'])
+                tag_ids.add(request['tag_id'])
+                tag_uuids.add(request['tag_uuid'])
+                if ordering:
+                    current_scope=(job['source'],job['library_id'])
+                    if scope is not None and scope!=current_scope:raise ValueError('Different tag order sources')
+                    scope=current_scope
+                    category=request['category_id']
+                    before=(request['category_uuid'],tuple((row['id'],row['uuid'],row['name'])
+                        for row in request['before']))
+                    if category in chains and chains[category]!=before:
+                        raise ValueError('Broken tag order chain')
+                    for row in request['before']:
+                        identity=(category,request['category_uuid'],row['uuid'],row['name'])
+                        uuid=(category,request['category_uuid'],row['id'],row['name'])
+                        if (row['id'] in identities and identities[row['id']]!=identity
+                                or row['uuid'] in uuids and uuids[row['uuid']]!=uuid):
+                            raise ValueError('A tag identity belongs to a different category')
+                        identities[row['id']]=identity;uuids[row['uuid']]=uuid
+                    by_id={row['id']:row for row in request['before']}
+                    chains[category]=(request['category_uuid'],tuple(
+                        (identity,by_id[identity]['uuid'],by_id[identity]['name']) for identity in request['order']))
         except (KeyError, TypeError, ValueError, WriteProofError):
             return 'Saved tag changes need attention; intentions are preserved'
         return ''
@@ -92,6 +117,8 @@ class TagDefinitionController(QObject):
         if self.publication_retry_pending:return self._creation_publication_error
         if self.queue_error():
             return self.queue_error()
+        if any(self._ordering(job['request']) for job in self.pending):
+            return 'Finish pending tag order changes before changing tag definitions'
         if self.ack.pending:return 'Finishing the saved tag change acknowledgement'
         if self.admission.error:return 'The pending tag intention needs retry or discard'
         if self.closing or w._shutting_down or w._state_maintenance:
@@ -151,20 +178,12 @@ class TagDefinitionController(QObject):
         jobs=list(self.window.settings.get(QUEUE,[]))
         if (self.admission.staged and self.admission._scope==self.admission._context()
                 and self.admission.current_owner()):jobs.extend(self.admission.rows)
-        bridge=self._creation_publication
+        bridge=self._publication_handoff()
         if bridge is not None:
             job,scope=bridge
             if scope==self.admission._context() and self.admission.current_owner():
                 if not any(row['request']['operation_id']==job['request']['operation_id'] for row in jobs):
-                    request=job['request']
-                    libraries=(lib,getattr(self.tags,'lib',lib))
-                    published=all(value is not None and any(
-                        (tag.tag_id,tag.source_uuid,tag.name,tag.category_id,tag.category_uuid)==
-                        tuple(request[key] for key in ('tag_id','tag_uuid','name','category_id','category_uuid'))
-                        for tag in value.source_tags) for value in libraries)
-                    if published:
-                        self._creation_publication=None;self._creation_publication_error=''
-                    else:jobs.insert(0,job)
+                    jobs.insert(0,job)
         categories={(row.category_id,row.source_uuid):row for row in lib.source_tag_categories}
         return [job for job in jobs if self._creating(job['request'])
                 and (job['source'],job['library_id'])==(str(lib.source),lib.source_library_id)
@@ -189,6 +208,25 @@ class TagDefinitionController(QObject):
     def publication_retry_pending(self):
         return bool(self._creation_publication is not None and self._creation_publication_error
             and self._creation_publication[1]==self.admission._context() and self.admission.current_owner())
+
+    def _publication_matches(self,library,request):
+        if self._ordering(request):return self._ordered_tags_match(library.source_tags,request,after=True)
+        return any((tag.tag_id,tag.source_uuid,tag.name,tag.category_id,tag.category_uuid)==
+            tuple(request[key] for key in ('tag_id','tag_uuid','name','category_id','category_uuid'))
+            for tag in library.source_tags)
+
+    def _publication_handoff(self):
+        """Bridge the durable queue ACK to complete verified Library publication."""
+        handoff=self._creation_publication
+        if (handoff is None or handoff[1]!=self.admission._context()
+                or not self.admission.current_owner()):return None
+        job,_scope=handoff
+        libraries=(self.window.lib,getattr(self.tags,'lib',self.window.lib))
+        if all(library is not None and self._publication_matches(library,job['request'])
+               for library in libraries):
+            self._creation_publication=None;self._creation_publication_error=''
+            return None
+        return handoff
 
     @property
     def publication_retry_ready(self):
@@ -231,14 +269,12 @@ class TagDefinitionController(QObject):
                     library=worker.result;request=job['request']
                     if (library.source_kind!='rekordbox-db'
                             or (str(library.source),library.source_library_id)!=(job['source'],job['library_id'])
-                            or not any((tag.tag_id,tag.source_uuid,tag.name,tag.category_id,tag.category_uuid)==
-                                tuple(request[key] for key in ('tag_id','tag_uuid','name','category_id','category_uuid'))
-                                for tag in library.source_tags)):
-                        raise RuntimeError('The created tag identity changed before publication retry')
+                            or not self._publication_matches(library,request)):
+                        raise RuntimeError('The saved tag definition changed before publication retry')
                     self.window._publish_created_library(library)
                     self._creation_jobs()
                     if self._creation_publication is not None:
-                        raise RuntimeError('The created tag library publication is incomplete')
+                        raise RuntimeError('The saved tag library publication is incomplete')
                 except Exception as exc:error=str(exc)
             if error:
                 self._creation_publication_error='Tag saved; library publication needs retry — '+error[:3000]
@@ -317,6 +353,8 @@ class TagDefinitionController(QObject):
         if tag_id is not None and self.pending_creation(tag_id,tag_uuid):
             return self.pending_creation_reason(tag_id,tag_uuid)
         if self.queue_error():return self.queue_error()
+        if any(self._ordering(job['request']) for job in self.pending):
+            return 'Finish pending tag order changes before changing tag definitions'
         if self.ack.pending:return 'Finishing the saved tag change acknowledgement'
         if self.admission.error:return 'The pending tag intention needs retry or discard'
         if self.closing or w._shutting_down or w._state_maintenance:return 'Library operation in progress'
@@ -342,14 +380,26 @@ class TagDefinitionController(QObject):
 
     def order_reason(self,*,pending=True):
         w=self.window;lib=w.lib
+        if self.publication_retry_pending:return self._creation_publication_error
         if self.queue_error():return self.queue_error()
-        if self.ack.pending:return 'Finishing the saved tag change acknowledgement'
+        if self.ack.error:return 'Finishing the saved tag change acknowledgement'
         if self.admission.error:return 'The pending tag intention needs retry or discard'
-        if self.closing or w._shutting_down or w._state_maintenance:return 'Library operation in progress'
+        if (self.admission.staged and (self.admission._scope!=self.admission._context()
+                or not self.admission.current_owner())):
+            return 'Return to the original library; restored state cannot accept an older intention'
+        if (self.closing or w._shutting_down or w._state_maintenance or w._refresh_worker is not None
+                or device_blocks_library_work(w)):return 'Library operation in progress'
         if (not lib or lib.source_kind!='rekordbox-db' or not self.tags.verified
                 or not lib.source_library_id or not lib.source_tag_categories):
             return 'Refresh the native library before reordering tags'
-        if pending and self.pending:return 'Finish pending tag changes before reordering tags'
+        if pending and self.pending:
+            if any(not self._ordering(job['request']) for job in self.pending):
+                return 'Finish pending tag changes before reordering tags'
+            if any(job['error'] for job in self.pending):return 'Pending tag order changes need attention'
+            if any((job['source'],job['library_id'])!=(str(lib.source),lib.source_library_id) for job in self.pending):
+                return 'Switch to the original library to finish its tag changes'
+        if pending and not self._project_order(lib.source_tags)[1]:
+            return 'The source tag identities or order changed; refresh before dragging again'
         if not self.order_factory and tag_order.load_authority(
                 self.tags.data_root/'rekordbox-tag-order-authority.json',Path(lib.source),lib.source_library_id) is None:
             return 'Native tag reordering awaits separate acceptance for this library'
@@ -393,21 +443,40 @@ class TagDefinitionController(QObject):
 
     def native_order(self,tags):
         """Project only this exact source's staged/durable native order intention."""
-        if self.queue_error():return list(tags)
-        lib=self.window.lib;result=list(tags)
-        for job in self.pending:
+        return self._project_order(tags)[0]
+
+    def _project_order(self,tags):
+        """Return the visible order and whether its pending chain is still usable."""
+        if self.queue_error():return list(tags),False
+        lib=self.window.lib;result=list(tags);jobs=list(self.window.settings.get(QUEUE,[]))
+        if (self.admission.staged and self.admission._scope==self.admission._context()
+                and self.admission.current_owner()):jobs.extend(self.admission.rows)
+        handoff=self._publication_handoff()
+        if handoff is not None and self._ordering(handoff[0]['request']):
+            bridge=handoff[0]
+            if not any(job['request']['operation_id']==bridge['request']['operation_id'] for job in jobs):
+                jobs.insert(0,bridge)
+        for index,job in enumerate(jobs):
             request=job['request']
-            if (not lib or not self._ordering(request) or job['error']
-                    or (job['source'],job['library_id'])!=(str(lib.source),lib.source_library_id)
-                    or not self._ordered_tags_match(result,request)):continue
+            if not self._ordering(request):break
+            if (not lib or job['error']
+                    or (job['source'],job['library_id'])!=(str(lib.source),lib.source_library_id)):
+                return result,False
+            # At most the FIFO head may have committed before its durable ACK.
+            # A later before/after mismatch is an external change, not a basis
+            # from which another gesture can append to the accepted chain.
+            if index==0 and self._ordered_tags_match(result,request,after=True):continue
+            if not self._ordered_tags_match(result,request):return result,False
             by_id={tag.tag_id:tag for tag in result};iterator=iter(request['order'])
             result=[by_id[next(iterator)] if tag.category_id==request['category_id'] else tag for tag in result]
-        return result
+        return result,True
 
     def deletion_reason(self):
         w = self.window
         if self.queue_error():
             return self.queue_error()
+        if any(self._ordering(job['request']) for job in self.pending):
+            return 'Finish pending tag order changes before changing tag definitions'
         if self.ack.pending:return 'Finishing the saved tag change acknowledgement'
         if self.admission.error:return 'The pending tag intention needs retry or discard'
         if self.closing or w._shutting_down or w._state_maintenance:
@@ -449,7 +518,8 @@ class TagDefinitionController(QObject):
                 w._flash_status('That operation identity is already used by another intention',10)
                 return False
         if ordering:
-            if not self._ordered_tags_match(w.lib.source_tags,request):
+            projected,valid=self._project_order(w.lib.source_tags)
+            if not valid or not self._ordered_tags_match(projected,request):
                 w._flash_status('The source tag identities or order changed; refresh before dragging again',10)
                 return False
         elif deleting or renaming:
@@ -467,6 +537,7 @@ class TagDefinitionController(QObject):
             w._flash_status('A tag with that name already exists in this category', 10)
             return False
         for job in self.pending:
+            if ordering and self._ordering(job['request']):continue
             if (job['request']['tag_id'] == request['tag_id'] or job['request']['tag_uuid'] == request['tag_uuid']
                     or (job['source'], job['library_id'], job['request']['category_id'], self._desired_name(job['request']).casefold())
                     == (str(w.lib.source), w.lib.source_library_id, request['category_id'], self._desired_name(request).casefold())):
@@ -600,7 +671,7 @@ class TagDefinitionController(QObject):
                 self.fail('The tag change could not be verified; the intention is preserved', job)
                 return
             previous = w.settings.get(QUEUE, [])
-            if self._creating(job['request']):
+            if self._creating(job['request']) or self._ordering(job['request']):
                 self._creation_publication=(deepcopy(job),submitted_scope)
                 self._creation_publication_error=''
             def current():
@@ -608,21 +679,21 @@ class TagDefinitionController(QObject):
                     and (str(w.lib.source),w.lib.source_library_id)==(job['source'],job['library_id']))
             def acknowledged():
                 self.not_before=0
-                self.status(self._label(self.pending[0]['request']) if self.pending else '')
                 if not self.closing and not w._shutting_down:w._publish_created_library(library)
-                if self._creating(job['request']) and not self.closing and not w._shutting_down:
+                if (self._creating(job['request']) or self._ordering(job['request'])) and not self.closing and not w._shutting_down:
                     self._creation_jobs()
                     if self._creation_publication is not None:
-                        raise RuntimeError('The created tag library publication is incomplete; retry the saved tag change')
+                        raise RuntimeError('The saved tag library publication is incomplete; retry the saved tag change')
+                self.status(self._label(self.pending[0]['request']) if self.pending else '')
                 self.schedule()
             def acknowledgement_failed(error):
                 message='Saved in rekordbox; local acknowledgement needs retry: '+str(error)
-                if self._creating(job['request']):self._creation_publication_error=message[:4096]
+                if self._creating(job['request']) or self._ordering(job['request']):self._creation_publication_error=message[:4096]
                 queue=w.settings.get(QUEUE,[])
                 if queue and (queue[0].get('source'),queue[0].get('library_id'),queue[0].get('request'))==(job['source'],job['library_id'],job['request']):
                     w.settings[QUEUE]=[{**queue[0],'error':message[:4096]},*queue[1:]]
                 self.status(message);w._flash_status(message,15)
-                if self._creating(job['request']) and not any(
+                if (self._creating(job['request']) or self._ordering(job['request'])) and not any(
                         queued['request']['operation_id']==job['request']['operation_id']
                         for queued in w.settings.get(QUEUE,[])):
                     QTimer.singleShot(0,self,self._record_publication_blocker)
@@ -654,7 +725,13 @@ class TagDefinitionController(QObject):
         self.window._flash_status(message, 12)
 
     def retry(self):
-        if self.publication_retry_pending and not self.ack.pending:return self._retry_publication()
+        if self.publication_retry_pending and not self.ack.pending:
+            # A gesture captured during the source write can still need its
+            # own canonical admission. Finish that exact tail before the
+            # publication retry; neither failure may starve the other's Retry.
+            if self.admission.pending:
+                return self.admission.retry() if self.admission.error else False
+            return self._retry_publication()
         if self.ack.pending:return self.ack.retry()
         previous=self.window.settings.get(QUEUE,[])
         if (self.admission.pending and previous and previous[0].get('error')

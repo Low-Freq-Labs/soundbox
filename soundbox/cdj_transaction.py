@@ -15,14 +15,15 @@ import os
 from pathlib import Path, PurePosixPath
 import shutil
 import stat
+import time
 import unicodedata
 import uuid
 
-from .cdj_usb import DATABASE_FILES, PROFILE_FILES, CdjReadSession, assert_no_database_journals, _identity
+from .cdj_usb import DATABASE_FILES, PROFILE_FILES, CdjReadSession, assert_no_database_journals, _identity,digest
 from .sync import DeviceSession
 from .device_staging import staged_output
 from .operation_control import (CommittedOperationError, OperationCancelled,
-                                cancellation_disabled, checkpoint)
+                                cancellation_disabled, checkpoint, phase_progress, record_metric)
 
 MANIFEST = '.soundbox-cdj/manifest.json'
 JOURNAL = '.soundbox-cdj/pending.json'
@@ -62,42 +63,88 @@ def _relative(path):
 
 
 class CdjSession(DeviceSession):
-    def __init__(self, target, sources, *, token, volume_uuid):
+    def __init__(self, target, sources, *, token, volume_uuid, target_role='generic_usb'):
         if not volume_uuid:
             raise ValueError('A verified USB volume identity is required')
+        if target_role not in ('generic_usb','ipod_usb'):
+            raise ValueError('Unknown CDJ export target role')
         super().__init__(Path(target), list(sources), create=False, allow_external_roots=True)
         if self.mount_identity[0] != token:
             raise ValueError('USB was remounted; prepare the export again')
         self.volume_uuid = volume_uuid
+        self.target_role = target_role
+        self.ipod_control_identity: tuple[int,int] | None = None
         self._directory_cache = {}
-        for marker in ('iPod_Control', '.rockbox', '.PIONEER'):
-            if (self.target/marker).exists() or (self.target/marker).is_symlink():
-                raise ValueError('CDJ export requires a generic USB, without iPod/Rockbox/hidden-library layouts')
+        self._validate_layout()
+
+    def _validate_layout(self):
+        root=self.target.stat()
+        root_identity=(root.st_dev,root.st_ino,root.st_mtime_ns,root.st_ctime_ns)
+        cached=self._directory_cache.get(self.target)
+        if cached is None or cached[0]!=root_identity:
+            names: dict[str,list[str]]={}
+            for path in self.target.iterdir():names.setdefault(_key(path.name),[]).append(path.name)
+            cached=(root_identity,names);self._directory_cache[self.target]=cached
+        names=cached[1]
+        for marker in ('iPod_Control','.rockbox','.PIONEER'):
+            observed=names.get(_key(marker),[])
+            if observed and observed!=[marker]:
+                raise ValueError('Ambiguous device layout spelling for CDJ export')
+            if not observed:continue
+            if marker=='.PIONEER' or self.target_role=='generic_usb':
+                raise ValueError('CDJ export requires an explicit iPod USB role for iPod/Rockbox layouts; hidden libraries are not supported')
+            info=(self.target/marker).lstat()
+            if not stat.S_ISDIR(info.st_mode) or info.st_dev!=self.mount_identity[0]:
+                raise ValueError('iPod USB layout must be an unlinked directory on its captured mount')
+        if self.target_role=='ipod_usb':
+            if names.get(_key('iPod_Control'))!=['iPod_Control']:
+                raise ValueError('The explicit iPod USB target no longer has its stock iPod layout')
+            info=(self.target/'iPod_Control').lstat();current=(info.st_dev,info.st_ino)
+            if self.ipod_control_identity is not None and current!=self.ipod_control_identity:
+                raise ValueError('The iPod USB layout changed after capture')
+            self.ipod_control_identity=current
+
+    def revalidate(self):
+        super().revalidate()
+        self._validate_layout()
 
     def guard(self, path):
-        candidate = super().guard(path)
-        relative = candidate.relative_to(self.target)
-        # Resolve case/normalization ambiguities on FAT and reject all links,
-        # including links that still resolve inside this USB.
+        self.revalidate()
+        candidate=Path(path)
+        if not candidate.is_absolute():candidate=self.target/candidate
+        try:relative=candidate.relative_to(self.target)
+        except ValueError:
+            raise RuntimeError(f'REFUSING path outside device target: {candidate}') from None
+        if (self.target_role=='ipod_usb' and relative.parts
+                and (relative.parts[0] not in ('PIONEER','Contents','.soundbox-cdj') or '..' in relative.parts)):
+            raise ValueError('iPod USB export cannot access the stock/Rockbox namespace')
+        if '..' in relative.parts:raise ValueError('Invalid CDJ publication path')
+        # No-follow observations replace repeated exists/resolve/stat passes.
+        # Fresh parent identity still gates name reuse;
+        # descriptor publication independently reopens/validates every parent.
         parent = self.target
         for component in relative.parts:
-            if parent.exists():
-                info = parent.stat()
-                identity = (info.st_dev,info.st_ino,info.st_mtime_ns,info.st_ctime_ns)
-                cached = self._directory_cache.get(parent)
-                if cached is None or cached[0] != identity:
-                    all_names: dict[str,list[str]] = {}
-                    for entry in parent.iterdir():
-                        all_names.setdefault(_key(entry.name),[]).append(entry.name)
-                    cached = (identity,all_names)
-                    self._directory_cache[parent] = cached
-                names = cached[1].get(_key(component),[])
-                if names and names != [component]:
-                    raise ValueError('Ambiguous FAT spelling in CDJ path')
+            try:info=parent.lstat()
+            except FileNotFoundError:break
+            if not stat.S_ISDIR(info.st_mode) or info.st_dev!=self.mount_identity[0]:
+                raise ValueError('CDJ parent is not a real directory on the captured mount')
+            identity=(info.st_dev,info.st_ino,info.st_mtime_ns,info.st_ctime_ns)
+            cached=self._directory_cache.get(parent)
+            if cached is None or cached[0]!=identity:
+                all_names: dict[str,list[str]]={}
+                for entry in parent.iterdir():all_names.setdefault(_key(entry.name),[]).append(entry.name)
+                cached=(identity,all_names);self._directory_cache[parent]=cached
+            names=cached[1].get(_key(component),[])
+            # A single canonically equivalent Unicode name preserves exactcase;
+            # multiple or case-only aliases remain ambiguous on FAT.
+            if names and (len(names)!=1 or unicodedata.normalize('NFD',names[0])!=unicodedata.normalize('NFD',component)):
+                raise ValueError('Ambiguous FAT spelling in CDJ path')
             child = parent/component
-            if child.is_symlink():
+            try:observed=child.lstat()
+            except FileNotFoundError:break  # No descendant can exist yet.
+            if stat.S_ISLNK(observed.st_mode):
                 raise ValueError('Linked CDJ paths are not writable')
-            if child.exists() and child.stat().st_dev != self.mount_identity[0]:
+            if observed.st_dev!=self.mount_identity[0]:
                 raise ValueError('CDJ path crosses the USB mount')
             parent = child
         return candidate
@@ -113,6 +160,13 @@ class CdjSession(DeviceSession):
     def _publish(self, stream, destination, should_cancel=lambda:False, expected_sha256=None):
         import hashlib
         copied=hashlib.sha256() if expected_sha256 else None
+        size=os.fstat(stream.fileno()).st_size if copied is not None else 0
+        done=0;reported=time.monotonic()
+        relative=Path(destination)
+        try:relative=relative.relative_to(self.target)
+        except ValueError:pass  # Relative destinations retain their original guard admission.
+        label=relative.as_posix()
+        if copied is not None:phase_progress('CDJ copying',0,size,label)
         with staged_output(destination, self.parent_fd, self.revalidate,
                            after_publish=self._flush_directory, mode=0o600) as output:
             while True:
@@ -122,8 +176,14 @@ class CdjSession(DeviceSession):
                 output.write(block)
                 if copied is not None:
                     copied.update(block)
+                    done+=len(block)
+                    now=time.monotonic()
+                    if now-reported>=0.2:
+                        phase_progress('CDJ copying',done,size,label)
+                        reported=now
             if copied is not None and copied.hexdigest()!=expected_sha256:
                 raise ValueError('Candidate changed while copying')
+        if copied is not None:phase_progress('CDJ copying',done,size,label)
 
     def atomic_write(self, destination, data):
         with cancellation_disabled():
@@ -209,6 +269,10 @@ class CdjPlan:
     playlists: int
     workspace: tempfile.TemporaryDirectory | None = field(default=None, repr=False)
     recovery_root: Path | None = None
+    target_role: str = 'generic_usb'
+    ipod_control_identity: tuple[int,int] | None = None
+    overwritten_playlists: tuple[str,...] = ()
+    setup_profile_hashes: tuple[tuple[str,str],...] = ()
 
     @property
     def requires_commit(self):
@@ -367,7 +431,8 @@ def make_plan(session, candidate, *, selection, db_id, view, workspace=None, sho
                     library_managed=(previous.get('library_managed', True) if previous else False) if settings_only else True)
     return CdjPlan(session.target, session.mount_identity, session.volume_uuid, candidate,
                    manifest, tuple(changes), old_manifest, replaces, int(view['tracks']),
-                   len([p for p in view['playlists'] if not p['folder']]), workspace, recovery_root)
+                   len([p for p in view['playlists'] if not p['folder']]), workspace, recovery_root,
+                   session.target_role,session.ipod_control_identity)
 
 
 def _json(value):
@@ -385,29 +450,55 @@ def _check_baseline(session, change, should_cancel=lambda:False):
 
 def commit(plan, *, should_cancel=lambda:False, on_progress=lambda *_:None):
     """Publish a prepared plan in its owned lane, authorized by a drop or review."""
+    started=time.perf_counter_ns()
+    try:
+        return _commit(plan,should_cancel=should_cancel,on_progress=on_progress)
+    finally:
+        record_metric('cdj_commit_elapsed_ns',time.perf_counter_ns()-started)
+
+
+def _commit(plan, *, should_cancel, on_progress):
+    preflight_started=time.perf_counter_ns()
     _check_cancel(should_cancel, 'CDJ export cancelled before publication')
-    session = CdjSession(plan.target, [], token=plan.mount_identity[0], volume_uuid=plan.volume_uuid)
+    session = CdjSession(plan.target, [], token=plan.mount_identity[0], volume_uuid=plan.volume_uuid,
+                         target_role=plan.target_role)
     if session.mount_identity != plan.mount_identity:
         raise ValueError('USB identity changed after approval')
+    if session.ipod_control_identity!=plan.ipod_control_identity:
+        raise ValueError('iPod USB layout changed after approval')
     if session.read_optional(JOURNAL, limit=8*1024*1024) is not None:
         raise ValueError('An interrupted generation is awaiting recovery')
     if session.read_optional(MANIFEST, limit=8*1024*1024) != plan.old_manifest:
         raise ValueError('USB manifest changed after approval')
     assert_no_database_journals(session.target,session.mount_identity[0])
+    for path,expected in plan.setup_profile_hashes:
+        if path not in {'PIONEER/'+name for name in PROFILE_FILES}:
+            raise ValueError('Invalid setup-only player profile precondition')
+        raw=session.read_optional(path,limit=64*1024)
+        if raw is None or digest(raw)!=expected:
+            raise ValueError('USB settings changed after setup was prepared; select it again')
     # Entire target/candidate contract is checked before the first write.
-    for change in plan.changes:
+    phase_progress('CDJ checking',0,len(plan.changes),'')
+    checked_at=time.monotonic()
+    for index,change in enumerate(plan.changes):
         _check_cancel(should_cancel, 'CDJ export cancelled before publication')
         _check_baseline(session, change,should_cancel)
         # Small metadata is checked before publication; new audio is hashed in
         # its one copy pass, rather than read twice locally and again from USB.
         if change.new_sha256 and not change.path.startswith('Contents/') and _hash_file(plan.candidate/change.path, should_cancel) != change.new_sha256:
             raise ValueError('Candidate changed after approval')
+        now=time.monotonic()
+        if now-checked_at>=0.1 or index+1==len(plan.changes):
+            phase_progress('CDJ checking',index+1,len(plan.changes),change.path)
+            checked_at=now
     if not plan.requires_commit:
+        record_metric('cdj_preflight_elapsed_ns',time.perf_counter_ns()-preflight_started)
         return plan.manifest
     for path in DATABASE_FILES:
         if path in plan.manifest['files'] and not any(c.path==path for c in plan.changes):
             if _hash_file(session.guard(session.target/path),should_cancel)!=plan.manifest['files'][path]['sha256']:
                 raise ValueError('USB library changed during preparation; retry the update')
+    record_metric('cdj_preflight_elapsed_ns',time.perf_counter_ns()-preflight_started)
     transaction = '.soundbox-cdj/transactions/'+plan.manifest['generation']
     journal = dict(schema=1, volume_uuid=plan.volume_uuid, mount_identity=list(plan.mount_identity),
                    transaction=transaction, state='executing',
@@ -428,6 +519,7 @@ def commit(plan, *, should_cancel=lambda:False, on_progress=lambda *_:None):
     finally:
         os.close(directory_fd)
     _check_cancel(should_cancel, 'CDJ export cancelled before publication')
+    phase_progress('CDJ saving',0,1,'')
     session.atomic_write(session.target/JOURNAL, _json(journal))
     total=len(plan.changes)+sum(c.retire for c in plan.changes)
     try:
@@ -436,6 +528,7 @@ def commit(plan, *, should_cancel=lambda:False, on_progress=lambda *_:None):
         # at every interruption boundary.
         for index, change in enumerate(plan.changes):
             _check_cancel(should_cancel, 'CDJ export cancelled; restoring previous generation')
+            phase_progress('CDJ publishing',index,len(plan.changes),change.path)
             if change.path in DATABASE_FILES:
                 assert_no_database_journals(session.target,session.mount_identity[0])
             _check_baseline(session, change,should_cancel)
@@ -444,9 +537,16 @@ def commit(plan, *, should_cancel=lambda:False, on_progress=lambda *_:None):
                 backup = session.guard(session.target/transaction/change.path)
                 session.rename(path, backup)
             if change.new_sha256:
-                session.atomic_copy(plan.candidate/change.path, path, should_cancel=should_cancel,expected_sha256=change.new_sha256)
+                copy_started=time.perf_counter_ns()
+                try:
+                    session.atomic_copy(plan.candidate/change.path, path, should_cancel=should_cancel,expected_sha256=change.new_sha256)
+                finally:
+                    record_metric('cdj_copy_elapsed_ns',time.perf_counter_ns()-copy_started)
+                record_metric('cdj_published_bytes',change.size)
             on_progress(index+1, total, change.path)
+            phase_progress('CDJ publishing',index+1,len(plan.changes),change.path)
         _check_cancel(should_cancel, 'CDJ export cancelled; restoring previous generation')
+        phase_progress('CDJ finalizing',0,1,'')
         session.atomic_write(session.target/MANIFEST, _json(plan.manifest))
         journal['state'] = 'committed'
         session.atomic_write(session.target/JOURNAL, _json(journal))
@@ -454,13 +554,21 @@ def commit(plan, *, should_cancel=lambda:False, on_progress=lambda *_:None):
         recover(session, plan.recovery_root, retain_new=True)
         if isinstance(error, OperationCancelled):setattr(error, 'recovery_status', 'rolled back')
         raise
+    cleanup_started=time.perf_counter_ns()
     try:
+        phase_progress('CDJ cleanup',0,sum(c.retire for c in plan.changes),'')
+        def retired(done,path):
+            on_progress(len(plan.changes)+done,total,path)
+            phase_progress('CDJ cleanup',done,sum(c.retire for c in plan.changes),path)
         _retire_removed(session,journal,should_cancel=should_cancel,
-                        on_progress=lambda done,path:on_progress(len(plan.changes)+done,total,path))
+                        on_progress=retired)
         _check_cancel(should_cancel, 'CDJ cleanup cancelled after saving the export')
         session.unlink(session.target/JOURNAL)
+        phase_progress('CDJ finished',1,1,'')
     except Exception as exc:
         raise CommittedCleanupPending(plan.manifest, exc) from exc
+    finally:
+        record_metric('cdj_cleanup_elapsed_ns',time.perf_counter_ns()-cleanup_started)
     return plan.manifest
 
 

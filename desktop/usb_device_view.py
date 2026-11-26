@@ -13,17 +13,18 @@ import stat
 
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtWidgets import (
-    QAbstractItemView, QGridLayout, QHeaderView, QLineEdit, QPushButton, QScrollArea, QStackedWidget,
+    QAbstractItemView, QGridLayout, QLineEdit, QPushButton, QScrollArea, QStackedWidget,
     QTreeWidgetItem, QTreeWidgetItemIterator, QVBoxLayout, QWidget, QLabel, QHBoxLayout,
 )
 from .choices import ComboBox as QComboBox
 
 from soundbox.cdj_usb import CdjLibrary, CdjPlaylist, CdjSong, DISPLAY_FIELDS
-from .model import COLUMNS, row_display_value
 
 from .devices import DeviceFacts, human
+from .device_playlists import create_playlist_page
 from .stock_device_view import StockIpodPages
 from .trees import TrackBrowserTree
+from .choices import Menu as QMenu, exec_transient_menu
 from .usb_preferences import MySettingsEditor, OrderedChoices, BrowsePreferences, USB_TABS
 from soundbox import my_settings
 
@@ -196,11 +197,14 @@ class UsbDevicePages(QWidget):
     view_changed = Signal()
     global_requested = Signal(dict)
     global_load_requested = Signal()
+    delete_requested = Signal(list)
+    primary_action_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
         self.stack = QStackedWidget()
         layout.addWidget(self.stack)
         overview = QWidget()
@@ -233,25 +237,19 @@ class UsbDevicePages(QWidget):
         scroll.setWidget(overview)
         self.overview_scroll = scroll
         self.stack.addWidget(scroll)
-        self.playlist_tree = TrackBrowserTree()
-        self.playlist_tree.setObjectName('StockDevicePlaylists')
-        self.playlist_tree.setHeaderLabels([label for _key,label,_hidden in COLUMNS])
-        self.playlist_tree.setAlternatingRowColors(True)
-        self.playlist_tree.setUniformRowHeights(True)
-        self.playlist_tree.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.playlist_tree.header().setStretchLastSection(False)
-        self.playlist_tree.header().setSectionResizeMode(QHeaderView.Interactive)
-        self.playlist_tree.header().setSectionResizeMode(0, QHeaderView.Interactive)
-        self.playlist_tree.header().setFixedHeight(26)
-        self.playlist_tree.header().setDefaultAlignment(Qt.AlignCenter)
-        self.playlist_tree.header().setMinimumSectionSize(46)
-        self.playlist_tree.setIndentation(16)
-        self.playlist_tree.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.playlist_tree.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
-        self.playlist_tree.setVerticalScrollMode(QAbstractItemView.ScrollPerItem)
-        self.playlist_tree.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        for i,(_key,_label,hidden) in enumerate(COLUMNS):
-            self.playlist_tree.setColumnHidden(i,hidden)
+        playlist_page = create_playlist_page(TrackBrowserTree(),
+                                             selection_mode=QAbstractItemView.ExtendedSelection)
+        self.playlist_tree = playlist_page.tree
+        self.playlist_tree.customContextMenuRequested.connect(self._playlist_context_menu)
+        self._delete_enabled=True
+        self._delete_profile=None
+        self._playlist_items={}
+        self._primary_enabled=False
+        self.export_playlist_button=playlist_page.primary
+        self.export_playlist_button.clicked.connect(self._request_primary_action)
+        self.delete_playlist_button=playlist_page.delete
+        self.delete_playlist_button.clicked.connect(self._request_playlist_delete)
+        self.playlist_tree.itemChanged.connect(self._update_delete_playlist_button)
         self.playlist_tree.itemDoubleClicked.connect(self._activate_song)
         self.playlist_tree.itemActivated.connect(self._activate_song)
         self._last_activation = None
@@ -266,7 +264,7 @@ class UsbDevicePages(QWidget):
         self._songs_by_id = {}
         self._display_rows = {}
         self.row_enricher = None
-        self.stack.addWidget(self.playlist_tree)
+        self.stack.addWidget(playlist_page.page)
         self.categories = OrderedChoices('categories', (4,17,19,20,24))
         self.sorts = OrderedChoices('sort options', (25,26))
         self.column = BrowsePreferences('column')
@@ -286,6 +284,7 @@ class UsbDevicePages(QWidget):
         self.playlist_tree.itemExpanded.connect(self._expand_playlist)
         self.playlist_tree.itemExpanded.connect(self._remember_view)
         self.playlist_tree.itemCollapsed.connect(self._remember_view)
+        self.playlist_tree.itemChanged.connect(self._remember_checked)
         self.playlist_tree.currentItemChanged.connect(self._remember_view)
         self.playlist_tree.verticalScrollBar().valueChanged.connect(self._remember_scroll)
         self.overview_scroll.verticalScrollBar().valueChanged.connect(self._remember_scroll)
@@ -293,6 +292,16 @@ class UsbDevicePages(QWidget):
 
     def set_page(self, index):
         self.stack.setCurrentIndex(max(0, min(len(USB_TABS)-1, index)))
+
+    def set_primary_action(self, _caption, enabled, reason=''):
+        """The USB role always exports; it never inherits the stock Sync label."""
+        self._primary_enabled=bool(enabled)
+        self.export_playlist_button.setText('Export')
+        self.export_playlist_button.setEnabled(self._primary_enabled)
+        self.export_playlist_button.setToolTip(str(reason))
+
+    def _request_primary_action(self):
+        if self._primary_enabled:self.primary_action_requested.emit()
 
     def _rows(self, title, rows):
         tree = self.detail_trees[title]
@@ -305,6 +314,7 @@ class UsbDevicePages(QWidget):
             QTreeWidgetItem(tree, row)
 
     def set_snapshot(self, snapshot, *, name, profile, free, drift):
+        self._delete_profile=profile
         facts = snapshot.facts if snapshot is not None else DeviceFacts()
         target = str(snapshot.target) if snapshot is not None else ''
         self._rows('Identity', (('Name', name), ('Type', getattr(profile, 'label', 'USB')),
@@ -322,15 +332,15 @@ class UsbDevicePages(QWidget):
         native = snapshot.native if snapshot else None
         same_device = self._view_key == (facts.volume_uuid or target)
         preserve_drafts = bool(notice and same_device)
-        self.general.setVisible(getattr(profile, 'kind', '') == 'generic_usb')
+        self.general.setVisible(getattr(profile, 'kind', '') in {'generic_usb','ipod_usb'})
         if not preserve_drafts:
             self._set_general(native)
         count = len([p for p in native.playlists if not p.folder]) if native else len(playlists)
         self._rows('Playlists', (('Playlists', str(count) if available else 'Not loaded' if notice else 'Unavailable'),
-                   ('Location', '/PIONEER/rekordbox' if native or getattr(profile, 'kind', '') == 'generic_usb' else '/Playlists'),
+                   ('Location', '/PIONEER/rekordbox' if native or getattr(profile, 'kind', '') in {'generic_usb','ipod_usb'} else '/Playlists'),
                    ('Status', notice or (snapshot.error if snapshot and snapshot.error
                     else ('Ready' if available else 'Reading device…')))))
-        if getattr(profile, 'kind', '') == 'generic_usb':
+        if getattr(profile, 'kind', '') in {'generic_usb','ipod_usb'}:
             supported = getattr(profile, 'cdj_export', False)
             self._rows('SoundBox', (('Playlist export', 'Ready' if supported else 'FAT32 or exFAT required'),
                        ('Library format', 'Device Library + Device Library Plus'),
@@ -341,6 +351,7 @@ class UsbDevicePages(QWidget):
                        ('Pending changes', str(drift) if drift is not None else 'Unknown'),
                        ('Playlist export', 'FAT32 supported' if getattr(profile, 'rockbox_export', False) else 'FAT32 required')))
         if snapshot is self._snapshot:
+            self._update_delete_playlist_button()
             return
         if not getattr(self._snapshot, 'notice', ''):
             self._remember_view()
@@ -361,6 +372,7 @@ class UsbDevicePages(QWidget):
         self._songs = {s.path:s for s in native.songs} if native and available else {}
         self._songs_by_id = {s.id:s for s in native.songs} if native and available else {}
         self._display_rows.clear()
+        self._playlist_items={}
         self.playlist_tree.clear()
         if not available:
             QTreeWidgetItem(self.playlist_tree, [notice or ('Playlists unavailable' if snapshot else 'Reading playlists…'),
@@ -368,12 +380,18 @@ class UsbDevicePages(QWidget):
         elif native:
             items = {}
             for playlist in native.playlists:
-                item = QTreeWidgetItem([playlist.title if playlist.folder else f'{playlist.title} ({len(playlist.entries)})'])
-                item.setFlags(item.flags() & ~Qt.ItemIsSelectable)
+                item = QTreeWidgetItem([playlist.title, '' if playlist.folder else str(len(playlist.entries)),
+                                       'Folder' if playlist.folder else 'USB'])
+                item.setFlags(item.flags() & ~Qt.ItemIsSelectable & ~Qt.ItemIsDragEnabled
+                              & ~Qt.ItemIsDropEnabled & ~Qt.ItemIsUserCheckable)
+                if not playlist.folder:
+                    item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+                    item.setCheckState(0, Qt.Unchecked)
                 items[playlist.id] = item
                 item.setData(0, Qt.UserRole, playlist)
                 if playlist.entries:
                     item.setChildIndicatorPolicy(QTreeWidgetItem.ShowIndicator)
+            self._playlist_items=items
             for playlist in native.playlists:
                 parent = items.get(playlist.parent)
                 if parent is not None and parent is not items[playlist.id]:
@@ -388,8 +406,9 @@ class UsbDevicePages(QWidget):
             kind = Path(playlist.location).suffix.lstrip('.').upper()
             if playlist.skipped:
                 kind += f' · {playlist.skipped} skipped'
-            item = QTreeWidgetItem(self.playlist_tree, [f'{playlist.title} ({len(playlist.entries)})'])
-            item.setFlags(item.flags() & ~Qt.ItemIsSelectable)
+            item = QTreeWidgetItem(self.playlist_tree, [playlist.title, str(len(playlist.entries)), kind])
+            item.setFlags(item.flags() & ~Qt.ItemIsSelectable & ~Qt.ItemIsUserCheckable
+                          & ~Qt.ItemIsDragEnabled & ~Qt.ItemIsDropEnabled)
             item.setToolTip(0, '/' + playlist.location)
             item.setData(0, Qt.UserRole, playlist)
             if playlist.entries:
@@ -398,10 +417,80 @@ class UsbDevicePages(QWidget):
         iterator = QTreeWidgetItemIterator(self.playlist_tree)
         while iterator.value():
             item = iterator.value()
-            item.setFlags(item.flags() & ~Qt.ItemIsSelectable)
+            playlist=item.data(0,Qt.UserRole)
+            if not isinstance(playlist,CdjPlaylist) or playlist.folder:
+                item.setFlags(item.flags() & ~Qt.ItemIsSelectable)
             iterator += 1
         self._restore_view()
         self._restoring = False
+        self._update_delete_playlist_button()
+
+    def set_playlist_deletion_available(self,available,reason=''):
+        self._delete_enabled=bool(available)
+        self.delete_playlist_button.setToolTip(str(reason))
+        self._update_delete_playlist_button()
+
+    def _playlist_ids(self, selected):
+        snapshot=self._snapshot
+        native=getattr(snapshot,'native',None)
+        if (not self._delete_enabled or native is None or getattr(snapshot,'error','') or getattr(snapshot,'notice','')
+                or getattr(self._delete_profile,'kind','') not in {'generic_usb','ipod_usb'}
+                or getattr(snapshot.facts,'writable',False) is not True):return ()
+        rows={}
+        for playlist in native.playlists:
+            if playlist.id in rows:return ()
+            rows[playlist.id]=playlist
+        if not selected:return ()
+        ids=[]
+        for item in selected:
+            playlist=item.data(0,Qt.UserRole)
+            if (not isinstance(playlist,CdjPlaylist) or playlist.folder or str(playlist.id) in {'','0','root'}
+                    or rows.get(playlist.id) is not playlist):return ()
+            ids.append(str(playlist.id))
+        return tuple(ids) if len(set(ids))==len(ids) else ()
+
+    def _checked_playlist_ids(self):
+        checked=[item for item in self._playlist_items.values()
+                 if item.flags() & Qt.ItemIsUserCheckable and item.checkState(0)==Qt.Checked]
+        return self._playlist_ids(checked)
+
+    def _update_delete_playlist_button(self, *_args):
+        ids=self._checked_playlist_ids()
+        count=len(ids)
+        self.delete_playlist_button.setText('Delete checked playlist…' if count==1 else
+            f'Delete {count} checked playlists…' if count else 'Delete checked playlists…')
+        self.delete_playlist_button.setEnabled(bool(ids))
+
+    def _request_playlist_delete(self):
+        ids=self._checked_playlist_ids()
+        if ids:self.delete_requested.emit(list(ids))
+
+    def _remember_checked(self, *_args):
+        if self._restoring or not self._view_key:return
+        state=self._states.get(self._view_key)
+        if not isinstance(state,dict):
+            self._remember_view()
+            return
+        state['checked']=[self._token(item) for item in self._playlist_items.values()
+                          if item.flags() & Qt.ItemIsUserCheckable and item.checkState(0)==Qt.Checked]
+        self.view_changed.emit()
+
+    def _playlist_context_menu(self,pos):
+        item=self.playlist_tree.itemAt(pos)
+        playlist=item.data(0,Qt.UserRole) if item is not None else None
+        if not isinstance(playlist,CdjPlaylist) or playlist.folder:return
+        self.playlist_tree.setCurrentItem(item)
+        checked=self._checked_playlist_ids()
+        ids=checked if str(playlist.id) in checked else self._playlist_ids([item])
+        if not ids:return
+        snapshot=self._snapshot
+        menu=QMenu(self);action=menu.addAction('Delete playlist' if len(ids)==1 else 'Delete playlists')
+        def remove():
+            if self._snapshot is not snapshot:return
+            current=self._checked_playlist_ids() if str(playlist.id) in checked else self._playlist_ids([item])
+            if current==ids:self.delete_requested.emit(list(ids))
+        action.triggered.connect(remove)
+        exec_transient_menu(menu,self.playlist_tree.mapToGlobal(pos))
 
     @staticmethod
     def _token(item):
@@ -429,14 +518,16 @@ class UsbDevicePages(QWidget):
                 state['page'] = self.stack.currentIndex()
                 self.view_changed.emit()
             return
-        expanded = []
+        expanded, checked = [], []
         iterator = QTreeWidgetItemIterator(self.playlist_tree)
         while iterator.value():
             item = iterator.value()
             if item.isExpanded():
                 expanded.append(self._token(item))
+            if item.flags() & Qt.ItemIsUserCheckable and item.checkState(0)==Qt.Checked:
+                checked.append(self._token(item))
             iterator += 1
-        self._states[self._view_key] = dict(page=self.stack.currentIndex(),expanded=expanded,
+        self._states[self._view_key] = dict(page=self.stack.currentIndex(),expanded=expanded,checked=checked,
             selected=self._token(self.playlist_tree.currentItem()),
             scroll=self.playlist_tree.verticalScrollBar().value(),
             overview_scroll=self.overview_scroll.verticalScrollBar().value())
@@ -466,6 +557,8 @@ class UsbDevicePages(QWidget):
             token = self._token(item)
             if token in state.get('expanded',[]):
                 item.setExpanded(True)
+            if token in state.get('checked',[]) and item.flags() & Qt.ItemIsUserCheckable:
+                item.setCheckState(0,Qt.Checked)
             if token and token == state.get('selected'):
                 self.playlist_tree.setCurrentItem(item)
             iterator += 1
@@ -501,11 +594,11 @@ class UsbDevicePages(QWidget):
             if self.row_enricher:
                 self.row_enricher(song,row)
             self._display_rows[song.id] = row
-            child = QTreeWidgetItem(item,[str(row_display_value(row,key)) for key,_label,_hidden in COLUMNS])
+            child = QTreeWidgetItem(item,[f'{index+1}. {row["title"]}', '', 'USB'])
             child.setData(0,Qt.UserRole,song)
-            child.setTextAlignment(2,Qt.AlignCenter)
-            for column in (3,5,7):
-                child.setTextAlignment(column,Qt.AlignRight|Qt.AlignVCenter)
+            child.setFlags(child.flags() & ~Qt.ItemIsUserCheckable
+                           & ~Qt.ItemIsDragEnabled & ~Qt.ItemIsDropEnabled)
+            child.setToolTip(0, '\n'.join(filter(None,(str(row['title']),str(row['artist']),song.path))))
 
     def _activate_song(self, item, *_):
         from time import monotonic

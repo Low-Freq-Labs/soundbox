@@ -1121,6 +1121,7 @@ class PreparedRockboxArtwork:
     sha256: str
     side: int
     profile: str = ART_PROFILE
+    source_sha256: str = ''
 
 
 class RockboxArtworkCache:
@@ -1230,7 +1231,7 @@ class RockboxArtworkCache:
             ):
                 return PreparedRockboxArtwork(
                     original, payload, payload.stat().st_size,
-                    payload_hash, side)
+                    payload_hash, side, source_sha256=source_hash)
         except (OSError, ValueError, TypeError, OverflowError):
             pass
         return None
@@ -1288,4 +1289,4 @@ class RockboxArtworkCache:
             json.dumps(row, indent=2, sort_keys=True).encode("utf-8") + b"\n",
         )
         return PreparedRockboxArtwork(
-            original, payload, len(encoded), payload_hash, side)
+            original, payload, len(encoded), payload_hash, side, source_sha256=source_hash)

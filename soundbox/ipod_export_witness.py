@@ -59,6 +59,8 @@ def _retained_correspondence(
     selected_sources = [source_playlist_identity(library, playlist) for playlist in selected]
     selected_ids = {local for source in selected_sources for local in source.members}
     selected_keys = {source.key for source in selected_sources}
+    needed_prior_pairs = {pair for binding in previous.bindings if binding.key not in selected_keys
+                          for pair in binding.members}
     new_ids = {row.local_id for row in new_rows}
     old_local_counts = Counter(row.local_id for row in previous.rows)
     old_dbid_counts = Counter(row.dbid for row in previous.rows)
@@ -73,7 +75,10 @@ def _retained_correspondence(
                 or (track.native_id, track.source_uuid, track.source_native_path or str(track.path))
                     != (row.native_id, row.uuid, row.source_path)
                 or str(actual.get('location') or '') != row.location):
-            dropped = True
+            # A removed song from a selected playlist may disappear from the
+            # source/output normally. Only an unselected prior association
+            # still needs its historical correspondence renewed.
+            dropped = dropped or (row.local_id, row.dbid) in needed_prior_pairs
             continue
         if row.dbid in artwork_keys:
             art_key = artwork_keys[row.dbid]
@@ -83,7 +88,8 @@ def _retained_correspondence(
             # Metadata/membership correspondence remains useful, but an old
             # local cover key must not certify unproven new device artwork.
             art_key = ''
-            dropped = dropped or bool(row.artwork_key)
+            dropped = dropped or (bool(row.artwork_key)
+                                  and (row.local_id, row.dbid) in needed_prior_pairs)
         retained.append(replace(row, device_track_id=int(actual['trackID']),
             metadata=stored_metadata(actual), artwork_key=art_key))
 

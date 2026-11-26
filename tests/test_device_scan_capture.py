@@ -39,7 +39,8 @@ class DeviceScanCapture(unittest.TestCase):
         self.assertFalse(worker.stock_detected)
 
     def test_detected_target_waits_for_one_complete_snapshot_before_drift(self):
-        worker = DeviceScanWorker(None, defer_playlists=True)
+        previous_art, current_art = object(), object()
+        worker = DeviceScanWorker(None, defer_playlists=True, art_cache=previous_art)
         library, extra = object(), object()
         events = []
         worker.discovered.connect(lambda rows: events.append('detected'), Qt.DirectConnection)
@@ -48,7 +49,8 @@ class DeviceScanCapture(unittest.TestCase):
             self.assertIs(request, worker)
             events.append('captured')
             request.provide_playlists([extra], lib=library,
-                artist_overrides={'one': 'Artist'}, title_overrides={'one': 'Title'})
+                artist_overrides={'one': 'Artist'}, title_overrides={'one': 'Title'},
+                art_cache=current_art)
 
         def drift(lib, path, extras, **kwargs):
             self.assertEqual(events, ['detected', 'captured'])
@@ -58,7 +60,8 @@ class DeviceScanCapture(unittest.TestCase):
             self.assertEqual(kwargs, {'artist_overrides': {'one': 'Artist'},
                                       'title_overrides': {'one': 'Title'},
                                       'display_rows': None,
-                                      'captured_manifest': self.manifest})
+                                      'captured_manifest': self.manifest,
+                                      'art_cache': current_art})
             return SimpleNamespace(count=lambda: 2)
 
         worker.playlists_requested.connect(provide, Qt.DirectConnection)
@@ -67,6 +70,7 @@ class DeviceScanCapture(unittest.TestCase):
         check.assert_called_once()
         self.capture_manifest.assert_called_once_with(self.path)
         self.assertEqual(worker.results[0][3], 2)
+        self.assertIs(worker.art_cache, current_art)
         self.assertFalse(worker.stock_detected)
 
     def test_stock_detection_precedes_capture_and_accepts_lazy_shadow_store(self):

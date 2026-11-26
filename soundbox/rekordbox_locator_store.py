@@ -25,6 +25,7 @@ from .rekordbox_write import (ConflictError,RecoveryRequired,WriteProofError,_co
     _identity,_inactive_journal_proof,_integrity,_json,_quote,_regular,_state,encrypted_backup)
 from .state_io import atomic_bytes,copy_state,sync_dir
 from .rekordbox_playlist_store import _sha
+from .native_transaction import hash_evidence
 
 FORMAT='soundbox-native-media-locator-v1'
 AUTHORITY_FORMAT='soundbox-media-locator-authority-v1'
@@ -204,8 +205,8 @@ class LocatorStore:
             record=json.loads(_json(record));atomic_bytes(folder/'operation.json',_json(record))
             # Preparation just proved these exact immutable before/after states,
             # planned rows and constrained staged SQL. Reuse that successful
-            # semantic proof; _validate still checks the saved record and every
-            # payload hash freshly before admitting publication or recovery.
+            # semantic proof; _validate still checks the saved record and payload
+            # digests under the native lease's evidence rules before admission.
             self._verified_recovery_record_key=(_digest(record),self.authority)
             return record
 
@@ -222,7 +223,8 @@ class LocatorStore:
         if json.loads((folder/'operation.json').read_bytes())!=record:raise RecoveryRequired('Locator intention changed')
         for n in PAYLOADS:
             _regular(folder/n)
-            if _sha(folder/n)!=record['payload_sha256'][n]:raise RecoveryRequired('Locator backup changed')
+        if hash_evidence((folder/n for n in PAYLOADS),_sha)!=[record['payload_sha256'][n] for n in PAYLOADS]:
+            raise RecoveryRequired('Locator backup changed')
         if record['payload_sha256']['before.xml']!=record['payload_sha256']['after.xml']:raise RecoveryRequired('Locator cannot change XML')
         semantic_key=(_digest(record),self.authority)
         if semantic_key==self._verified_recovery_record_key:return record
@@ -234,8 +236,8 @@ class LocatorStore:
                     if side=='before' and self._plan(conn,record['tracks'],record['timestamp'])!=record['changes']:
                         raise RecoveryRequired('Locator recovery exceeds its original intent')
                 finally:conn.close()
-        # Source/authority/path/archive equality and ALL payload hashes remain
-        # fresh above. Only exact successful immutable-pair semantics are reused
+        # Source/authority/path/archive equality and payload verification remain
+        # guarded above. Only exact successful immutable-pair semantics are reused
         # within this store; live media and publication guards stay independent.
         self._verified_recovery_record_key=semantic_key
         return record

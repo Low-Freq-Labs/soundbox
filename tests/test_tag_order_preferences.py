@@ -125,6 +125,87 @@ class TagWindowPreferences(unittest.TestCase):
         self.wait(lambda:not controller.admission.pending)
         self.assertEqual(read_state(w._state_repository.path)['settings']['pending_tag_definitions'][0]['request']['order'],['b','a'])
 
+    def test_rapid_native_order_gestures_chain_visible_order_before_first_durable_save(self):
+        from tests.test_tag_drag import Drop
+        w=self.w;controller=w.tag_definition_controller
+        w.lib.source_tags.extend([LibraryTag('c','Third',source_uuid='tag-c'),
+                                  LibraryTag('d','Fourth',source_uuid='tag-d')])
+        self.native_categories()
+        controller.order_factory=mock.Mock(side_effect=AssertionError('Source write before admission'))
+        w.tag_controller.prep_priority=True
+        w._sync_tags();self.assertTrue(w._save_state())
+        boxes=dict(w.my_tags.checkboxes);selected=w._selected_ids()
+        original=w._state_repository.commit_patch
+        entered,release=threading.Event(),threading.Event()
+        self.addCleanup(release.set)
+        def held(patch):
+            if not entered.is_set():
+                entered.set()
+                if not release.wait(5):raise RuntimeError('Generated admission was not released')
+            return original(patch)
+        expected=(('b','c','a','d'),('a','b','c','d'),('a','d','b','c'),('a','d','c','b'))
+        with mock.patch.object(w._state_repository,'commit_patch',side_effect=held):
+            for index,(source,target,after) in enumerate((('a','c',True),('a','b',False),
+                                                        ('d','b',False),('b','c',True))):
+                self.assertTrue(w.my_tags._order_available())
+                rect=w.my_tags.checkboxes[target].geometry()
+                point=QPoint(rect.center().x(),rect.bottom()-1 if after else rect.top()+1)
+                event=Drop(w.my_tags.content,w.my_tags._tag_mime(source),point)
+                w.my_tags.content.dropEvent(event)
+                self.assertTrue(event.accepted)
+                self.assertEqual(tuple(w.my_tags.checkboxes),expected[index])
+                self.assertEqual(w._selected_ids(),selected)
+                self.assertTrue(all(w.my_tags.checkboxes[key] is box for key,box in boxes.items()))
+            self.assertTrue(entered.wait(2))
+            self.assertFalse(w.settings.get('pending_tag_definitions'))
+            self.assertEqual([tag.tag_id for tag in w.lib.source_tags],['a','b','c','d'])
+            jobs=deepcopy(controller.pending)
+            self.assertEqual(len(jobs),4)
+            previous=('a','b','c','d')
+            for job,desired in zip(jobs,expected,strict=True):
+                self.assertEqual(tuple(row['id'] for row in job['request']['before']),previous)
+                self.assertEqual(tuple(job['request']['order']),desired)
+                previous=desired
+            release.set()
+            self.wait(lambda:not controller.admission.pending)
+        saved=read_state(w._state_repository.path)['settings']['pending_tag_definitions']
+        self.assertEqual(saved,jobs)
+        controller.order_factory.assert_not_called()
+        self.assertNotIn(tag_order.KEY,w.settings)
+
+        # Drain through the actual window publication and canonical ACK path;
+        # older readbacks must never move the visible tags back under a drag.
+        source=deepcopy(w.lib);applied=[];owner=self
+        class Store:
+            def apply(self,request):
+                nonlocal source
+                durable=read_state(w._state_repository.path)['settings']['pending_tag_definitions']
+                owner.assertEqual(durable[0]['request'],request)
+                owner.assertEqual([dict(id=tag.tag_id,uuid=tag.source_uuid,name=tag.name)
+                                   for tag in source.source_tags],request['before'])
+                by_id={tag.tag_id:tag for tag in source.source_tags}
+                source=replace(source,source_tags=[by_id[key] for key in request['order']])
+                applied.append(deepcopy(request))
+                return {'ID':request['tag_id']}
+        controller.order_factory=lambda _:Store()
+        controller.loader=lambda _:deepcopy(source)
+        original_state=w.my_tags.set_state;observed=[]
+        def observe(*args,**kwargs):
+            original_state(*args,**kwargs)
+            observed.append(tuple(w.my_tags.checkboxes))
+        with mock.patch.object(w.my_tags,'set_state',side_effect=observe):
+            w.tag_controller.prep_priority=False
+            controller.schedule()
+            self.wait(lambda:not controller.pending and not controller.admission_pending
+                      and not w.tag_controller.busy)
+        self.assertEqual(applied,[job['request'] for job in jobs])
+        self.assertTrue(observed)
+        self.assertTrue(all(order==expected[-1] for order in observed),observed)
+        self.assertEqual(tuple(tag.tag_id for tag in w.lib.source_tags),expected[-1])
+        self.assertEqual(w._selected_ids(),selected)
+        self.assertTrue(all(w.my_tags.checkboxes[key] is box for key,box in boxes.items()))
+        self.assertEqual(read_state(w._state_repository.path)['settings']['pending_tag_definitions'],[])
+
     def test_actual_select_all_212_first_click_and_rapid_tags_remain_selected_before_durability(self):
         w=self.w;sample=w.lib.tracks_by_id['1']
         w.lib.tracks_by_id={str(index):replace(sample,track_id=str(index),name=f'Generated {index}',

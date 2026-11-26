@@ -1,4 +1,5 @@
 """Pilot cue transactions against synthetic encrypted databases only."""
+from contextlib import contextmanager
 from dataclasses import asdict, replace
 from itertools import product
 import json
@@ -93,6 +94,42 @@ class PilotCueTransactions(unittest.TestCase):
         self.assertEqual(state.track['CueUpdated'], '2')
         self.assertFalse(self.store.journal.exists())
         self.assertTrue((self.store.root / 'baseline.db').is_file())
+
+    def test_backup_transfer_uses_verified_capture_digest_and_hashes_the_destination(self):
+        original = store_module._file_sha
+        with mock.patch.object(store_module, '_file_sha', wraps=original) as hashing:
+            self.store.apply(self.request())
+        self.assertTrue(any(call.args[0].name == 'baseline-new.db' for call in hashing.call_args_list))
+        self.assertFalse(any(call.args[0].parent.name.startswith('soundbox-encrypted-backup-')
+                             for call in hashing.call_args_list))
+
+    def test_changed_capture_or_corrupt_transfer_never_publishes_a_baseline_or_edits_source(self):
+        original_backup = store_module.encrypted_backup
+        original_copy = store_module.shutil.copyfileobj
+        request = self.request(); before = self.source.read_bytes()
+        @contextmanager
+        def changed_capture(source, **kwargs):
+            with original_backup(source, **kwargs) as path:
+                with path.open('r+b') as handle:handle.write(b'changed after verification')
+                yield path
+        def corrupt_transfer(source, destination, *args):
+            original_copy(source, destination, *args)
+            if Path(destination.name).name == 'baseline-new.db':
+                destination.seek(0);destination.write(b'corrupt destination bytes')
+        for target, replacement in (('encrypted_backup', changed_capture),
+                                    ('shutil.copyfileobj', corrupt_transfer)):
+            with self.subTest(target=target):
+                patch = (mock.patch.object(store_module, target, side_effect=replacement)
+                         if target == 'encrypted_backup' else
+                         mock.patch.object(store_module.shutil, 'copyfileobj', side_effect=replacement))
+                with patch:
+                    with self.assertRaisesRegex(offline.WriteProofError, 'backup did not verify'):
+                        self.store.apply(request)
+                self.assertEqual(self.source.read_bytes(), before)
+                self.assertFalse((self.store.root / 'baseline.db').exists())
+                self.assertFalse((self.store.root / 'baseline.json').exists())
+                self.assertFalse(self.store.journal.exists())
+                (self.store.root / 'baseline-new.db').unlink()
 
     def test_library_authority_requires_acceptance_and_exact_source_identity(self):
         path = self.root / 'cue-authority.json'

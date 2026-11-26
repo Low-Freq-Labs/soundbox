@@ -26,6 +26,7 @@ from .rekordbox_write import (ConflictError,RecoveryRequired,WriteProofError,_co
     _inactive_journal_proof,_integrity,_json,_quote,_regular,encrypted_backup)
 from .rekordbox_playlist_store import _sha
 from .state_io import atomic_bytes,copy_state,sync_dir
+from .native_transaction import hash_evidence
 
 FORMAT='soundbox-native-registration-v1'
 AUTHORITY_FORMAT='soundbox-registration-authority-v1'
@@ -160,8 +161,9 @@ class RegistrationStore:
         self._scope(record['request']);archive=self.root/record['archive']
         if (archive.parent!=self.root or archive!=archive.resolve() or archive.name!='registration-'+record['request']['operation_id']
                 or archive.stat().st_mode&0o077):raise RecoveryRequired('Registration archive redirects')
-        for name in PAYLOADS:
-            if _sha(archive/name)!=record['payload_sha256'][name]:raise RecoveryRequired('Registration backup changed')
+        digests=hash_evidence((archive/name for name in PAYLOADS),_sha)
+        if digests!=[record['payload_sha256'][name] for name in PAYLOADS]:
+            raise RecoveryRequired('Registration backup changed')
         if record['payload_sha256']['before.xml']!=record['payload_sha256']['after.xml']:
             raise RecoveryRequired('Registration cannot change XML')
         _regular(archive/'operation.json')
@@ -181,7 +183,7 @@ class RegistrationStore:
             finally:before.close();after.close()
         # Reuse only this completed immutable-pair reconstruction. Every call
         # above still verifies current source/authority, request scope, archive
-        # identity and every payload hash before reaching this instance memo.
+        # identity and payload digests under the native lease's evidence rules.
         self._verified_recovery_record_key=semantic_key
         return record
 
@@ -455,7 +457,7 @@ class RegistrationStore:
                     schema_sha256=a.schema_sha256,application_version=a.application_version,archive=archive.name,request=request,
                     **plan,retain_full_backups=a.retain_full_backups,
                     retention_predecessor_sha256=_sha(self.root/'registration-latest.json') if (self.root/'registration-latest.json').exists() else None,
-                    payload_sha256={n:_sha(archive/n) for n in PAYLOADS})
+                    payload_sha256=dict(zip(PAYLOADS,hash_evidence((archive/n for n in PAYLOADS),_sha),strict=True)))
                 atomic_bytes(archive/'operation.json',_json(record));sync_dir(archive);sync_dir(self.root);_fault('payload-ready')
             conn=self.lease._connect()
             try:

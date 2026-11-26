@@ -20,6 +20,7 @@ from desktop.export_dialog import ExportSelectionMixin
 from desktop.metadata_controller import MetadataController
 from desktop.stock_device_view import StockIpodPages
 from desktop.tag_controller import TagEditController
+from desktop.usb_setup import UsbSetupController
 from desktop.workers import OneShotTask
 from soundbox.device_operations import (DeviceOperationCoordinator,
                                        DeviceSessionIdentity, Phase)
@@ -109,6 +110,8 @@ class StockDeleteLifecycle(unittest.TestCase):
             _flash_status=mock.Mock(), _artists_refresh=QTimer(),
             _save_columns=mock.Mock(), grid_controller=mock.Mock(),
             findChildren=lambda _kind: [], _state_committer=None)
+        self.host.usb_setup_controller = UsbSetupController(self.pages)
+        self.host.usb_setup_controller.window = self.host
         for name in (
                 '_device_operation_owned', '_stock_has_sync_source',
                 '_update_device_action_state', '_defer_device_operation_until_scan_finishes',
@@ -196,6 +199,7 @@ class StockDeleteLifecycle(unittest.TestCase):
 
     def retire(self):
         self.release.set()
+        self.host.usb_setup_controller.stop()
         for worker in self.workers:
             try:
                 worker.cancel()
@@ -477,8 +481,11 @@ class StockDeleteLifecycle(unittest.TestCase):
 
     def test_shutdown_drains_held_delete_before_closing_dependencies(self):
         self.admit_delete()
+        self.host.usb_setup_controller.timer.start()
         closed = []
         def close_dependencies(_host):
+            self.assertTrue(self.host.usb_setup_controller.closing)
+            self.assertFalse(self.host.usb_setup_controller.timer.isActive())
             self.assertIsNone(self.host._stock_delete_plan_worker)
             self.assertIsNone(self.coordinator.active)
             closed.append(True)

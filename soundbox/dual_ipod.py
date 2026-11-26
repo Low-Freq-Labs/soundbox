@@ -20,6 +20,7 @@ import hashlib
 import json
 import logging
 import os
+import secrets
 from pathlib import Path
 import time
 from typing import Any, Callable, Sequence, cast
@@ -35,7 +36,9 @@ from . import rockbox_config
 from . import sync as sync_mod
 from .ipod_policy import pace_classic_usb as _pace_classic_usb
 from .library import Library, Playlist
-from .transaction_outcome import record_outcome
+from .transaction_outcome import (RecoveryPayloads, begin_recovery, record_outcome,
+                                  resume_completed_payload_retirement, _RETIREMENT)
+from . import stock_delete
 from .operation_control import (
     checkpoint, cancellation_disabled, CommittedOperationError, OperationCancelled, record_metric,
 )
@@ -490,6 +493,11 @@ def _matching_interrupted_recovery(
             continue
         if raw.get("profile") != DUAL_EXPORT_PROFILE:
             continue
+        retired = raw.get('payload_retirement')
+        if (isinstance(retired, dict) and retired.get('format') == _RETIREMENT
+                and retired.get('complete') is True
+                and raw.get('transaction_state') in ('committed', 'rolled back')):
+            continue
         if int(raw.get("generation") or 0) != generation:
             continue
         recorded_baseline = str(raw.get("baseline_manifest_sha256") or "")
@@ -546,6 +554,7 @@ def composite_device_drift(
     audit_existing: bool = False,
     captured_manifest: tuple[dict[str, Any], bytes] | None = None,
     display_rows: Mapping[str, Mapping] | None = None,
+    art_cache: Any | None = None,
 ) -> legacy_manifest.Drift | None:
     """Diff schema-3 ownership against the currently exportable Rockbox view.
 
@@ -592,6 +601,10 @@ def composite_device_drift(
         for playlist in effective
     }
     changed_keys = {str(key) for key, *_rest in drift.changed}
+    from .artwork_observation import changed_playlists
+    for key, name in changed_playlists(manifest, library, effective, art_cache):
+        if key not in changed_keys:
+            drift.changed.append((key, name)); changed_keys.add(key)
     for key, raw in (manifest.get("playlists") or {}).items():
         playlist = effective_by_key.get(str(key))
         if playlist is None or str(key) in changed_keys or not isinstance(raw, dict):
@@ -1597,6 +1610,7 @@ def plan_dual_ipod_sync(
     art_cache: Any | None = None,
     stock_art_cache: StockArtworkCache | None = None,
     stock_shadow_store: StockIpodShadowStore | None = None,
+    omission_cache_root: Path | None = None,
     identity_key: str = "",
     serial_number: str = "",
     reconcile: bool = False,
@@ -1897,6 +1911,7 @@ def plan_dual_ipod_sync(
         identity_key=identity_key,
         serial_number=serial_number,
         shadow_store=stock_shadow_store,
+        omission_cache_root=omission_cache_root,
         media_payloads=payloads,
         rockbox_media_cache=rockbox_media_cache,
         allow_dual_boot=True,
@@ -2197,6 +2212,8 @@ def plan_dual_ipod_sync(
                     "kind": "rockbox-artwork",
                     "owned": True,
                     "source": str(canonical_art.resolve(strict=True)),
+                    "track_id": track.track_id,
+                    "source_sha256": image.source_sha256,
                     "size": image.size,
                     "sha256": image.sha256,
                 }
@@ -2744,10 +2761,13 @@ def commit_dual_ipod_sync(
     stamp = time.strftime("%Y%m%d-%H%M%S")
     baseline = plan.manifest_sha256_before or plan.stock.database_sha256_before
     recovery = Path(".soundbox") / "dual-recovery" / (
-        f"{stamp}-{baseline[:12]}")
+        f"{stamp}-{secrets.token_hex(8)}-{baseline[:12]}")
     recovery_abs = session.guard(recovery)
+    previous_retirement_warnings: tuple[str, ...] = ()
+    recovery_payloads: RecoveryPayloads | None = None
     rewritten: list[DualFileRewrite] = []
     copied: list[Path] = []
+    copied_entities: dict[Path, stock_delete.IndexedFile] = {}
     new_playlist_paths: list[Path] = []
     rewritten_playlists: list[DualPlaylistWrite] = []
     retimestamped_playlists: list[DualPlaylistWrite] = []
@@ -2767,6 +2787,8 @@ def commit_dual_ipod_sync(
             "transaction_state": "executing",
         }
         with cancellation_disabled():
+            previous_retirement_warnings = resume_completed_payload_retirement(session, 'dual-recovery')
+            recovery_payloads = begin_recovery(session, recovery)
             session.atomic_write(
                 recovery / "plan.json",
                 json.dumps(journal, indent=2, sort_keys=True).encode("utf-8")
@@ -2780,7 +2802,8 @@ def commit_dual_ipod_sync(
             saved = session.guard(
                 recovery / "files" / rewrite_item.relative_path.parent
                 / (rewrite_item.relative_path.name + ".before"))
-            session.atomic_copy(live, saved)
+            session.atomic_copy(live, saved, expected_sha256=rewrite_item.sha256_before)
+            recovery_payloads = recovery_payloads.remember(session, (saved.relative_to(plan.target),))
         for changed_playlist in changed_playlists:
             if changed_playlist.sha256_before is None:
                 continue
@@ -2792,13 +2815,15 @@ def commit_dual_ipod_sync(
             saved = session.guard(
                 recovery / "playlists" / baseline_relative.parent
                 / (baseline_relative.name + ".before"))
-            session.atomic_copy(live, saved)
+            session.atomic_copy(live, saved, expected_sha256=changed_playlist.sha256_before)
+            recovery_payloads = recovery_payloads.remember(session, (saved.relative_to(plan.target),))
         for delete_item in plan.file_deletes:
             live = session.guard(delete_item.relative_path)
             saved = session.guard(
                 recovery / "deleted" / delete_item.relative_path.parent
                 / (delete_item.relative_path.name + ".before"))
-            session.atomic_copy(live, saved)
+            session.atomic_copy(live, saved, expected_sha256=delete_item.sha256_before)
+            recovery_payloads = recovery_payloads.remember(session, (saved.relative_to(plan.target),))
         for file_item in plan.media_copies + plan.artwork_copies:
             checkpoint()
             destination = session.guard(file_item.relative_path)
@@ -2810,12 +2835,13 @@ def commit_dual_ipod_sync(
                     prepared = plan.rockbox_media_cache.materialize(
                         file_item.media_plan)
                     copy_source = prepared.payload
-                session.atomic_copy(copy_source, destination)
-                copied.append(destination)
-                if destination.stat().st_size != file_item.size or _sha256(
-                        destination) != file_item.sha256:
-                    raise DualIpodError(
-                        f"Dual copy failed verification: {destination}")
+                with session.atomic_copy_verified(copy_source, destination,
+                        expected_size=file_item.size, expected_sha256=file_item.sha256) as receipt:
+                    entity = stock_delete.capture(session, file_item.relative_path)
+                    receipt.require_current(session, destination, size=file_item.size, sha256=file_item.sha256)
+                    if entity is None:raise DualIpodError(f'New dual copy disappeared: {destination}')
+                    copied_entities[destination] = entity
+                    copied.append(destination)
             finally:
                 if prepared is not None:
                     assert plan.rockbox_media_cache is not None
@@ -2843,6 +2869,7 @@ def commit_dual_ipod_sync(
                     session.revalidate()
                     os.replace(destination, saved)
                     rewritten.append(rewrite_item)
+                    recovery_payloads = recovery_payloads.remember(session, (saved.relative_to(plan.target),))
                 session.atomic_copy(copy_source, destination)
                 if rewrite_item.kind != "rockbox-media":
                     rewritten.append(rewrite_item)
@@ -2941,6 +2968,7 @@ def commit_dual_ipod_sync(
             session.revalidate()
             os.replace(destination, saved)
             deleted_orphan_items.append(orphan)
+            recovery_payloads = recovery_payloads.remember(session, (saved.relative_to(plan.target),))
             deleted_orphans += 1
             deleted_orphan_bytes += orphan.size_before
             if orphan.kind in {"shared-stock-media", "rockbox-media"}:
@@ -2956,6 +2984,8 @@ def commit_dual_ipod_sync(
     except Exception as original_exc:
         with cancellation_disabled():
             failures: list[str] = []
+            if getattr(original_exc, 'recovery_status', '') == 'recovery required':
+                failures.append(f'New file publication retained uncertain ownership: {original_exc}')
             try:
                 if manifest_published and plan.manifest_payload_before is not None:
                     session.atomic_write(
@@ -3071,11 +3101,21 @@ def commit_dual_ipod_sync(
                         f"rewritten file {rewrite_item.relative_path}: {exc}")
             for path in reversed(copied):
                 try:
-                    session.guard(path).unlink(missing_ok=True)
-                except OSError as exc:
+                    stock_delete.retire(session, copied_entities[path],
+                        recovery / 'new-copies' / (hashlib.sha256(str(path).encode()).hexdigest() + '.pending'))
+                except (OSError, RuntimeError) as exc:
                     failures.append(f"copied file {path}: {exc}")
             record_outcome(session, recovery, "recovery required" if failures else "rolled back",
                            error=str(original_exc), local_root=(plan.rockbox_media_cache.root if plan.rockbox_media_cache else None))
+            if not failures and recovery_payloads is not None:
+                try:
+                    if copied:
+                        recovery_payloads = recovery_payloads.remember(session, directories=(recovery / 'new-copies',))
+                    recovery_payloads.retire(session)
+                    if stock_result is not None and stock_result.recovery_payloads is not None:
+                        stock_result.recovery_payloads.retire(session)
+                except (OSError, RuntimeError, ValueError) as cleanup_error:
+                    LOG.warning('Rolled-back composite payload cleanup retained evidence: %s', cleanup_error)
             setattr(original_exc, "recovery_status", "recovery required" if failures else "rolled back")
             if failures:
                 failure = DualIpodError(
@@ -3116,31 +3156,14 @@ def commit_dual_ipod_sync(
             {item.relative_path for item in plan.orphan_deletes}
             | {item.relative_path for item in plan.file_deletes})
         cleanup_failures: list[str] = list(stock_result.cleanup_failures)
-        transient_media = [
-            session.guard(
-                recovery / "files" / item.relative_path.parent
-                / (item.relative_path.name + ".before"))
-            for item in plan.file_rewrites
-            if item.kind == "rockbox-media"
-        ]
-        transient_media.extend(
-            session.guard(
-                stock_result.recovery_directory / "media" / item.relative_path.parent
-                / (item.relative_path.name + ".before"))
-            for item in plan.stock.rewrites
-            if plan.stock.dual_boot
-        )
-        transient_media.extend(
-            session.guard(
-                recovery / "orphans" / item.relative_path.parent
-                / (item.relative_path.name + ".before"))
-            for item in plan.orphan_deletes
-        )
-        for saved in transient_media:
+        with cancellation_disabled():
             try:
-                saved.unlink(missing_ok=True)
-            except OSError as exc:
-                cleanup_failures.append(f"transient recovery {saved}: {exc}")
+                recovery_payloads.retire(session)
+                if stock_result.recovery_payloads is not None:
+                    stock_result.recovery_payloads.retire(session)
+            except (OSError, RuntimeError, ValueError) as cleanup_error:
+                cleanup_failures.append(f'Transient transaction payload cleanup: {cleanup_error}')
+        cleanup_failures.extend(previous_retirement_warnings)
         witness, witness_warning = committed_stock_export_witness(plan.stock, session)
         stock_result = replace(stock_result, catalog_witness=witness,
             catalog_notice=plan.stock.catalog_notice,

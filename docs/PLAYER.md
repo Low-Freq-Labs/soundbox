@@ -378,8 +378,9 @@ column reachable. Saved layouts are constrained on restore; Artists shares the
 same widths and visibility. Ordinary layouts keep horizontal scrolling off. Deliberately selecting fields
 whose combined minimum widths exceed the viewport enables horizontal scrolling
 so the rows remain reachable. Sorting, editing and 24-point
-per-item vertical scrolling are unchanged. USB playlist columns mirror this
-layout. Device headers use the same 26-point line; Overview/Playlists use the
+per-item vertical scrolling are unchanged. USB playlists use the stock device's
+independent three-column frame; library widths, visibility and order do not alter
+it. Device headers use the same 26-point line; Overview/Playlists use the
 same 24-point rows and empty alternating backgrounds.
 
 Loading a USB playlist song uses its actual device audio and ANLZ companions,
@@ -421,7 +422,9 @@ Native source writers still serialize through their shared guarded worker.
 Drag a tag label to reorder the two-column grid when that source's order
 capability is available; assignment readiness is independent. Native DB order
 uses its separately accepted shared-source FIFO, exact category/tag bindings and
-fresh native readback. Its authority defaults off until native acceptance; an
+fresh native readback. Further same-category drags can move the same or other
+tags while earlier saves finish; the latest order and existing controls remain
+visible through each acknowledgement. Its authority defaults off until native acceptance; an
 old display preference never overrides native order. XML/public sources retain
 the source/UUID-scoped display preference. A stale source/catalog gesture is
 refused. A normal label click changes an available checkbox; right-click offers

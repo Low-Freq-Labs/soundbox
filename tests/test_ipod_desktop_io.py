@@ -2,6 +2,7 @@
 from dataclasses import dataclass, replace
 from types import MethodType, SimpleNamespace
 from pathlib import Path
+import tempfile
 import unittest
 from unittest import mock
 
@@ -26,8 +27,12 @@ class Snapshot:
     sync_committed_at: str = ""
 
 
-def host():
+def host(test_case=None):
+    state = tempfile.TemporaryDirectory(prefix='soundbox-ipod-desktop-state-')
+    if test_case is not None:
+        test_case.addCleanup(state.cleanup)
     value = SimpleNamespace(
+        _fixture_state=state, _data_file=Path(state.name).resolve()/'library.json',
         lib=Library({}, [], Path('/fixture/master.db')), overrides={}, titles={}, custom={},
         _state_maintenance=False, _shutting_down=False,
         _stock_view_callbacks={}, _stock_view_pending={},
@@ -54,6 +59,7 @@ def host():
         rockbox_media_cache=object(), rockbox_art_cache=object(),
         unification_controller=SimpleNamespace(state=lambda: None),
     )
+    value.stock_catalog_witness_store.load.return_value = None
     value._deliver_device_scan_callbacks = MethodType(MainWindow._deliver_device_scan_callbacks, value)
     value._retire_device_scan_worker = MethodType(MainWindow._retire_device_scan_worker, value)
     return value
@@ -74,7 +80,7 @@ class IpodDesktopIOTests(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def test_dashboard_and_status_share_one_worker_capture(self):
-        owner = host()
+        owner = host(self)
         facts = devices.DeviceFacts(volume_uuid="uuid", filesystem_name="msdos")
         capture = object()
         status = SimpleNamespace(state="up_to_date", detail="ok", local_changes=0, committed_at="now")
@@ -99,7 +105,7 @@ class IpodDesktopIOTests(unittest.TestCase):
             worker.deleteLater()
 
     def test_stock_sync_reads_shadow_only_in_worker_without_reresolving_admitted_selection(self):
-        owner = host()
+        owner = host(self)
         selected=Playlist('one',[],keys=[])
         capture=admitted_capture(owner,[selected])
         shadow = SimpleNamespace(playlists={"cust:one": {"name": "one"}}, sources={})
@@ -119,13 +125,15 @@ class IpodDesktopIOTests(unittest.TestCase):
             self.assertEqual(worker.result, "plan")
             self.assertEqual(plan.call_args.args[1], [selected])
             self.assertEqual(plan.call_args.kwargs["managed_playlist_keys_before"], ("cust:one",))
+            self.assertEqual(plan.call_args.kwargs["omission_cache_root"],
+                             owner._data_file.parent/'stock_source_observations')
             select.assert_not_called()
             self.assertIsNot(plan.call_args.args[0],owner.lib)
             self.assertEqual(plan.call_args.args[0].source,str(owner.lib.source))
             worker.deleteLater()
 
     def test_dual_sync_uses_admitted_selection_without_ui_manifest_reads(self):
-        owner = host()
+        owner = host(self)
         selected=Playlist('one',[],keys=[])
         capture=admitted_capture(owner,[selected])
         with (
@@ -145,11 +153,13 @@ class IpodDesktopIOTests(unittest.TestCase):
             self.assertEqual(worker.result, "plan")
             self.assertEqual(plan.call_args.args[1],[selected])
             self.assertEqual(plan.call_args.kwargs["extra_playlists"], tuple(owner._sync_playlists()))
+            self.assertEqual(plan.call_args.kwargs["omission_cache_root"],
+                             owner._data_file.parent/'stock_source_observations')
             read.assert_not_called()  # The backend owns the single native capture.
             worker.deleteLater()
 
     def test_finalization_waits_for_finished_delivery_after_run_returns(self):
-        owner = host()
+        owner = host(self)
         worker = SimpleNamespace(isRunning=lambda: False, finished=mock.Mock())
         owner._dev_scan_worker = worker
         owner._refresh_devices = mock.Mock()
@@ -162,7 +172,7 @@ class IpodDesktopIOTests(unittest.TestCase):
         complete.assert_called_once_with()
 
     def test_visible_manifest_becomes_a_backend_precondition(self):
-        owner = host()
+        owner = host(self)
         with (
             mock.patch("desktop.app.device_facts", return_value=devices.DeviceFacts()),
             mock.patch("soundbox.manifest.load_composite", side_effect=AssertionError("duplicate capture")),
@@ -180,7 +190,7 @@ class IpodDesktopIOTests(unittest.TestCase):
     def test_stock_and_dual_planning_use_captured_inventory_after_library_replacement(self):
         for mode in ('stock', 'dual'):
             with self.subTest(mode=mode):
-                owner = host()
+                owner = host(self)
                 selected = Playlist('Selected', [], ['one', 'one'], 'selected')
                 retained = Track('retained', 'Retained', 'Artist', 'file:///source/retained.wav')
                 track = Track('one', 'Before', 'Artist', 'file:///source/one.wav')
@@ -211,7 +221,7 @@ class IpodDesktopIOTests(unittest.TestCase):
                     worker.deleteLater()
 
     def test_scan_completion_publishes_rows_and_retires_before_finalization(self):
-        owner = host()
+        owner = host(self)
         events = []
         worker = SimpleNamespace(results=[], retry_discovery=False,
                                  _surface_refresh_callbacks=[])
@@ -227,7 +237,7 @@ class IpodDesktopIOTests(unittest.TestCase):
         self.assertEqual(worker._surface_refresh_callbacks, [])
 
     def test_final_scan_queues_new_ipod_without_starting_owner_after_success(self):
-        owner = host()
+        owner = host(self)
         profile = SimpleNamespace(has_stock_ipod=True)
         owner._device_profiles = {"/fixture/second": profile}
         owner._stock_view_cache = {}
@@ -256,7 +266,7 @@ class IpodDesktopIOTests(unittest.TestCase):
 
     def test_cancelled_scan_failure_callback_retires_unstarted_warming(self):
         from threading import Event
-        owner = host()
+        owner = host(self)
         owner._stock_view_warming = {"/fixture/second"}
         owner._device_profiles = {"/fixture/second": object()}
         cancellation = Event()
@@ -301,7 +311,7 @@ class IpodDesktopIOTests(unittest.TestCase):
 
     def test_dashboard_write_access_uses_observed_format_without_model_or_recovery(self):
         from soundbox.stock_ipod_format import DATABASE_PROFILE, StockWriteFormat
-        owner = host()
+        owner = host(self)
         owner._stored_stock_model = lambda *args: ""
         observed = StockWriteFormat(DATABASE_PROFILE)
         owner._stock_view_cache = {"/fixture/ipod": (SimpleNamespace(stock_format=observed), None)}
@@ -316,7 +326,7 @@ class IpodDesktopIOTests(unittest.TestCase):
         owner._remember_stock_model.assert_not_called()
 
     def test_manual_favorites_offers_sync_after_added_songs_without_resolving_audio(self):
-        owner=host()
+        owner=host(self)
         owner.lib.playlists=[Playlist('FAVORITES',[],['added','retained'])]
         owner._stock_view_cache={'/fixture/ipod':(SimpleNamespace(
             identity_key='header-identity',
@@ -327,7 +337,7 @@ class IpodDesktopIOTests(unittest.TestCase):
         self.assertFalse(MainWindow._stock_has_sync_source(owner,'/fixture/ipod'))
 
     def test_adopted_custom_name_is_one_source_and_virtual_view_affordance_never_sorts(self):
-        owner=host();owner.lib.playlists=[Playlist('FAVORITES',[],['one'],'native',export_key='cust:FAVORITES')]
+        owner=host(self);owner.lib.playlists=[Playlist('FAVORITES',[],['one'],'native',export_key='cust:FAVORITES')]
         owner.custom={'FAVORITES':['one']}
         owner._stock_view_cache={'/fixture/ipod':(SimpleNamespace(
             identity_key='header-identity',
@@ -340,7 +350,7 @@ class IpodDesktopIOTests(unittest.TestCase):
         owner._sync_playlists.assert_not_called()
 
     def test_header_sync_dispatch_preserves_selected_device_instead_of_export_dialog(self):
-        owner=host();owner._current_device_path='/fixture/ipod'
+        owner=host(self);owner._current_device_path='/fixture/ipod'
         owner._device_profiles={'/fixture/ipod':SimpleNamespace(kind='stock_ipod')}
         owner._sync_device=mock.Mock();owner._show_export_dialog=mock.Mock()
         with mock.patch('desktop.stock_catalog_sync.needs_sync',return_value=True) as pending:
@@ -351,7 +361,7 @@ class IpodDesktopIOTests(unittest.TestCase):
 
     def test_observed_device_display_history_never_synchronously_checkpoints_library(self):
         from tests.test_device_identity import snapshot
-        owner=host();owner.settings={};owner._current_device_path='/other/device'
+        owner=host(self);owner.settings={};owner._current_device_path='/other/device'
         owner._stock_view_failures={};owner._finish_ipod_loading_status=mock.Mock()
         owner._update_device_action_state=mock.Mock();owner._schedule_settings_save=mock.Mock()
         owner._save_state=mock.Mock(side_effect=AssertionError('GUI library checkpoint'))
@@ -367,7 +377,7 @@ class IpodDesktopIOTests(unittest.TestCase):
         from soundbox.stock_ipod_catalog_state import StockCatalogWitness
         from soundbox.stock_ipod_playlist_binding import PlaylistBinding
         from soundbox.stock_ipod_info import StockIpodPlaylistSnapshot
-        owner=host();owner.settings={};owner._current_device_path='/other/device'
+        owner=host(self);owner.settings={};owner._current_device_path='/other/device'
         owner._stock_view_failures={};owner._finish_ipod_loading_status=mock.Mock()
         owner._update_device_action_state=mock.Mock();owner._schedule_settings_save=mock.Mock()
         result=replace(snapshot(),playlists=(StockIpodPlaylistSnapshot(123,'Favorites','Playlist',False,()),))

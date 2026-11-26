@@ -1,5 +1,271 @@
 # Performance audits and measured limits — November 2026
 
+## CDJ Unicode publication and progress — November24 late evening
+
+SONNY's actual 90-track USB attempt planned707 changes in14.869s and failed after
+69.080s of execution. It had already published1,015,447,017 audio bytes before
+rejecting the single decomposed spelling of LÄRJ. The guard now accepts canonical
+Unicode equivalence without accepting case-only aliases or multiple matches.
+Byte-weighted progress includes preflight, the current copy and finalization;
+per-operation metrics separate preflight, copy, cleanup and total commit time.
+
+A generated707-path comparison reduced stat/lstat calls38,397→8,304 (78.37%).
+Three alternating instrumented APFS runs measured median118.14→37.49ms. The
+reduction removes repeated path-resolution/existence passes while retaining fresh
+mount/layout checks, no-follow parent checks and publication descriptor guards.
+This is metadata-call evidence, not a measured FAT throughput or whole-export
+speedup. Physical retry acceptance remains separate in [HANDOFF](HANDOFF.md).
+Small receipts: `~/Library/Logs/Soundbox/cdj-unicode-20261125/`.
+
+## Rejected-source Sync and artwork sizing — November24 evening
+
+Read-only installed logs showed 35.069s source planning in a 39.449s plan; the
+496,296,248-byte DAVERT WAV caused 992,592,496 acquired bytes across three attempts
+in 33.605s, including Provider errno 81 readiness and an unstable-snapshot reread.
+The changed epoch field is unproved. Commit took 1.942s with zero copies, zero
+metadata rewrites and 918 reused tracks. The cached LIVE SETS binding had 83 source
+tracks but only one exported: an intentionally omitted source was needlessly
+acquired again. Neither audio nor live device bytes were read for diagnosis.
+
+The new exact epoch/profile negative index survives process restart. Bounded
+RF64/WAVEX checks reject only proved unsupported inputs; definitive full-capture
+WAV/MP3 policy failures also seed negatives. Provider header readiness receives
+bounded cancellable retry rather than silently promoting every errno 81 to a full
+capture. Unproved input still follows ordinary acquisition. An omission-bearing
+selection may use a fresh verified catalog no-op only with matching witness and
+shadow/native hashes, source contracts, occurrence membership and current negative
+proof. Actual catalog changes use full capture; this avoids inventing a new
+positive-source authority or leaving the Mac shadow stale after partial commit.
+Cloud wait/retry and source filename/actual bytes are visible without fictitious
+bar completion or a probe-to-full progress reset.
+
+Three alternating generated 128 MiB FLOAT-WAV plan pairs beyond the header chunk
+budget measured 94.83→5.21ms median and 134,218,804→0 source bytes on repeated plans
+with fresh cache owners. The seed still acquires once. A real helper→catalog
+no-op regression checks no source/header opens and an unchanged generated target.
+These are local generated results, not cloud or physical whole-Sync timings.
+
+All 820 cached prepared Classic covers matched 128×128, 320×320, 56×56 RGB565 slots,
+243,840 bytes total per distinct image. Current Mac shadow records 849 slots;
+largest ithmb 173,875,200 bytes. Generated pixel/stride/MHNI/MHIT checks also cover
+Video and the alternate 55×55 padded variant. The iPod was absent, so actual mounted
+bytes and firmware behavior were not inspected. Full and incremental planners
+now refuse new/growing ithmb files above 256,000,000 bytes before mutation, following
+[libgpod's decimal performance budget](https://raw.githubusercontent.com/gtkpod/libgpod/master/src/ithumb-writer.c).
+It is not a firmware hard-limit claim; existing oversized/no-growth and free-slot
+reuse stay admitted. Larger growth needs future segmentation.
+
+Small receipts: `stock-negative-source-20261124/`, `sync-source-progress-20261124/`,
+`artwork-size-20261124/` and current release `stock-sync-20261124/` under
+`~/Library/Logs/Soundbox/`. Runtime/package acceptance is recorded in HANDOFF.
+
+## Minimal native and iPod transactions — November24 follow-up
+
+The follow-up compares the previous installed `e49877cf…` implementation with
+the new source using generated fixtures, not Sonny's library or physical iPod.
+Private native archive hashes now have an exclusive-lease lifetime: hash fully
+on first use and after any file/parent identity change; observe complete epochs
+on every reuse; discard at unlock. Only private single-link files on the same
+local filesystem as the admitted native database qualify. Live source checks,
+SQL constraints, journals, fsync and independent readback remain fresh.
+Playlist recovery also avoids parsing an identical second durable JSON copy.
+
+Three alternating complete generated 64 MiB/15,000-membership engine pairs
+measured playlist rename medians of 1.068→0.866 seconds (18.9%) and track move
+4.280→3.310 seconds (22.7%). Private archive hash calls fell from 29 to 5;
+large-move archive bytes fell from 1,071,589,637 to 214,127,507. Other hash work
+was unchanged. These follow-up gains compare against the prior delivery and
+must not be added to its separate percentages. Full-library readback and source
+backup cost remain; no universal instant native acknowledgement is claimed.
+
+A generated repeat export of 64 distinct source paths with identical audio
+previously manufactured 63 extra copies and 127 records. Exact source→DBID
+reservations and content candidate pools now retain all 64 existing records
+with zero new copies; separate metadata/artwork identities remain independent.
+Complete repeat-plan medians were 72.88→41.28 ms across three alternating pairs.
+This fixture exposes a duplicate-reuse bug rather than hardware throughput.
+
+Known-digest atomic copying removes redundant source reads while retaining
+destination verification, flush and publication. Five alternating generated
+64 MiB copy pairs measured 85.60→51.32 ms in common copy and 117.07→79.81 ms
+for dual-target new-file publication. Common source reads halve; dual source and
+destination reads halve. These exclude acquisition, rendering and catalog work.
+
+Delete now changes only small artwork metadata when images survive. A guarded
+generated plan+commit retaining 134,240,000 pixel bytes performed zero opens,
+hashes, copies or compaction of those ithmb files, preserving exact offsets and
+shared-image ownership. Changed ArtworkDB recovery remains transactional.
+Completed stock/dual recovery payloads are retired by exact ownership, leaving
+small receipts; no historical-tree scan or whole-device backup was added.
+
+Cover regressions exercise fallback→manual Sync with unchanged DBID and zero
+audio copies, actual native image links/pixels, changed-cover drift, frozen
+selection and a manual save pending at capture. Local read-only evidence showed
+Turn Up's manual JPEG and prepared Classic pixels intact; the physical device's
+reported placeholder was not inspected. Generated pixel correctness is not a
+claim of observed firmware display behavior.
+
+Compact receipts live under `~/Library/Logs/Soundbox/` in
+`minimal-writes-20261124/`, `ipod-audio-reuse-20261124/`,
+`ipod-io-audit-20261124/` and `manual-art-20261124/`.
+
+## All rekordbox writers — November24 profiling
+
+This investigation follows the request to maximize actual persisted DB-write
+speed across every native edit domain. Interactive feedback, canonical intention
+admission, native SQL commit, exact native readback and durable local
+acknowledgement remain separate milestones. Earlier visual feedback cannot stand
+in for a completed native save.
+
+The latest installed log records tag reorder commands at 1.778/1.761 seconds and
+track moves at 2.949/2.538/2.103/2.155 seconds. Their dispatch waits are 1–6 ms and
+GUI completion callbacks 5–12 ms. Historical tag-assignment phase records put
+fresh library readback at 1.17–1.29 seconds, independently of 0.13–0.92-second
+store application. Historical cue saves already include 18–26 ms store work and
+10–14 ms selected readback; manual-grid application reached 0.82 seconds. These
+are different operations and dated log observations, not additive timings for a
+single fresh benchmark or evidence that every write has the same bottleneck.
+
+The production inventory identifies the affected work and common infrastructure:
+
+| Domain | Engine owner | Work before native acknowledgement |
+| --- | --- | --- |
+| Tag assignment | `rekordbox_tags.LiveTagStore` | Exact selected links/counter, encrypted protective baseline, journal, constrained SQL and independent recovery readback; desktop also reads a complete fresh Library for smart membership |
+| Tag create/delete/order/rename | `rekordbox_tag_definitions` and independently authorized order/rename subclasses | Fresh exact BEFORE baseline, category/leaf/dependency plan, journal, constrained SQL and committed recovery; desktop currently reads a complete fresh Library |
+| Hot/Memory cues | `rekordbox_cue_store.PilotCueStore` | Exact selected track/cue/aggregate revision, protective baseline, journal and independent selected readback; unchanged consecutive counters can retain their proved protective baseline |
+| Grid/manual BPM | `rekordbox_grid_store.PilotGridStore` | Cue lease plus exact DAT/EXT and optional content-file bookkeeping, recoverable packet publication and selected readback |
+| Playlist/folder/smart edits and track reposition | `rekordbox_playlist_store.PlaylistStore` | Verified encrypted BEFORE/AFTER DB/XML archives, exact affected-row plan, shared journal, source SQL/XML publication, recovery/retention; song moves compose accepted membership operations |
+| Title/artist metadata | `rekordbox_metadata_store.SourceMetadataStore` | Exact paired-field/profile plan, fresh BEFORE baseline and XML guard, journal and independent target readback; desktop also reads complete fresh metadata |
+| Registration | `rekordbox_registration_store.RegistrationStore` | Source-media/alias proofs, bare-row plan and verified DB/XML pairs, journal, registration/binding readback, optional separate playlist membership |
+| Converted-file locator | `rekordbox_locator_store.LocatorStore` | Fresh media identities, verified paired DB/XML logical states, constrained locator SQL and recovery |
+| Confirmed Collection removal | `rekordbox_removal_store.RemovalStore` | Exact selected rows/files/resources, recoverable Trash ownership, verified preparation/journal, constrained DB changes and independent recovery |
+| Initial WAV/CBR analysis | `rekordbox_analysis_store` / `rekordbox_cbr_analysis_store` | Captured audio/component plan, verified DB/XML/packet archives, recoverable packet publication and constrained source SQL; full plan/source inventories remain separate from ordinary cue/grid authority |
+
+All families reach `rekordbox_write.encrypted_backup`; cue-derived leases also
+share `native_transaction.NativeTransactionLease`. Live tag assignment retains its
+own domain-specific transaction implementation. Source authority/process/schema
+checks, the shared writer lock, journal-before-source-mutation, FULL synchronous
+SQLite commits and recovery/readback are required. Existing successful pure-plan
+reuse does not authorize caching a live source observation. In particular,
+playlist/registration/locator already reuse proved immutable semantic
+reconstruction after freshly checking archive bytes; analysis can reuse only an
+identical freshly captured inventory. Those existing optimizations must not be
+counted as new work in this investigation.
+
+A generated encrypted TEMP fixture with a 64 MiB untouched BLOB measured store
+application at 292 ms for assignment, 305 ms for cue, 311 ms for grid, 374 ms for
+title and 419 ms for tag order. The encrypted backup occupied 287–336 ms,
+including a 101–103 ms integrity check. Python-level `fsync` totalled only
+0.56–1.58 ms despite 11–37 calls. SQLite's C-level commit synchronization is not
+included in that `fsync` measurement. The fixture's unknown BLOB stresses DB
+byte work; it is not a copy of Sonny's library. Repeated full DB copies, hashes,
+integrity passes and full readback deserve measurement before changing atomic
+publication itself.
+
+The source changes retain these checks while removing duplicate work.
+An immediately consumed digest from an integrity-bracketed standalone TEMP
+capture can replace a second hash of that same private input during baseline
+copying; the copied destination is always hashed independently, and WAL folding
+keeps the ordinary full-hash path. This benefits assignment and the cue-derived
+grid, metadata and tag-definition/order writers. Independent BEFORE/AFTER archive
+hashes run through a bounded two-thread helper for playlist, registration,
+locator, removal and WAV/CBR-analysis evidence. Every archive is freshly hashed
+with its existing descriptor/epoch checks. Cancellation/metric ownership crosses
+the helper boundary, and all siblings join before the writer lease can retire.
+
+Alternating generated 64 MiB store comparisons measured median complete apply
+times of assignment 268.8→239.4 ms, cue 276.7→241.3 ms, grid 280.3→247.1 ms,
+title 328.8→294.7 ms and tag order 324.0→292.5 ms (three pairs each). A separate
+generated 69.70 MB playlist fixture with 15,000 memberships measured complete
+`apply_with_transition` at 1.420→1.180 seconds (16.9%, four pairs). These are
+complete engine methods, not isolated hash-loop estimates, but exclude desktop
+full-library refresh and physical/installed acceptance.
+
+A separate 15,000-occurrence song move exposes remaining work: complete JSON
+plan encoding/decoding, accepted remove/append replay and survivor-row SQL.
+Its scalar SQL rows now use detached flat copies instead of recursive scalar
+dispatch; nested/custom values and repeated aliases retain deepcopy semantics.
+Complete canonical plans remained byte-identical. Alternating pure planning
+medians were 646.39→472.70 ms (26.9%). A complete move with both paired hashes
+and flat copying measured 5.145→4.942 seconds (3.9%, three pairs), while a
+superseded test gate also ran. These timings are workload-specific and cannot
+be added to the separate rename or reader percentages. Decoded journal reuse
+or fewer replay probes would need separate lifetime/mutation/recovery proof;
+neither is part of this change.
+
+A second generated 67.60 MB fixture contains 3,300 tracks, 86 regular playlists,
+9,900 memberships, 2,000 tag links and 661 cues. Complete
+`load_metadata_readback` took 486–540 ms; the prewarmed read-only helper took
+507–653 ms. Inclusive phase costs were 13–16 ms for snapshot copy, 140–150 ms for
+track construction, 147–170 ms for cue edit-state construction, 62–63 ms for the
+raw playlist catalog and 38–45 ms for ordinary playlist membership. It contains
+no smart playlists, so it does not establish the cost of Sonny's smart rules.
+
+Cue revision encoding removes unnecessary row clones/per-cell wrappers, and a
+bounded process-local LRU reuses successful pure encoding/hash results only for
+complete identical freshly read raw track/cue/aggregate inputs. No live row,
+source observation or authority result is reused. The exact-scalar key includes
+unknown columns and BLOB contents; finite float IEEE markers distinguish integer
+and signed-zero JSON bytes. Nested/unusual inputs retain the uncached historical
+encoder. Keys are frozen before miss encoding so later mutation cannot poison a
+previous key. Entry count, conservative bytes and per-entry size are all bounded.
+
+Six alternating complete-reader comparisons on the 3,300-track fixture measured
+warm `load_metadata_readback` median 462.94→415.66 ms (10.2%); inclusive cue-state
+construction changed 135.68→92.38 ms (31.9%). Filling the cache after imports/ORM
+warm-up took 539.39 ms, about 76 ms above the uncached median. It retained 3,301
+entries with 31.6 MB conservative accounting, within 8,192 entries/96 MiB and
+128 KiB per entry. Complete Library equality was checked; changing one fresh
+native title recomputed exactly one digest. These gains benefit complete desktop
+readback after tag, order, playlist, metadata and other full native refreshes;
+single-target cue saves have little repeated encoding work to remove. Cold
+startup is not faster, and no instant installed-library save is established.
+
+Compact generated profiles and validation scope:
+`~/Library/Logs/Soundbox/all-writers-audit-20261124/` and paired common-store
+comparisons in `~/Library/Logs/Soundbox/writer-speed-20261124/store-before-after.json`.
+Runtime package and
+installed identity remain in [HANDOFF](HANDOFF.md). Physical/source write pilots
+were not performed. The source profiles guide further common backup/hash and
+readback work; no general removal of durability checks follows from them.
+
+## Stock Sync source hydration — November24
+
+Read-only review of the installed November23 21:22 log isolates a 140.313 s stock
+plan: 133.242 s in sources, 49 acquisition attempts reading 2,213,625,218 bytes,
+followed by a 5.348 s commit copying only 3 new tracks and reusing 909. The log includes
+large retained cloud WAV/MP3 sources and File Provider readiness retries. This
+is measured prior behavior, not a new hardware speedup. A November24 read-only
+shadow census found 904 exact source epochs and 14 ctime-only differences; all 14
+were canonical CloudStorage sources, with unchanged device/inode/size/mtime.
+
+Normal stock planning now retains those committed cloud inventory contracts
+without opening their audio or updating their saved epoch/digest. Exact local
+epochs, changed cloud size/mtime/inodes, stale native shadows and new acquisition
+remain independently checked. This inventory comparison cannot detect a same-size
+cloud edit whose mtime was restored; it never claims a fresh integrity proof.
+Generated regressions assert zero acquisitions/header/format reads for repeated
+cloud ctime churn and metadata-only commit, verbatim original proof fields,
+changed cloud size/mtime/inode acquisition, and the existing local restored-mtime
+mutation detection. Source validation and installed/physical acceptance stay
+separate; see [HANDOFF](HANDOFF.md).
+
+The independent audit also reproduced whole-file acquisition before omitting
+WAVEX PCM24. Bounded rejection now recognizes complete 40-byte extensible PCM/float
+headers with exact standard GUID/framing; malformed or unknown fields still use
+full acquisition. The existing stock media profile is unchanged, including its
+WAVEX PCM16 exclusion. A 512 MiB sparse generated fixture reads at most 60 header
+bytes and plans without acquisition, then a supported ordinary-WAV rewrite
+requires exact acquisition. This avoids reading a large unsupported payload;
+it does not establish the format of the historical live acquisition entries or
+a physical transfer-speed improvement. Sync prune's owned-media hash costs
+remain separate in the [critical audit](critical-audit-2026-11.md#stock-sync-read-costs--november24-independent-audit).
+
+Pruning remains a separate measured cost: an earlier logged 23:33 plan spent
+35.514 s hashing 22 unused device files/530,576,193 bytes. Confirmed Delete's indexed
+entity policy does not authorize removing normal Sync's content checks. No prune
+ownership or recovery behavior changed in this update.
+
 ## Current delivery and measurement boundary — reviewed November23
 
 The performance and cleanup changes below were delivered in the November21
@@ -737,7 +1003,7 @@ art indexes/white icon remained exact. Precise dated identities/times stay in
 | Finding | Correction and evidence |
 | --- | --- |
 | Stock dashboard parsed, read its header and hashed separate live database reads | Capture bounded native catalogs once per worker; parse/header/hash share captured bytes. Dashboard+status uses two complete DB reads instead of three plus a header. ArtworkDB uses two reads instead of one so same-epoch FAT edits are detected. Captures never become persistent freshness or commit authority |
-| Every stock-only no-op reopened selected source audio | A matching native shadow can retain its accepted raw-source SHA, complete Mac epoch and MA446 compatibility result. Fixture no-op performs zero acquisitions/format probes and zero retained-media hashes; legacy shadow reads two sources once, one changed ctime reads one. Legacy no-op enriches only disposable Mac proof fields, preserving generation/commit time |
+| Every stock-only no-op reopened selected source audio | At this checkpoint, a matching native shadow retained its accepted raw-source SHA, complete Mac epoch and MA446 compatibility result. Fixture no-op performed zero acquisitions/format probes and zero retained-media hashes; legacy shadow read two sources once, one changed ctime read one. Legacy no-op enriched only disposable Mac proof fields, preserving generation/commit time. The November24 CloudStorage inventory policy above narrows that ctime cost |
 | Stock curated artwork was read once for segment hashes and again for concatenation | Verify segment and combined digests in the same read; two opens become one per segment |
 | Equal-size composite dedup searched every earlier candidate | Lazy digest sets preserve first occurrence and exact byte semantics. At1024unique same-size synthetic files,523776pairwise comparisons become zero, with one hash per colliding source; a unique-size singleton needs no hash |
 | Overlapping playlists repeatedly computed source presence, canonical paths and effective display | Per-operation observations/signature encoding reduce a20-playlist/60-membership fixture from300to182source `is_file` calls and120to4display-helper calls, preserving both source contracts and all ordered references |
@@ -756,7 +1022,9 @@ The dedup CPU sample measured0.458885s→0.020753s with preverified digests;
 this isolates helper CPU and is not an end-to-end speedup claim. The remaining
 182source-presence calls include shared stock/filesystem planning: this is not
 zero metadata I/O. Normal composite committed-inventory reuse remains distinct
-from a fresh integrity proof; stock-only ctime drift deliberately reacquires.
+from a fresh integrity proof; at this checkpoint stock-only ctime drift
+deliberately reacquired. The November24 CloudStorage policy above supersedes
+that behavior for retained cloud inventory only.
 Changed media still materializes in planning and again at commit, one source plus
 derivative at a time. Classic150ms pacing, fresh affected-file guards, recovery,
 manifest/database-last publication and serialized iPod completion remain. iPod

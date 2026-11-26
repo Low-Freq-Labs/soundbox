@@ -30,6 +30,11 @@ Source launch uses real AppData; development tests/renders must use the supplied
 4. Connect a supported destination and export selected playlists. Generic USBs use explicit Export; iPods retain firmware-specific Sync.
 5. Use Eject before disconnecting. It starts no final verification scan.
 
+A stock iPod also exposes an independent **USB** target for selected CDJ playlist
+Export/Delete. It shares the physical device's busy and Eject guards; it has no
+automatic Sync. An unconfigured writable USB offers **Configure** or **Not now**;
+configuration creates the missing CDJ setup after consent without formatting it.
+
 Regular playlists keep authored song order and allow exact-occurrence dragging;
 Collection and smart playlists default newest first. Header sorts change only the view.
 

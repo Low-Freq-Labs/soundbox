@@ -13,10 +13,10 @@ import stat
 import subprocess
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
-from soundbox.device_profile import DeviceProfile, inspect_device
+from soundbox.device_profile import DeviceProfile, FAT_FILESYSTEMS, inspect_device
 from soundbox.device_readiness import DeviceWriteReadiness, stock_write_readiness
 from soundbox.paths import is_external_device_path
 from soundbox.stock_ipod_identity import StockIdentityObservation, hardware_model, model_from_serial
@@ -93,6 +93,18 @@ def _volume_writable(info: dict) -> bool:
             or (info.get('ReadOnlyVolume') is False and info.get('ReadOnlyMedia') is False))
 
 
+def device_target_profile(profile, role: str = ''):
+    """Project an explicit export role without changing physical protection."""
+    if role in ('', None):
+        return profile
+    if (role != 'ipod_usb' or not isinstance(profile, DeviceProfile)
+            or not profile.has_stock_ipod
+            or profile.filesystem not in FAT_FILESYSTEMS | {'exfat'}):
+        return None
+    return replace(profile, kind='ipod_usb', label='USB', stock_preview=False,
+                   stock_write=False, has_stock_ipod=True, rockbox_export=False)
+
+
 def device_export_readiness(profile, facts: DeviceFacts, mount_token: int, *,
                             stock_snapshot=None) -> DeviceWriteReadiness:
     """Explain cached target readiness without probing or inferring hardware."""
@@ -108,12 +120,12 @@ def device_export_readiness(profile, facts: DeviceFacts, mount_token: int, *,
             filesystem=getattr(profile, 'filesystem', '') or getattr(stock_snapshot, 'filesystem', ''),
             stock_format=getattr(stock_snapshot, 'stock_format', None) or getattr(profile, 'stock_format', None),
             firewire_guid=facts.firewire_guid)
-    if kind == 'generic_usb' and getattr(profile, 'cdj_export', False):
+    if kind in {'generic_usb', 'ipod_usb'} and getattr(profile, 'cdj_export', False):
         return DeviceWriteReadiness(True, '')
     if kind == 'rockbox' and getattr(profile, 'rockbox_export', False):
         return DeviceWriteReadiness(True, '')
     reason = ('Rockbox export requires FAT32' if kind == 'rockbox'
-              else 'USB export requires FAT32 or exFAT' if kind == 'generic_usb'
+              else 'USB export requires FAT32 or exFAT' if kind in {'generic_usb', 'ipod_usb'}
               else 'This device layout does not support export')
     return DeviceWriteReadiness(False, reason)
 

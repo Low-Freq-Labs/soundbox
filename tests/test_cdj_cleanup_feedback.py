@@ -34,6 +34,7 @@ class CdjCleanupFeedback(unittest.TestCase):
                     _flash_status=mock.Mock(), _update_device_action_state=mock.Mock(),
                     _usb_view_cache={dev: previous}, _usb_view_requests={dev},
                     _device_mount_tokens={dev: 71}, _current_device_path=dev,
+                    _current_device_role='', _device_profiles={dev:SimpleNamespace(kind='generic_usb')},
                     _present_usb_device=mock.Mock())
                 with mock.patch('desktop.cdj.QMessageBox.warning') as warning, \
                         mock.patch('desktop.cdj.device_facts', side_effect=AssertionError('completion device read')):

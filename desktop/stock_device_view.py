@@ -14,7 +14,6 @@ from PySide6.QtWidgets import (
     QApplication,
     QGridLayout,
     QHeaderView,
-    QHBoxLayout,
     QPushButton,
     QStackedWidget,
     QTableView,
@@ -30,6 +29,7 @@ if TYPE_CHECKING:
 from soundbox.manifest import composite_library_counts
 
 from .devices import human
+from .device_playlists import create_playlist_page
 from .trees import BrowserDetailTree, TrackBrowserTree, _start_chip_drag
 from . import theme
 
@@ -536,45 +536,19 @@ class StockIpodPages(QWidget):
         self._music_widths_applied = False
         self.stack.addWidget(self.music_table)
 
-        playlist_page = QWidget()
-        playlist_layout = QVBoxLayout(playlist_page)
-        playlist_layout.setContentsMargins(0, 0, 0, 0)
-        playlist_layout.setSpacing(8)
-        self.playlist_tree = DevicePlaylistTree(self)
-        self.playlist_tree.setObjectName("StockDevicePlaylists")
-        self.playlist_tree.setHeaderLabels(["Playlist / Track", "Tracks", "Type"])
-        self.playlist_tree.setAlternatingRowColors(True)
-        self.playlist_tree.setUniformRowHeights(True)
-        self.playlist_tree.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.playlist_tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        playlist_page = create_playlist_page(DevicePlaylistTree(self))
+        self.playlist_tree = playlist_page.tree
         self.playlist_tree.customContextMenuRequested.connect(
             self._playlist_context_menu)
-        playlist_header = self.playlist_tree.header()
-        playlist_header.setStretchLastSection(False)
-        playlist_header.setSectionResizeMode(QHeaderView.Interactive)
-        playlist_header.setSectionResizeMode(0, QHeaderView.Stretch)
-        self.playlist_tree.setColumnWidth(1, 70)
-        self.playlist_tree.setColumnWidth(2, 150)
         self.playlist_tree.itemChanged.connect(
             self._update_delete_playlist_button)
         self.playlist_tree.currentItemChanged.connect(
             self._sync_playlist_button)
-        playlist_layout.addWidget(self.playlist_tree)
-        playlist_actions = QHBoxLayout()
-        playlist_actions.setContentsMargins(12, 0, 12, 10)
-        self.sync_playlist_button = QPushButton("Export")
-        self.sync_playlist_button.setObjectName("Ghost")
-        self.sync_playlist_button.setEnabled(False)
+        self.sync_playlist_button = playlist_page.primary
         self.sync_playlist_button.clicked.connect(self._request_primary_action)
-        playlist_actions.addWidget(self.sync_playlist_button)
-        self.delete_playlist_button = QPushButton("Delete checked playlists…")
-        self.delete_playlist_button.setObjectName("Ghost")
-        self.delete_playlist_button.setEnabled(False)
+        self.delete_playlist_button = playlist_page.delete
         self.delete_playlist_button.clicked.connect(self._request_playlist_delete)
-        playlist_actions.addWidget(self.delete_playlist_button)
-        playlist_actions.addStretch(1)
-        playlist_layout.addLayout(playlist_actions)
-        self.stack.addWidget(playlist_page)
+        self.stack.addWidget(playlist_page.page)
         self._playlist_delete_available = False
         self._playlist_order_available = False
         self._pending_playlist_order = None

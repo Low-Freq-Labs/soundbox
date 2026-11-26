@@ -4,7 +4,6 @@ import os
 import tempfile
 import unittest
 from unittest import mock
-from types import SimpleNamespace
 
 from desktop.devices import DeviceFacts
 from desktop.usb_device_view import UsbSnapshot, read_usb_snapshot
@@ -81,23 +80,28 @@ class UsbPlaylistSnapshot(unittest.TestCase):
 
     def test_periodic_device_scan_reuses_snapshot_and_explicit_refresh_reads_once(self):
         from desktop.workers import DeviceScanWorker
+        from soundbox.device_profile import DeviceProfile
         from soundbox.cdj_usb import metadata_stamp
         target = str(self.root)
-        cached = UsbSnapshot(self.root, self.token, self.facts,native_stamp=metadata_stamp(self.root,self.token))
-        profile = SimpleNamespace(has_stock_ipod=False, kind='generic_usb')
+        facts=DeviceFacts(capacity_bytes=1000,free_bytes=400,volume_uuid='generated',writable=True)
+        cached = UsbSnapshot(self.root, self.token, facts,native_stamp=metadata_stamp(self.root,self.token))
+        profile = DeviceProfile('generic_usb','USB','exfat',False,False,False,False,False)
         def worker(requests=()):
             return DeviceScanWorker(None, known_paths={target}, known_mount_tokens={target:self.token},
-                                    usb_views={target:cached}, usb_requests=requests)
+                                    usb_views={target:cached}, usb_requests=requests,
+                                    usb_setup_known={(target,self.token,facts.volume_uuid,'generic_usb')})
         with mock.patch('desktop.workers.list_devices', return_value=[('USB',target,400)]), \
                 mock.patch('desktop.workers.device_profile', return_value=profile), \
-                mock.patch('desktop.workers.device_facts', return_value=self.facts) as facts, \
+                mock.patch('desktop.workers.device_facts', return_value=facts) as cached_facts, \
+                mock.patch('soundbox.cdj_usb.setup_readiness',side_effect=AssertionError('Repeated setup probe')), \
                 mock.patch('desktop.usb_device_view.read_usb_snapshot', return_value=cached) as reader:
             first = worker();first.run()
             self.assertIs(first.usb_snapshots[target], cached)
-            reader.assert_not_called();facts.assert_not_called()
+            reader.assert_not_called();cached_facts.assert_called_once_with(target,cached_only=True)
+            cached_facts.reset_mock()
             refresh = worker({target});refresh.run()
-            reader.assert_called_once_with(target, self.token, self.facts)
-            facts.assert_called_once_with(target, cached_only=True)
+            reader.assert_called_once_with(target, self.token, facts)
+            self.assertEqual(cached_facts.call_args_list,[mock.call(target,cached_only=True)]*2)
 
 
 class UsbPlaybackReferences(unittest.TestCase):

@@ -6,7 +6,6 @@ is observable in the committed transaction. Historical unmarked plans retain
 their original reconstruction in the playlist store.
 """
 from collections import Counter
-from copy import deepcopy
 
 from . import rekordbox_playlist_plan as planner
 from .rekordbox_write import ConflictError, WriteProofError
@@ -67,7 +66,7 @@ def compose(playlist, members, counter, remove, append, contents, occupied):
                  'updated_at': remove['survivor_timestamp'],
                  'rb_local_usn': current['int_1']}
                  for index, row in enumerate(kept, 1)}
-    after = [deepcopy(survivors.get(row['ID'], row))
+    after = [planner._copy_row(survivors.get(row['ID'], row))
              for row in members if row['ID'] not in selected_ids]
     for index, row in enumerate(selected):
         deleted = planner._deleted(row,

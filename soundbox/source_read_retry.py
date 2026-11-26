@@ -12,11 +12,16 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from .operation_control import OperationCancelled, checkpoint, record_metric
+from .operation_control import OperationCancelled, checkpoint, record_metric, phase_progress
 
 LOG = logging.getLogger("soundbox")
 _CLOUD_STORAGE = Path.home() / "Library" / "CloudStorage"
 _RETRY_DELAYS = (3.0, 3.0)
+
+
+def is_cloud_storage_source(source: Path) -> bool:
+    """Recognize a canonical macOS File Provider path, without opening it."""
+    return sys.platform == "darwin" and source.is_relative_to(_CLOUD_STORAGE)
 
 
 def _wait(seconds: float, should_cancel: Callable[[], bool] | None) -> None:
@@ -37,8 +42,7 @@ class ProviderReadRetry:
 
     def wait_after(self, error: OSError, source: Path, *,
                    should_cancel: Callable[[], bool] | None = None) -> bool:
-        if (sys.platform != "darwin" or error.errno != 81
-                or not source.is_relative_to(_CLOUD_STORAGE)
+        if (error.errno != 81 or not is_cloud_storage_source(source)
                 or self.retries >= len(_RETRY_DELAYS)):
             return False
         delay = _RETRY_DELAYS[self.retries]
@@ -46,6 +50,7 @@ class ProviderReadRetry:
         LOG.info("Cloud source not ready; retry %d/%d after %.1fs: %s",
                  self.retries, len(_RETRY_DELAYS), delay, source)
         record_metric("source_readiness_retries")
+        phase_progress('Waiting for cloud source',self.retries,len(_RETRY_DELAYS),source.name)
         _wait(delay, should_cancel)
         return True
 

@@ -595,6 +595,41 @@ class DualIpodSyncTests(unittest.TestCase):
         )
         self.assertFalse((self.ipod / ".rockbox/config.cfg").exists())
 
+    def test_stock_rejected_wavex_stays_in_rockbox_after_export_and_repeat_sync(self):
+        import numpy as np
+        import soundfile as sf
+        sf.write(self.unsafe, np.arange(1764, dtype=np.int32).reshape(-1, 2) * 256,
+                 44_100, format='WAVEX', subtype='PCM_24')
+        original = self.unsafe.read_bytes()
+        expected, rate = sf.read(self.unsafe, dtype='int32')
+        # Warm the actual stock-only negative memo before the composite export.
+        # Neither it nor the stock planner's omission can filter Rockbox media.
+        self.assertIn('PCM_24', stock_ipod._stock_wav_header_omission(self.unsafe.resolve()))
+        plan = self._plan()
+        self.assertEqual(plan.stock_safe_sources, 1)
+        self.assertEqual(plan.rockbox_only_sources, 1)
+        self.assertNotIn(str(self.unsafe.resolve()), plan.stock.source_device_paths)
+        self.assertEqual(len(plan.media_copies), 1)
+        exported = self.ipod / plan.media_copies[0].relative_path
+        self.assertEqual(plan.media_copies[0].relative_path.parts[0], 'Music')
+        self.assertIn('/' + plan.media_copies[0].relative_path.as_posix(),
+                      plan.playlists[0].payload.decode())
+        commit_dual_ipod_sync(plan)
+        observed, observed_rate = sf.read(exported, dtype='int32')
+        np.testing.assert_array_equal(observed, expected)
+        self.assertEqual(observed_rate, rate)
+        self.assertEqual(sf.info(exported).subtype, 'PCM_24')
+        self.assertEqual(_riff_info_values(exported), ('Unsafe 24', 'Fixture'))
+        self.assertEqual(len(get_ipod_tracks(read_ipod(self.ipod))), 1)
+        manifest = json.loads((self.ipod / '.soundbox/manifest.json').read_text())
+        self.assertEqual(manifest['files']['/' + plan.media_copies[0].relative_path.as_posix()]['kind'],
+                         'rockbox-media')
+        repeated = self._plan(reconcile=True)
+        self.assertFalse(repeated.requires_commit)
+        self.assertFalse(repeated.media_copies or repeated.file_rewrites or repeated.stock.copies)
+        self.assertTrue(exported.is_file())
+        self.assertEqual(self.unsafe.read_bytes(), original)
+
     def test_sync_never_owns_firmware_preferences(self):
         config = self.ipod / ".rockbox/config.cfg"
         before = b"tagcache_autoupdate: off\r\nmax files in playlist: 5000\r\nplaylist viewer track display: track name\r\n"
@@ -1479,6 +1514,9 @@ class DualIpodSyncTests(unittest.TestCase):
 
         def fail_manifest(session, destination, data):
             if Path(destination).name == "manifest.json":
+                saved=list((self.ipod/'.soundbox/stock-ipod-recovery').glob('*/iTunesDB.before'))
+                self.assertTrue(saved,'Inner stock rollback must survive until the entire composite commit')
+                self.assertTrue(any(_hash(path)==before_database for path in saved))
                 raise OSError("injected manifest failure")
             return real_write(session, destination, data)
 
@@ -1494,6 +1532,84 @@ class DualIpodSyncTests(unittest.TestCase):
             self.assertFalse((self.ipod / item.relative_path).exists())
         for item in plan.playlists:
             self.assertFalse((self.ipod / item.relative_path).exists())
+        self.assertFalse(list((self.ipod/'.soundbox').rglob('*.before')))
+
+    def test_completed_later_rollback_receipt_is_clean_but_unfinished_or_unknown_markers_stay_guarded(self):
+        commit_dual_ipod_sync(self._plan())
+        original_name=self.playlist.name;original_keys=list(self.playlist.keys)
+        source=self.sources/'later.wav';_wave(source,441,321,width=3)
+        self.library.tracks_by_id['later']=Track('later','Later track','Fixture',source.as_uri())
+        self.playlist.keys.append('later');self.playlist.name='Changed later generation'
+        later=self._plan(reconcile=True);self.assertTrue(later.requires_commit)
+        self.assertTrue(later.media_copies)
+        def fail_stock(*_args,**_kwargs):
+            self.assertTrue(all((self.ipod/item.relative_path).is_file() for item in later.media_copies))
+            raise OSError('Generated later-generation failure')
+        with mock.patch.object(dual_ipod,'commit_stock_ipod_sync',side_effect=fail_stock):
+            with self.assertRaisesRegex(OSError,'later-generation failure'):commit_dual_ipod_sync(later)
+        self.playlist.name=original_name;self.playlist.keys=original_keys;self.library.tracks_by_id.pop('later')
+        self.assertTrue(all(not (self.ipod/item.relative_path).exists() for item in later.media_copies))
+        manifest,raw=device_manifest.read_composite(self.ipod.resolve())
+        baseline=hashlib.sha256(raw).hexdigest()
+        candidates=list((self.ipod/'.soundbox/dual-recovery').glob(f'*-{baseline[:12]}/plan.json'))
+        self.assertEqual(len(candidates),1);receipt=candidates[0]
+        completed=json.loads(receipt.read_bytes())
+        self.assertEqual(completed['transaction_state'],'rolled back')
+        self.assertTrue(completed['payload_retirement']['complete'])
+        self.assertIsNone(dual_ipod._matching_interrupted_recovery(self.ipod.resolve(),manifest,baseline,{}))
+        self.assertFalse(engine.device_drift(self.library,self.ipod).any())
+        self.assertFalse(self._plan(reconcile=True).requires_commit)
+        for marker,state in (({**completed['payload_retirement'],'complete':False},'executing'),
+                             ({'format':'unrecognized','complete':True},'rolled back'),
+                             (completed['payload_retirement'],'executing')):
+            with self.subTest(marker=marker,state=state):
+                receipt.write_text(json.dumps({**completed,'payload_retirement':marker,'transaction_state':state}))
+                self.assertEqual(dual_ipod._matching_interrupted_recovery(self.ipod.resolve(),manifest,baseline,{}),receipt.parent.resolve())
+                self.assertIn('interrupted-transaction',[key for key,_name in engine.device_drift(self.library,self.ipod).changed])
+
+    def test_completed_composite_keeps_only_metadata_and_does_not_rehash_new_payloads(self):
+        plan=self._plan();new_paths={(self.ipod/item.relative_path).resolve() for item in plan.media_copies+plan.artwork_copies}
+        original=dual_ipod._sha256
+        def hashed(path):
+            if Path(path) in new_paths:raise AssertionError('Redundant new-copy device readback')
+            return original(path)
+        with mock.patch.object(dual_ipod,'_sha256',side_effect=hashed):result=commit_dual_ipod_sync(plan)
+        self.assertEqual(result.cleanup_failures,())
+        self.assertFalse(list((self.ipod/'.soundbox').rglob('*.before')))
+        self.assertFalse(list((self.ipod/'.soundbox').rglob('Play Counts.consumed')))
+        for path in (self.ipod/'.soundbox/stock-ipod-recovery').glob('*/plan.json'):
+            self.assertTrue(json.loads(path.read_bytes())['payload_retirement']['complete'])
+        for path in (self.ipod/'.soundbox/dual-recovery').glob('*/plan.json'):
+            self.assertTrue(json.loads(path.read_bytes())['payload_retirement']['complete'])
+
+    def test_new_copy_exclusive_publication_preserves_a_late_foreign_occupant(self):
+        plan=self._plan();wanted=(self.ipod/plan.media_copies[0].relative_path).resolve()
+        original=DeviceSession.atomic_copy_verified
+        @contextmanager
+        def occupied(session,source,destination,**kwargs):
+            if destination==wanted:
+                destination.parent.mkdir(parents=True,exist_ok=True);destination.write_bytes(b'foreign occupant')
+            with original(session,source,destination,**kwargs) as receipt:yield receipt
+        with mock.patch.object(DeviceSession,'atomic_copy_verified',occupied):
+            with self.assertRaises(FileExistsError):commit_dual_ipod_sync(plan)
+        self.assertEqual(wanted.read_bytes(),b'foreign occupant')
+        self.assertFalse((self.ipod/'.soundbox/manifest.json').exists())
+        self.assertFalse(list(self.ipod.rglob('*.sbpart')))
+
+    def test_late_foreign_replacement_is_retained_and_reports_incomplete_rollback(self):
+        plan=self._plan();wanted=self.ipod/plan.media_copies[0].relative_path
+        original=DeviceSession.atomic_write
+        def fail_manifest(session,destination,data):
+            if Path(destination).name=='manifest.json':
+                replacement=wanted.with_suffix('.foreign');replacement.write_bytes(b'foreign replacement')
+                replacement.replace(wanted)
+                raise OSError('Generated late manifest failure')
+            return original(session,destination,data)
+        with mock.patch.object(DeviceSession,'atomic_write',fail_manifest):
+            with self.assertRaises(DualIpodError) as error:commit_dual_ipod_sync(plan)
+        self.assertEqual(error.exception.recovery_status,'recovery required')
+        self.assertEqual(wanted.read_bytes(),b'foreign replacement')
+        self.assertTrue(list((self.ipod/'.soundbox/stock-ipod-recovery').glob('*/iTunesDB.before')))
 
     def test_reconcile_plan_does_not_stream_managed_device_audio(self):
         commit_dual_ipod_sync(self._plan())

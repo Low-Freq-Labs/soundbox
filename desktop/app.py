@@ -199,7 +199,7 @@ from .labels import ElidedLabel
 from .stock_device_view import CompositeDeviceData, StockIpodPages
 from .trees import (
     ARTIST_ROLE, ARTIST_TRACK_ROLE, ARTISTS_ROLE, COLLECTION_ROLE,
-    CUSTOM_ROLE, CUSTOM_FOLDER_ROLE, DEVPATH_ROLE, PATH_ROLE, RB_NODE_ROLE, RB_NODE_KIND_ROLE,
+    CUSTOM_ROLE, CUSTOM_FOLDER_ROLE, DEVPATH_ROLE, DEVROLE_ROLE, PATH_ROLE, RB_NODE_ROLE, RB_NODE_KIND_ROLE,
     ArtistsTree, CellEditDelegate, DeviceTree, UnifiedPlaylistTree, TrackTable, NATIVE_TREE_ROLE, PINNED_TREE_ROLE,
 )
 
@@ -519,6 +519,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         self._usb_device_rows = {}
         self._device_mount_tokens: dict[str, int] = {}
         self._current_device_path = ""
+        self._current_device_role = ""
         self._cdj_worker = None
         self._usb_format_worker = None
         self._usb_format_device = ''
@@ -526,6 +527,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         self._cdj_plan = None
         self._cdj_waiting = None
         self._export_batch = None
+        from .usb_setup import UsbSetupController
+        self.usb_setup_controller=UsbSetupController(self)
         self._stock_snapshot: StockIpodSnapshot | None = None
         self._sync_playlists_cache: list[Playlist] | None = None
         # Autoplay owns a frozen snapshot of the view that supplied the
@@ -729,6 +732,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
     def stock_ipod_pages(self):
         pages = StockIpodPages()
         pages.stack.currentChanged.connect(self._remember_stock_device_view)
+        pages.stack.currentChanged.connect(lambda index:self._sync_device_tab_header(index,surface=1))
         pages.delete_playlists_requested.connect(self._begin_stock_playlist_delete)
         pages.playlist_order_requested.connect(self._apply_composite_playlist_order)
         pages.primary_action_requested.connect(self._device_primary_action)
@@ -743,20 +747,18 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
     @cached_property
     def usb_device_pages(self):
         pages = UsbDevicePages()
+        pages.stack.currentChanged.connect(lambda index:self._sync_device_tab_header(index,surface=2))
         pages.settings_requested.connect(self._apply_usb_settings)
         pages.global_requested.connect(self._promote_usb_settings)
         pages.global_load_requested.connect(self._load_global_usb_settings)
         pages.song_requested.connect(self._load_usb_song)
+        pages.delete_requested.connect(self._on_usb_playlist_delete)
+        pages.primary_action_requested.connect(self._device_primary_action)
         saved_views = self.settings.get('device_views', {})
         pages._states = deepcopy(saved_views.get('usb', {})) if isinstance(saved_views, dict) else {}
         pages.view_changed.connect(self._save_device_views)
         pages.row_enricher = self._enrich_usb_row
-        pages.playlist_tree.header().sectionResized.connect(self._on_usb_column_resized)
-        _cap_browser_scrollbar(pages.playlist_tree, pages.playlist_tree.header())
         self._replace_device_page(2, pages)
-        # Column fitting is passive: it sees only already-created views.
-        self.__dict__['usb_device_pages'] = pages
-        self._sync_artist_columns()
         return pages
 
     def _replace_device_page(self, index, page):
@@ -1305,8 +1307,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         if (event_type in (QEvent.Resize, QEvent.Show)
                 and getattr(self, '_browser_columns_shown', False)
                 and (obj is self.table.viewport()
-                     or obj is self.artists_view.viewport()
-                     or (usb_pages is not None and obj is usb_pages.playlist_tree.viewport()))
+                     or obj is self.artists_view.viewport())
                 and (obj.isVisible() or event_type == QEvent.Show)):
             # Hidden pages can retain their old geometry until Show. Refit
             # before the browser is painted after returning from Settings.
@@ -2886,6 +2887,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         self.device_tree.customContextMenuRequested.connect(self._device_menu)
         self.device_tree.itemClicked.connect(self._on_device_click)
         self.device_tree.dropped.connect(self._on_device_drop)
+        self.device_tree.dropped_role.connect(
+            lambda dev,items,role:self._on_device_drop(dev,items,role=role))
 
         split = QSplitter(Qt.Vertical)
         split.setObjectName("SidebarSplit")
@@ -3130,9 +3133,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         fm = self.status_label.fontMetrics()
         self.status_count_label = QLabel("")
         self.status_count_label.setAlignment(Qt.AlignCenter)
-        # Reserve the full track-count width for the operation. Per-file byte
-        # details live in the status tooltip, so copy/verify bursts cannot
-        # replace the count.
+        # Reserve stable counters. Source acquisition exposes its measured
+        # bytes while ordinary copy/verify phases retain track counts.
         self.status_count_label.setMinimumWidth(
             fm.horizontalAdvance("9999/9999") + 16)
         self.status_count_label.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Preferred)
@@ -4945,6 +4947,10 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 or getattr(self, '_usb_format_device', '')):
             return
         force = force or getattr(self, "_device_mount_refresh_pending", False)
+        if not force and getattr(getattr(self,'usb_setup_controller',None),'showing',False):
+            # A routine reader must not consume the lane while Configure waits
+            # for consent. Mount events still refresh and invalidate that offer.
+            return
         profiles = getattr(self, '_device_profiles', {})
         if (not force and profiles
                 and all(profile.kind == 'generic_usb' for profile in profiles.values())
@@ -4988,6 +4994,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             known_paths=known_paths,
             known_mount_tokens=dict(self._device_mount_tokens),
             usb_views=dict(self._usb_view_cache), usb_requests=usb_requests,
+            usb_setup_known=(self.usb_setup_controller.known()
+                if getattr(self,'usb_setup_controller',None) is not None else frozenset()),
         )
         self._usb_view_requests.difference_update(usb_requests)
         self._device_mount_refresh_pending = False
@@ -5026,6 +5034,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             worker.provide_playlists(
                 extra, lib=self.lib,
                 artist_overrides=self.overrides, title_overrides=self.titles,
+                art_cache=getattr(self, 'art_cache', None),
                 stock_shadow_store=(self.stock_ipod_shadow_store if worker.stock_detected else None),
                 stock_catalog_witnesses=stock_witnesses,
                 stock_catalog_store=(getattr(self,'stock_catalog_witness_store',None)
@@ -5113,13 +5122,28 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
     def _device_primary_action(self):
         from .stock_catalog_sync import needs_sync
         dev = self._current_device_path
-        profile = self._device_profiles.get(dev)
+        profile = MainWindow._current_device_profile(self)
         kind = getattr(profile, 'kind', '')
         if ((kind == 'stock_ipod' and needs_sync(self, dev))
                 or (kind in {'rockbox', 'dual_boot'} and self._drift_cache.get(dev))):
             self._sync_device(dev)
         else:
-            self._show_export_dialog(dev)
+            self._show_export_dialog((dev,'ipod_usb') if kind=='ipod_usb' else dev)
+
+    def _current_device_profile(self):
+        from .devices import device_target_profile
+        return device_target_profile(self._device_profiles.get(self._current_device_path),
+            getattr(self,'_current_device_role',''))
+
+    def _device_sidebar_rows(self,devs):
+        from .devices import device_target_profile
+        rows=[]
+        for name,path,free,drift,profile in devs:
+            rows.append((name,path,free,drift,profile,''))
+            companion=device_target_profile(profile,'ipod_usb')
+            if companion is not None:
+                rows.append((name,path,free,0,companion,'ipod_usb'))
+        return rows
 
     def _update_device_action_state(self) -> None:
         """Make device action availability match actual transaction ownership."""
@@ -5139,7 +5163,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         # Formatting reserves its own drive. The ordinary export lane remains
         # available for another connected USB, using only cached target facts.
         if (getattr(self, 'device_sync_btn', None) is not None
-                and getattr(self._device_profiles.get(self._current_device_path), 'kind', '')=='generic_usb'):
+                and getattr(MainWindow._current_device_profile(self), 'kind', '') in {'generic_usb','ipod_usb'}):
             export_ready = bool(self._current_device_path) and not (
                 self._device_operation_owned(self._current_device_path)
                 or getattr(self, '_export_batch', None))
@@ -5150,14 +5174,14 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         button = getattr(self, 'device_sync_btn', None)
         if button is not None:
             from .stock_catalog_sync import needs_sync
-            profile = self._device_profiles.get(self._current_device_path)
+            profile = MainWindow._current_device_profile(self)
             kind = getattr(profile, 'kind', '')
             pending = kind == 'stock_ipod' and needs_sync(self, self._current_device_path)
             caption = 'Sync' if pending or (kind in {'rockbox', 'dual_boot'}
                 and bool(self._drift_cache.get(self._current_device_path))) else 'Export'
             if button.text() != caption:
                 button.setText(caption)
-            if ready and kind in {'stock_ipod', 'dual_boot'}:
+            if ready and kind in {'stock_ipod', 'dual_boot','ipod_usb'}:
                 from .devices import device_export_readiness
                 cached = self._stock_view_cache.get(self._current_device_path)
                 readiness = device_export_readiness(profile,
@@ -5174,6 +5198,13 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 pages.set_primary_action(button.text(),
                     button.isEnabled() and kind in {'stock_ipod', 'dual_boot'},
                     button.toolTip())
+            usb_pages=self.__dict__.get('usb_device_pages')
+            if usb_pages is not None:
+                usb_pages.set_primary_action('Export',
+                    button.isEnabled() and kind in {'generic_usb','ipod_usb'},button.toolTip())
+            delete_gate=getattr(usb_pages,'set_playlist_deletion_available',None)
+            if delete_gate is not None:
+                delete_gate(ready and kind in {'generic_usb','ipod_usb'})
 
         active = self._device_coordinator.active
         if (getattr(self, "eject_btn", None) is not None
@@ -5185,6 +5216,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 and not self._device_coordinator.eject_pending):
             self.eject_btn.setEnabled(True)
             self.eject_btn.setToolTip("Eject after the current read finishes")
+        setup=getattr(self,'usb_setup_controller',None)
+        if setup is not None:setup.kick()
 
     def _release_eject_ready(self) -> None:
         """Release a completed operation's scan hold for new device work."""
@@ -5236,6 +5269,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 current.discard(path)
                 if self._current_device_path == path:
                     self._current_device_path = ""
+                    self._current_device_role = ""
                     self._stock_snapshot = None
                     if self.stack.currentIndex() == 1:
                         self.stack.setCurrentIndex(0)
@@ -5328,8 +5362,16 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             return
         if results is not None:
             self._usb_view_cache.update(usb_snapshots)
-            self._on_devices_scanned(results, mount_tokens=mount_tokens)
-            if getattr(worker,'stock_status',None):
+            comparison=getattr(worker,'comparison_current',None)
+            current_comparison=comparison is None or comparison(self.art_cache)
+            presented=(results if current_comparison else
+                [(name,path,free,None if getattr(profile,'kind','')!='generic_usb' else drift,profile)
+                 for name,path,free,drift,profile in results])
+            self._on_devices_scanned(presented, mount_tokens=mount_tokens)
+            setup=getattr(self,'usb_setup_controller',None)
+            if setup is not None:setup.consume(getattr(worker,'usb_setup_results',{}))
+            if current_comparison and (getattr(worker,'stock_status',None)
+                    or getattr(worker,'stock_comparison_errors',None)):
                 self._publish_stock_sync_observations(worker)
             if not self.settings.get('cdj_my_settings'):
                 native_profiles=[s for s in usb_snapshots.values() if getattr(s,'native',None) is not None]
@@ -5373,6 +5415,19 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                  if library is not None else None)
         if scope is None or getattr(worker,'captured_source_scope',None) != scope:
             return
+        comparison=getattr(worker,'comparison_current',None)
+        if comparison is not None and not comparison(self.art_cache):return
+        failures={dev:reason for dev,reason in getattr(self,'_stock_comparison_warnings',{}).items()
+                  if dev in self._device_profiles}
+        for dev,reason in getattr(worker,'stock_comparison_errors',{}).items():
+            token=getattr(worker,'mount_tokens',{}).get(dev,0)
+            if (dev not in self._stock_view_cache or not token or self._device_mount_tokens.get(dev)!=token
+                    or getattr(self._device_profiles.get(dev),'kind','')!='stock_ipod'):
+                continue
+            if failures.get(dev)!=reason:
+                LOG.warning('Stock iPod comparison unavailable: device=%s reason=%s',dev,reason)
+            failures[dev]=reason
+        self._stock_comparison_warnings=failures
         updated = False
         for dev,status in getattr(worker,'stock_status',{}).items():
             cached = self._stock_view_cache.get(dev)
@@ -5404,10 +5459,13 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 self._stock_view_pending.setdefault(dev,self._device_profiles[dev])
             snapshot = replace(cached[0],sync_state=status.state,sync_detail=status.detail,
                 sync_local_changes=status.local_changes,sync_committed_at=status.committed_at)
+            failures.pop(dev,None)
             if snapshot == cached[0]:
                 continue
+            LOG.info('Stock iPod status changed: device=%s state=%s local_changes=%s kinds=%s detail=%s',
+                dev,status.state,status.local_changes,getattr(status,'change_summary',()),status.detail)
             self._stock_view_cache[dev] = (snapshot,cached[1])
-            if dev == self._current_device_path:
+            if dev == self._current_device_path and getattr(self,'_current_device_role','')!='ipod_usb':
                 self._stock_snapshot = snapshot
                 self.stock_ipod_pages.set_sync_status(status.state,status.detail,
                     status.local_changes,status.committed_at)
@@ -5535,6 +5593,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                     self._start_ipod_loading_status()
                 if self._current_device_path == path:
                     self._current_device_path = ''
+                    self._current_device_role = ''
                     self._stock_snapshot = None
                     if self.stack.currentIndex() == 1:
                         self.stack.setCurrentIndex(0)
@@ -5548,7 +5607,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             if snapshot.mount_token != self._device_mount_tokens.get(path, 0):
                 self._usb_view_cache.pop(path, None)
         if (self._current_device_path in self._usb_device_rows
-                and not getattr(self._device_profiles.get(self._current_device_path), 'has_stock_ipod', False)):
+                and (getattr(self,'_current_device_role','')=='ipod_usb'
+                     or not getattr(self._device_profiles.get(self._current_device_path), 'has_stock_ipod', False))):
             self._present_usb_device(self._current_device_path)
         stale_stock_paths = (
             set(self._stock_view_cache)
@@ -5572,25 +5632,27 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         }
         self._stock_view_warming.difference_update(ready_paths)
         # Publish connected rows independently of library/dashboard health.
-        visible_devs = devs
-        visible_paths = [row[1] for row in visible_devs]
+        visible_devs = MainWindow._device_sidebar_rows(self,devs)
+        visible_targets=[(row[1],row[5]) for row in visible_devs]
         if (self._current_device_path
-                and self._current_device_path not in visible_paths):
+                and (self._current_device_path,getattr(self,'_current_device_role','')) not in visible_targets):
             self._current_device_path = ""
+            self._current_device_role = ""
             self._stock_snapshot = None
             if self.stack.currentIndex() == 1:
                 self.stack.setCurrentIndex(0)
                 self._default_to_collection()
-        cur = [self.device_tree.topLevelItem(i).data(0, DEVPATH_ROLE)
+        cur = [(self.device_tree.topLevelItem(i).data(0, DEVPATH_ROLE),
+                self.device_tree.topLevelItem(i).data(0, DEVROLE_ROLE) or '')
                for i in range(self.device_tree.topLevelItemCount())]
-        if visible_paths != cur and QApplication.mouseButtons() & Qt.LeftButton:
+        if visible_targets != cur and QApplication.mouseButtons() & Qt.LeftButton:
             # A device appeared/vanished DURING a drag (button held): rebuilding
             # the tree now would yank the drop target out from under the drag.
             # Skip this tick; the 3s poll redelivers right after the drop.
             return
-        if visible_paths == cur:
+        if visible_targets == cur:
             # Same devices — refresh label in place (don't disrupt an in-flight drag).
-            for i, (name, path, free, drift, profile) in enumerate(visible_devs):
+            for i, (name, path, free, drift, profile,_role) in enumerate(visible_devs):
                 it = self.device_tree.topLevelItem(i)
                 if it is not None:
                     it.setDisabled(False)
@@ -5600,17 +5662,20 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                     it.setToolTip(0, self._device_tip(path, free, profile,
                                                    capacity=capacity, drift=drift))
             self._finish_ipod_loading_status()
+            self._update_device_action_state()
             return
         self.device_tree.clear()
-        for name, path, free, drift, profile in visible_devs:
+        for name, path, free, drift, profile,role in visible_devs:
             capacity = getattr(device_facts(path, cached_only=True), 'capacity_bytes', 0)
             it = QTreeWidgetItem([self._device_label(
                 name, capacity, drift, device_fs(path), profile)])
             it.setData(0, DEVPATH_ROLE, path)
+            it.setData(0, DEVROLE_ROLE, role)
             it.setToolTip(0, self._device_tip(path, free, profile,
                                            capacity=capacity, drift=drift))
             self.device_tree.addTopLevelItem(it)
         self._finish_ipod_loading_status()
+        self._update_device_action_state()
 
     def _stock_device_key(self, dev: str, profile=None) -> str:
         from soundbox.stock_ipod_info import stock_ipod_device_key
@@ -5664,14 +5729,16 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         fs = device_fs(path) or "unknown"
         size = human(capacity) if capacity > 0 else 'unavailable'
         tip = f"{path}\nFilesystem: {fs} · Capacity: {size} · {human(free)} free"
-        if getattr(profile, 'kind', '') != 'generic_usb':
+        if getattr(profile, 'kind', '') not in {'generic_usb','ipod_usb'}:
             if drift is None:tip += '\nSync status pending'
             elif drift:tip += '\n⚠ Sync needed'
         if profile is not None:
             tip += f"\nDetected layout: {profile.label}"
             if profile.model:
                 tip += f" ({profile.model})"
-            if profile.has_rockbox and profile.rockbox_export:
+            if profile.kind=='ipod_usb':
+                tip+='\nExport selected playlists as a rekordbox/CDJ USB.'
+            elif profile.has_rockbox and profile.rockbox_export:
                 if profile.kind == "dual_boot":
                     tip += (
                         "\nComposite single-copy dual sync is available: "
@@ -5691,16 +5758,20 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         self._remember_stock_device_view()
         dev = item.data(0, DEVPATH_ROLE)
         if dev:
+            role=item.data(0,DEVROLE_ROLE) or ''
+            from .devices import device_target_profile
+            profile=device_target_profile(self._device_profiles.get(dev),role)
+            if profile is None:return
             self._select_only(self.device_tree)
             self._current_device_path = dev
+            self._current_device_role = role
             self.dev_header.setText(f"Device:  {Path(dev).name}   ({dev})")
-            profile = self._device_profiles.get(dev)
             self.dev_header.setText(Path(dev).name)
             self.dev_header.setToolTip(dev)
             self.device_sync_btn.setText('Export')
             stock = bool(
                 profile is not None
-                and getattr(profile, "has_stock_ipod", False))
+                and getattr(profile, "has_stock_ipod", False) and role!='ipod_usb')
             from .usb_preferences import USB_TABS
             labels = ('Device', 'Songs', 'Playlists') if stock else USB_TABS
             for index, button in enumerate(self.device_tab_buttons):
@@ -5726,6 +5797,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                     if not preserve_snapshot:
                         self._set_stock_device_tab(0)
                     self._read_stock_device_view(dev, profile)
+                MainWindow._sync_device_tab_header(self,self.stock_ipod_pages.stack.currentIndex(),surface=1)
             else:
                 self.device_content_stack.setCurrentIndex(2)
                 self._present_usb_device(dev)
@@ -5738,22 +5810,32 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         if row is None:
             row = (Path(dev).name, None, self._drift_cache.get(dev), self._device_profiles.get(dev))
         name, free, drift, profile = row
+        if dev==self._current_device_path and getattr(self,'_current_device_role','')=='ipod_usb':
+            profile=MainWindow._current_device_profile(self)
+            drift=0
         self.usb_device_pages.set_snapshot(self._usb_view_cache.get(dev),
                                           name=name, profile=profile, free=free, drift=drift)
+        MainWindow._sync_device_tab_header(self,self.usb_device_pages.stack.currentIndex(),surface=2)
         self._sync_usb_my_settings(self._usb_view_cache.get(dev))
+
+    def _on_usb_playlist_delete(self,ids):
+        profile=MainWindow._current_device_profile(self)
+        if (not ids or not self._current_device_path or self.stack.currentIndex()!=1
+                or self.device_content_stack.currentIndex()!=2
+                or getattr(profile,'kind','') not in {'generic_usb','ipod_usb'}
+                or self._device_operation_owned() or getattr(self,'_export_batch',None)
+                or getattr(self,'_device_finalization_refreshing',False)):
+            return
+        self._begin_cdj_delete(self._current_device_path,list(ids),
+            target_role=getattr(self,'_current_device_role','') or 'generic_usb')
 
     def _set_device_tab(self, index, *, refresh=False):
         if self.device_content_stack.currentIndex() != 2:
             self._set_stock_device_tab(index)
             return
         index = max(0, min(self.usb_device_pages.stack.count()-1, index))
-        button = self.device_tab_buttons[index]
-        blocked = button.blockSignals(True)
-        try:
-            button.setChecked(True)
-        finally:
-            button.blockSignals(blocked)
         self.usb_device_pages.set_page(index)
+        MainWindow._sync_device_tab_header(self,index,surface=2)
         if refresh and self._current_device_path:
             path = self._current_device_path
             worker = self._dev_scan_worker
@@ -5766,8 +5848,20 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         if not self.device_tab_buttons:
             return
         index = max(0, min(2, int(index)))
-        self.device_tab_buttons[index].setChecked(True)
         self.stock_ipod_pages.set_page(index)
+        MainWindow._sync_device_tab_header(self,index,surface=1)
+
+    def _sync_device_tab_header(self,index,*,surface):
+        """Only the visible device surface may publish its restored page tab."""
+        if self.device_content_stack.currentIndex()!=surface:return
+        if surface==1 and getattr(self,'_current_device_role','')=='ipod_usb':return
+        buttons=self.device_tab_buttons
+        if not buttons:return
+        index=max(0,min(len(buttons)-1,int(index)))
+        blocked=[button.blockSignals(True) for button in buttons]
+        try:buttons[index].setChecked(True)
+        finally:
+            for button,previous in zip(buttons,blocked):button.blockSignals(previous)
 
     def _read_stock_device_view(
             self, dev: str, profile=None, *, after_finished=None):
@@ -5799,6 +5893,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         title_overrides = dict(self.titles)
         display_rows=None
         display_ids=set()
+        art_cache = self.art_cache
         if (library is not None and getattr(self,'_ipod_drift_display_source',None)
                 ==(str(library.source),library.source_library_id)):
             display_ids.update(getattr(self,'_ipod_drift_member_ids',{}).get(dev,()))
@@ -5815,6 +5910,12 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
 
         def read_snapshot():
             nonlocal observed_witness
+            observe=getattr(art_cache,'observation_view',None)
+            observed_art_cache=observe(library) if library is not None and observe is not None else art_cache
+            if observed_art_cache is not art_cache:
+                worker._stock_art_observation=observed_art_cache
+                worker._stock_art_observation_token=observed_art_cache.selection_token(())
+                worker._stock_art_owner=art_cache
             facts = device_facts(dev)
             composite_capture = None
             pre_composite_dual = False
@@ -5890,6 +5991,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 native_capture=native_capture,
                 catalog_witness=observed_witness,
                 display_rows=display_rows,
+                art_cache=observed_art_cache,
             )
             if composite_data is not None:
                 from soundbox.dual_ipod import composite_device_drift
@@ -5901,6 +6003,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                     title_overrides=title_overrides,
                     captured_manifest=composite_capture,
                     display_rows=display_rows,
+                    art_cache=observed_art_cache,
                 )
                 if drift is not None and drift.any():
                     count = drift.count()
@@ -5962,6 +6065,11 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         dev = getattr(worker,'_stock_view_device',self._stock_view_device)
         self._stock_view_device = ""
         result = getattr(worker, "result", None)
+        observation=getattr(worker,'_stock_art_observation',None)
+        if (not isinstance(result,Exception) and observation is not None
+                and (getattr(worker,'_stock_art_owner',None) is not self.art_cache
+                     or not observation.selection_current(worker._stock_art_observation_token))):
+            result=RuntimeError('Artwork changed before device comparison publication; retry the refresh')
         command = getattr(worker, "device_command", None)
         current = command is None or self._device_coordinator.current(command)
         self._finish_worker("_stock_view_worker", worker)
@@ -6030,7 +6138,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         # The accepted export may have started from Collection or another
         # device. Its cached native catalog must still become current before
         # completion, without changing the page the user is viewing.
-        if dev == self._current_device_path:
+        if dev == self._current_device_path and getattr(self,'_current_device_role','')!='ipod_usb':
             self.stock_ipod_pages.set_loading(preserve_page=True)
 
         self._read_stock_device_view(
@@ -6121,7 +6229,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         if batch and batch.get('active'):
             if summary:
                 target=batch['active']
-                batch.setdefault('summaries',{})[target['path']]=(target.get('name','iPod'),summary)
+                key=(target['path'],target['role']) if target.get('role') else target['path']
+                batch.setdefault('summaries',{})[key]=(target.get('name','iPod'),summary)
             if attention and batch.get('outcome') not in {'failed','cancelled'}:
                 batch['outcome']='attention'
             self._export_target_complete(batch['active']['path'],attention_text if attention else title+'\n'+text)
@@ -6303,7 +6412,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         from soundbox.stock_ipod_info import StockIpodSnapshot
         if isinstance(result, Exception):
             self._fail_initial_ipod_preload(dev)
-            if dev != self._current_device_path:
+            if dev != self._current_device_path or getattr(self,'_current_device_role','')=='ipod_usb':
                 LOG.warning("iPod dashboard preload failed for %s: %s", dev, result)
                 return
             preserve_snapshot = bool(
@@ -6335,7 +6444,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             result, composite_data = result[:2]
         if not isinstance(result, StockIpodSnapshot):
             self._fail_initial_ipod_preload(dev)
-            if dev != self._current_device_path:
+            if dev != self._current_device_path or getattr(self,'_current_device_role','')=='ipod_usb':
                 LOG.warning("Unexpected iPod dashboard preload result for %s", dev)
                 return
             preserve_snapshot = bool(
@@ -6394,7 +6503,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         self._stock_view_warming.discard(dev)
         self._finish_ipod_loading_status()
         self._update_device_action_state()
-        if dev != self._current_device_path:
+        if dev != self._current_device_path or getattr(self,'_current_device_role','')=='ipod_usb':
             LOG.info(
                 "iPod dashboard preloaded: %s (%d tracks, %d playlists)",
                 dev, len(result.tracks), len(result.playlists))
@@ -6424,13 +6533,14 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             return
         dev = item.data(0, DEVPATH_ROLE)
         menu = QMenu(self)
-        profile = self._device_profiles.get(dev)
-        if profile is not None and profile.kind=='generic_usb':
+        role=item.data(0,DEVROLE_ROLE) or ''
+        from .devices import device_target_profile
+        profile = device_target_profile(self._device_profiles.get(dev),role)
+        if profile is not None and profile.kind in {'generic_usb','ipod_usb'}:
             busy=self._device_operation_owned()
             for title,callback in (
-                    ('Export…',lambda:self._show_export_dialog(dev)),
-                    ('Import “My Settings”',lambda:self._import_usb_my_settings(dev)),
-                    ('Reformat USB…',lambda:self._reformat_usb(dev)),
+                    ('Export…',lambda:self._show_export_dialog((dev,role) if role else dev)),
+                    ('Delete playlists…',lambda:self._begin_cdj_delete(dev,target_role=role or 'generic_usb')),
                     ('Eject',lambda:self._eject(dev))):
                 action=menu.addAction(title,callback)
                 action.setEnabled(not (self._device_operation_owned(dev) if title=='Export…' else busy))
@@ -6529,18 +6639,35 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
 
     def _begin_stock_ipod_sync(
             self, dev: str, playlists: list[Playlist] | None, *, reconcile: bool = False,
-            _source_ready=False, _export_capture=None):
+            _source_ready=False, _export_capture=None, _stock_export_scope=None):
         """Run the expensive, read-only database/media plan off the UI thread."""
-        if self._shutting_down or self._state_maintenance:
+        if self._shutting_down or self._state_maintenance or self.lib is None:
             return
-        if _export_capture is None and playlists and getattr(self, '_stock_view_cache', {}).get(dev):
+        if _export_capture is None and playlists and not reconcile and _stock_export_scope is None:
+            from .stock_catalog_sync import stock_export_selection
+            try:
+                selected,_stock_export_scope=stock_export_selection(self,dev,playlists)
+                playlists=list(selected)
+                if _stock_export_scope is not None and _stock_export_scope.removed_keys:reconcile=True
+            except (ValueError,TypeError,KeyError) as exc:
+                self._export_target_result(dev,exc);self._flash_status(str(exc),15);return
+        if _stock_export_scope is not None:
+            try:_stock_export_scope.require_current(self,dev)
+            except (ValueError,TypeError,KeyError) as exc:
+                self._export_target_result(dev,exc);self._flash_status(str(exc),15);return
+        if _export_capture is None and playlists and not reconcile and getattr(self, '_stock_view_cache', {}).get(dev):
             from .stock_catalog_sync import request_sync, source_sync_selection
             selections = source_sync_selection(self, dev, playlists)
             if selections:
                 request_sync(self, selections, device=dev, source_playlists=playlists)
                 return
         if (playlists is None or not reconcile) and _export_capture is None:
-            self._request_ipod_export_capture('stock',dev,playlists,reconcile=reconcile)
+            self._request_ipod_export_capture('stock',dev,playlists,reconcile=reconcile,
+                **({'_stock_export_scope':_stock_export_scope} if _stock_export_scope is not None else {}))
+            return
+        if _stock_export_scope is not None and _export_capture is None:
+            self._request_ipod_export_capture('stock',dev,playlists,reconcile=reconcile,
+                                              _stock_export_scope=_stock_export_scope)
             return
         if _export_capture is not None:
             _export_capture.require_current(self,dev)
@@ -6555,7 +6682,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             return
         if self._defer_device_operation_until_scan_finishes(
                 lambda: self._begin_stock_ipod_sync(
-                    dev, playlists, reconcile=reconcile,_export_capture=_export_capture)):
+                    dev, playlists, reconcile=reconcile,_export_capture=_export_capture,
+                    **({'_stock_export_scope':_stock_export_scope} if _stock_export_scope is not None else {}))):
             return
         from .export_wait import sync_source_identity
         source_identity=sync_source_identity(self,dev,playlists)
@@ -6585,6 +6713,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         stock_art_cache = self.stock_art_cache
         from .export_dialog import captured_ipod_noop_result,verify_ipod_export_capture
         art_cache=self.art_cache
+        omission_cache_root=self._data_file.parent/'stock_source_observations'
         witness_store=self.stock_catalog_witness_store
         previous_witness = getattr(self, '_stock_catalog_witness_cache', {}).get(dev)
         def plan():
@@ -6600,10 +6729,24 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                         "Drag a playlist onto this iPod once to establish its stock-sync baseline.")
                 selected = device_manifest.managed_current_playlists(
                     {"playlists": shadow.playlists}, library, extra_playlists)
-            managed = (shadow.playlists if shadow else {}) or {}
-            sources = (shadow.sources if shadow else {}) or {}
             prior_witness = (previous_witness if previous_witness is not None
                              else witness_store.load(identity_key))
+            if _stock_export_scope is not None and _stock_export_scope.removed_keys:
+                _stock_export_scope.require_shadow(shadow)
+            managed_all=(shadow.playlists if shadow else {}) or {}
+            before_keys=(set(managed_all) if playlists is None else
+                {device_manifest.playlist_key(row) for row in selected or ()} & set(managed_all))
+            if _stock_export_scope is not None:before_keys.update(_stock_export_scope.removed_keys)
+            managed={key:row for key,row in managed_all.items() if key in before_keys}
+            before_ids={str(tid) for row in managed.values() for tid in row.get('tracks',())}
+            before_dbids={dbid for binding in getattr(prior_witness,'bindings',())
+                          if binding.key in before_keys for _local,dbid in binding.members}
+            sources={path:row for path,row in (shadow.sources if shadow else {}).items()
+                     if str(row.get('track_id') or '') in before_ids or int(row.get('dbid') or 0) in before_dbids}
+            if _stock_export_scope is not None and _stock_export_scope.removed_keys and prior_witness is not None:
+                from dataclasses import replace
+                prior_witness=replace(prior_witness,bindings=tuple(binding for binding in prior_witness.bindings
+                    if binding.key not in _stock_export_scope.removed_keys))
             planned=plan_stock_ipod_sync(
                 library,
                 selected,
@@ -6620,6 +6763,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 firewire_guid=getattr(facts, "firewire_guid", ""),
                 usb_family=getattr(facts, "usb_family", ""),
                 shadow_store=self.stock_ipod_shadow_store,
+                omission_cache_root=omission_cache_root,
                 managed_playlist_names_before=tuple(
                     str(row.get('device_name') or " / ".join([
                         *map(str, row.get("folder_path") or []), str(row.get("name") or "")]))
@@ -6632,6 +6776,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 catalog_witness=prior_witness,
                 extra_playlists=tuple(inputs.extra),
             )
+            if _stock_export_scope is not None:_stock_export_scope.require_plan(planned)
             verify_ipod_export_capture(_export_capture,art_cache)
             if _export_capture is not None and isinstance(planned,StockIpodSyncPlan) and not planned.requires_commit:
                 return planned,captured_ipod_noop_result(planned,witness_store)
@@ -6646,10 +6791,11 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         worker.finished.connect(
             lambda ww=worker, d=dev: self._finish_device_result_worker(
                 "_stock_plan_worker", ww,
-                lambda result: self._on_stock_ipod_plan(d, result,_export_capture=_export_capture)))
+                lambda result: self._on_stock_ipod_plan(d, result,_export_capture=_export_capture,
+                    **({'_stock_export_scope':_stock_export_scope} if _stock_export_scope is not None else {}))))
         self._start_device_worker(worker, dev, "plan")
 
-    def _on_stock_ipod_plan(self, dev: str, result,*,_export_capture=None):
+    def _on_stock_ipod_plan(self, dev: str, result,*,_export_capture=None,_stock_export_scope=None):
         from soundbox.stock_ipod import StockIpodSyncPlan
         from soundbox.operation_control import OperationCancelled
         from .export_dialog import present_ipod_failure,stock_export_summary
@@ -6662,6 +6808,9 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         self._stop_pulse()
         if _export_capture is not None and not isinstance(result, OperationCancelled):
             try:_export_capture.require_current(self,dev)
+            except Exception as exc:result=exc
+        if _stock_export_scope is not None and not isinstance(result,Exception):
+            try:_stock_export_scope.require_current(self,dev);_stock_export_scope.require_plan(result)
             except Exception as exc:result=exc
         if isinstance(result, Exception):
             self._export_target_result(dev,result)
@@ -6704,9 +6853,10 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
 
             self._finalize_ipod_operation(dev, complete)
             return
-        self._commit_stock_ipod_plan(dev, result,_export_capture=_export_capture)
+        self._commit_stock_ipod_plan(dev, result,_export_capture=_export_capture,
+            **({'_stock_export_scope':_stock_export_scope} if _stock_export_scope is not None else {}))
 
-    def _commit_stock_ipod_plan(self, dev: str, plan: StockIpodSyncPlan,*,_export_capture=None):
+    def _commit_stock_ipod_plan(self, dev: str, plan: StockIpodSyncPlan,*,_export_capture=None,_stock_export_scope=None):
         from soundbox.stock_ipod import commit_stock_ipod_sync
         from .workers import OneShotTask
         from .export_dialog import persist_ipod_export_witness,verify_ipod_export_capture
@@ -6714,6 +6864,9 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             try:_export_capture.require_current(self,dev)
             except Exception as exc:
                 self._on_stock_ipod_plan(dev,exc);return
+        if _stock_export_scope is not None:
+            try:_stock_export_scope.require_current(self,dev);_stock_export_scope.require_plan(plan)
+            except Exception as exc:self._on_stock_ipod_plan(dev,exc);return
         store=self.stock_catalog_witness_store
         art_cache=self.art_cache
         def commit():
@@ -6898,6 +7051,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         expected_playlist_rows = deepcopy(expected_playlist_rows)
         from .export_dialog import captured_ipod_noop_result,verify_ipod_export_capture
         art_cache=self.art_cache
+        omission_cache_root=self._data_file.parent/'stock_source_observations'
         witness_store=self.stock_catalog_witness_store
         previous_witness = getattr(self, '_stock_catalog_witness_cache', {}).get(dev)
 
@@ -6921,6 +7075,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 art_cache=self.art_cache,
                 stock_art_cache=stock_art_cache,
                 stock_shadow_store=self.stock_ipod_shadow_store,
+                omission_cache_root=omission_cache_root,
                 identity_key=identity_key,
                 serial_number=getattr(facts, "hardware_serial", ""),
                 firewire_guid=getattr(facts, "firewire_guid", ""),
@@ -7685,7 +7840,9 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         model = str(getattr(profile, 'model', '') or '')
         self._release_eject_ready()
         from .workers import OneShotTask
-        stock_art_cache = self.stock_art_cache
+        # Native metadata pruning needs no prepared pixel cache. Reuse an
+        # existing owner without constructing/loading one solely for Delete.
+        stock_art_cache = self.__dict__.get('stock_art_cache')
         prior_witness = self._stock_catalog_witness_cache.get(dev)
         witness_store = self.stock_catalog_witness_store
         shadow_store = self.stock_ipod_shadow_store
@@ -8255,9 +8412,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         if not visible:
             return
         if available is None:
-            usb_pages = vars(self).get('usb_device_pages')
-            view = (usb_pages.playlist_tree if usb_pages is not None and usb_pages.playlist_tree.isVisible()
-                    else self.artists_view if self.artists_view.isVisible() else self.table)
+            view = self.artists_view if self.artists_view.isVisible() else self.table
             available = view.viewport().width()
         minimum = header.minimumSectionSize()
         self._browser_column_fit = True
@@ -8284,10 +8439,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         # Optional columns can exceed even the minimum widths. Keep every
         # selected field reachable instead of stranding it offscreen.
         policy = Qt.ScrollBarAsNeeded if len(visible)*minimum>available else Qt.ScrollBarAlwaysOff
-        usb_pages = vars(self).get('usb_device_pages')
         views = [self.table, self.artists_view]
-        if usb_pages is not None:
-            views.append(usb_pages.playlist_tree)
         for view in views:
             view.setHorizontalScrollBarPolicy(policy)
         self._sync_artist_columns()
@@ -8306,7 +8458,6 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         try:
             table_header = self.table.horizontalHeader()
             artist_header = self.artists_view.header()
-            usb_pages = vars(self).get('usb_device_pages')
             columns = (resized[0],) if resized else range(len(COLUMNS))
             for column in columns:
                 hidden = self.table.isColumnHidden(column)
@@ -8315,14 +8466,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 width = table_header.sectionSize(column)
                 if artist_header.sectionSize(column) != width:
                     artist_header.resizeSection(column, width)
-                if usb_pages is not None:
-                    usb = usb_pages.playlist_tree
-                    usb.setColumnHidden(column,hidden)
-                    if usb.columnWidth(column) != width:
-                        usb.setColumnWidth(column,width)
             views = [self.artists_view]
-            if usb_pages is not None:
-                views.append(usb_pages.playlist_tree)
             for view in views:
                 header = view.header()
                 for visual in range(table_header.count()):
@@ -9721,7 +9865,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                    validate_inputs=validate,validate_artwork=validate_artwork,**manifest_guard)
         self._start_device_worker(worker,dev,'export')
 
-    def _on_device_drop(self, dev: str, items: list[tuple[str, str]], *, _from_export=False):
+    def _on_device_drop(self, dev: str, items: list[tuple[str, str]], *, _from_export=False,role=''):
         if getattr(self,'_export_batch',None) and not _from_export:return
         if self.lib is None:
             QMessageBox.information(self, "Open a library first",
@@ -9730,9 +9874,13 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         pls = self._resolve_jobs(items)
         if not pls:
             return
-        profile = self._device_profiles.get(dev)
-        if profile is not None and profile.kind == "generic_usb":
-            self._begin_cdj_export(dev, pls, from_drop=True)
+        from .devices import device_target_profile
+        profile = device_target_profile(self._device_profiles.get(dev),role)
+        if role and profile is None:
+            self._flash_status('The selected USB target changed. Choose the connected row again.',15)
+            return
+        if profile is not None and profile.kind in {"generic_usb",'ipod_usb'}:
+            self._begin_cdj_export(dev, pls, from_drop=True,target_role=role or 'generic_usb')
             return
         if profile is not None and profile.kind == "stock_ipod":
             self._begin_stock_ipod_sync(dev, pls)
@@ -9771,7 +9919,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                                    library=self.lib, titles=self.titles, overrides=self.overrides)
             return
         if self._defer_device_operation_until_scan_finishes(
-                lambda: self._on_device_drop(dev, items)):
+                lambda: self._on_device_drop(dev, items,role=role)):
             return
         if self._device_operation_owned():
             QMessageBox.warning(
@@ -9836,7 +9984,16 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             return
         active.progress = (done, total, label)
         stock_progress = None
-        if active.command.intent in {'plan-delete', 'commit-delete'} and not self._cancelling:
+        if (stage in {'Acquiring source','Waiting for cloud source'} and not self._cancelling
+                and any(worker is getattr(self,name,None) for name in
+                        ('_stock_plan_worker','_stock_commit_worker','_dual_plan_worker',
+                         '_dual_commit_worker','export_worker'))):
+            stock_progress=stock_phase_progress(stage,done,total)
+            if stock_progress is not None:
+                message=stock_progress.message+(': '+label if label else '')
+                self._start_pulse(message,keep_count=True)
+                self._set_status_count(done,total,byte_counts=stock_progress.unit=='bytes')
+        elif active.command.intent in {'plan-delete', 'commit-delete'} and not self._cancelling:
             self._start_pulse(stage)
             if total:
                 self._set_status_count(done, total)
@@ -9845,18 +10002,19 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         elif (not self._cancelling and any(worker is getattr(self, name, None)
                 for name in ('_stock_plan_worker', '_stock_commit_worker'))):
             stock_progress = stock_phase_progress(stage, done, total)
-            if stock_progress is not None:
+            if stock_progress is not None and active.command.intent!='plan-catalog-probe':
                 self._start_pulse(stock_progress.message)
                 self._set_status_count()
                 if stock_progress.value is not None:
                     self._set_device_progress(max(self.progress.value(), stock_progress.value))
-        # The operation's main progress callback owns the visible phase/count.
-        # Small media/artwork writes can emit several phases in one UI frame;
-        # replacing the primary label here resets its dots and makes the entire
-        # row jump between track counts and byte totals. Keep details on hover.
+        # Source acquisition can hold a long planning step, so its measured
+        # filename/bytes are visible without claiming overall advancement.
+        # Ordinary copy/art bursts retain their primary phase/count on screen.
         detail = f"{stage}\n{label}"
         if total:
-            if stock_progress is not None and stock_progress.unit == 'work_bytes':
+            if stage=='Waiting for cloud source':
+                detail += f'\n{done} / {total} retries'
+            elif stock_progress is not None and stock_progress.unit == 'work_bytes':
                 detail += f"\nTransfer + verification work: {human(done)} / {human(total)}"
             elif stock_progress is not None and stock_progress.unit != 'bytes':
                 detail += f"\n{done} / {total} {stock_progress.unit}"
@@ -10081,6 +10239,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         if hasattr(self,'_remember_stock_device_view'):
             self._remember_stock_device_view()
         self._shutting_down = True
+        self.usb_setup_controller.stop()
         self._artists_refresh.stop()
         self._export_batch = None
         if getattr(self,'playlist_controller',None) is not None:
@@ -10356,20 +10515,22 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             self._start_pulse("Exporting")
 
     def _set_status_count(
-            self, done: int | None = None, total: int | None = None):
-        visible = (
-            done is not None and total is not None and int(total) > 0)
-        if not visible:
+            self, done: int | None = None, total: int | None = None, *, byte_counts: bool = False):
+        if done is None or total is None or int(total)<=0:
             self.status_count_label.clear()
             self.status_count_label.setVisible(False)
             return
         total = max(1, int(total))
-        done = max(0, min(int(done), total))
+        done = max(0,int(done)) if byte_counts else max(0,min(int(done),total))
         fm = self.status_count_label.fontMetrics()
+        text=f'{human(done)} / {human(total)}' if byte_counts else f'{done}/{total}'
+        reserved=(max(fm.horizontalAdvance('1023.9 MB / 1023.9 MB'),
+                      fm.horizontalAdvance(f'{human(total)} / {human(total)}'))
+                  if byte_counts else fm.horizontalAdvance(f'{total}/{total}'))
         self.status_count_label.setFixedWidth(max(
             fm.horizontalAdvance("9999/9999"),
-            fm.horizontalAdvance(f"{total}/{total}")) + 16)
-        self.status_count_label.setText(f"{done}/{total}")
+            reserved) + 16)
+        self.status_count_label.setText(text)
         self.status_count_label.setVisible(True)
 
     def _set_device_progress(self, value: int) -> None:

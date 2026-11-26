@@ -53,7 +53,10 @@ class ExportDialogTests(unittest.TestCase):
         dialog=ExportDialog(playlists,targets,preferred='1')
         self.addCleanup(dialog.deleteLater)
         self.assertFalse(dialog.export_button.isEnabled())
+        self.assertEqual(dialog.selection()[1],[])
         dialog.playlists.topLevelItem(0).setCheckState(0,Qt.Checked)
+        self.assertFalse(dialog.export_button.isEnabled())
+        dialog.devices.topLevelItem(0).setCheckState(0,Qt.Checked)
         dialog.devices.topLevelItem(1).setCheckState(0,Qt.Checked)
         keys,devices=dialog.selection()
         self.assertEqual(keys,['a','b']);self.assertEqual([t['path'] for t in devices],['1','2'])
@@ -112,6 +115,25 @@ class ExportDialogTests(unittest.TestCase):
 
     def drain(self):
         for _ in range(4):self.app.processEvents()
+
+    def test_batch_completion_retains_both_role_summaries_on_one_physical_mount(self):
+        from desktop.app import MainWindow
+        host=self.host();batch=host._export_batch
+        original=batch['pending'][0]
+        stock={**original,'name':'SONNY iPod','kind':'stock_ipod','role':''}
+        usb={**original,'name':'SONNY USB','kind':'generic_usb','role':'ipod_usb'}
+        for target,summary in ((stock,' · 10 songs'),(usb,' · 7 songs')):
+            batch['active']=target
+            MainWindow._device_completion_message(host,'Completed','Generated result',summary=summary)
+        self.assertEqual(len(batch['summaries']),2)
+        self.assertEqual(batch['summaries'][stock['path']],('SONNY iPod',' · 10 songs'))
+        batch.update(active=None,pending=[],results=[('SONNY iPod','Complete'),('SONNY USB','Complete')],
+            outcomes=['complete','complete'])
+        with mock.patch.object(host,'_flash_status') as notice:
+            host._start_next_export_target()
+        self.assertIsNone(host._export_batch)
+        self.assertIn('SONNY iPod · 10 songs',notice.call_args.args[0])
+        self.assertIn('SONNY USB · 7 songs',notice.call_args.args[0])
 
     def test_two_targets_serialize_and_rebind_selected_playlist_after_first_failure(self):
         host=self.host()

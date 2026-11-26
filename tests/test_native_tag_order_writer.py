@@ -1,6 +1,7 @@
 """Generated encrypted-copy native order proof; no source acceptance/provisioning."""
 from copy import deepcopy
 from dataclasses import asdict,replace
+from datetime import datetime
 import json
 from pathlib import Path
 import sqlite3
@@ -39,6 +40,31 @@ class NativeTagOrder(unittest.TestCase):
         try:
             return writer._state(conn),{table:writer._rows(conn,table) for table in ('djmdMyTag','agentRegistry')}
         finally:conn.close()
+
+    def test_clock_memo_preserves_the_original_parser_for_valid_invalid_and_subclass_values(self):
+        def original(value):
+            if not isinstance(value,str):return False
+            try:
+                parsed=datetime.strptime(value,'%Y-%m-%d %H:%M:%S.%f +00:00')
+                return parsed.year>=1970 and parsed.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]+' +00:00'==value
+            except ValueError:return False
+        class UnhashableClock(str):
+            __hash__=None
+        samples=[*CLOCKS[0],'1970-01-01 00:00:00.000 +00:00','2024-02-29 23:59:59.999 +00:00',
+            '1969-12-31 23:59:59.999 +00:00','2025-02-29 00:00:00.000 +00:00',
+            '2026-11-19 09:16:09.2410 +00:00','2026-11-19 09:16:09.24 +00:00',
+            '2026-11-19 09:16:09.241 +01:00','2026-11-19 09:16:60.000 +00:00',
+            'x'*10000,None,False,[],{},1,UnhashableClock(CLOCKS[0][0])]
+        order._clock_string.cache_clear();self.addCleanup(order._clock_string.cache_clear)
+        for value in samples:
+            with self.subTest(value=repr(value)[:80]):
+                self.assertEqual(order._clock(value),original(value))
+                self.assertEqual(order._clock(value),original(value))
+        before=order._clock_string.cache_info()
+        order._clock(UnhashableClock(CLOCKS[0][0]));order._clock('x'*10000)
+        self.assertEqual(order._clock_string.cache_info(),before)
+        for index in range(3000):order._clock(str(index).zfill(30))
+        self.assertEqual(order._clock_string.cache_info().currsize,2048)
 
     def test_creation_deletion_or_disabled_authority_cannot_enable_tag_order(self):
         path=self.root/'authority.json'

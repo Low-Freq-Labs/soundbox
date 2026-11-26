@@ -78,12 +78,14 @@ class StockMetadataStatus(unittest.TestCase):
         path = self.f.ipod / 'iPod_Control/iTunes/Play Counts'
         path.write_bytes(play_counts([(2, 0, 0, 0), (0, 1, 0, 0)]))
         self.capture = stock_ipod.capture_stock_ipod_native(self.f.ipod, include_artwork=True)
-        changed = {'new': {**self.rows['new'], 'title': 'A real edit'}}
+        changed = {'new': {**self.rows['new'], 'title': 'A real edit', 'artist': 'Changed artist'}}
         status = self.status(rows=changed)
         self.assertEqual((status.state, status.local_changes), ('local_changes', 1))
+        self.assertEqual(status.change_summary, (('song_details', 1),))
         self.f.playlist.keys.append('old')
         status = self.status()
         self.assertEqual((status.state, status.local_changes), ('local_changes', 1))
+        self.assertEqual(status.change_summary, (('playlist', 1),))
 
     def test_external_playlist_song_and_cover_are_observed_without_sync_or_cache_rebase(self):
         from soundbox.ipod_export_witness import verify_export_witness

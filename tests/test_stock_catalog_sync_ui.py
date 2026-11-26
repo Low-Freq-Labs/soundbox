@@ -2,11 +2,13 @@
 from dataclasses import replace
 from io import BytesIO
 import threading
+import time
 from types import SimpleNamespace
 import unittest
 from unittest import mock
 
 from PySide6.QtWidgets import QApplication
+from PySide6.QtTest import QTest
 from PIL import Image
 
 from desktop.stock_catalog_sync import default_sync_selection, request_device_sync, request_sync, source_sync_selection, _failed
@@ -15,6 +17,7 @@ from soundbox import alias_intents, engine, source_truth, playlist_unification
 from soundbox.library import Playlist
 from soundbox.stock_ipod_catalog import CATALOG_METADATA_FIELDS
 from soundbox.stock_ipod_catalog_state import StockCatalogWitness
+from soundbox.stock_ipod_shadow import StockIpodShadow
 from soundbox.stock_ipod_playlist_binding import PlaylistBinding
 from soundbox.stock_ipod_info import StockIpodPlaylistEntry
 from soundbox.operation_control import CommittedOperationError
@@ -47,6 +50,87 @@ class StockCatalogSyncUi(unittest.TestCase):
     def cover(self, color):
         out=BytesIO();Image.new('RGB',(12,12),color).save(out,'JPEG')
         return ArtResult(out.getvalue(),'image/jpeg',1.0,'https://soundcloud.com/artist/song','Same title')
+
+    def until(self, predicate):
+        deadline=time.monotonic()+5
+        while not predicate() and time.monotonic()<deadline:
+            self.app.processEvents();QTest.qWait(1)
+        self.assertTrue(predicate(),'Selected artwork wait did not settle')
+
+    def test_selected_pending_manual_cover_is_saved_before_stock_or_dual_catalog_sync(self):
+        for kind in ('stock_ipod','dual_boot'):
+            with self.subTest(kind=kind):
+                self.case.configure(kind);pending={'1'}
+                self.case.plan_stock.reset_mock();self.case.plan_dual.reset_mock()
+                self.case.commit_stock.reset_mock();self.case.commit_dual.reset_mock()
+                with mock.patch.object(self.window._art_requests,'manual_pending',
+                        side_effect=lambda tid=None:bool(pending) if tid is None else tid in pending):
+                    self.case.request();self.app.processEvents()
+                    self.case.plan_stock.assert_not_called();self.case.plan_dual.assert_not_called()
+                    self.assertTrue(self.window._source_sync_waiting)
+                    self.window.art_cache.store_ok('1',self.cover('blue'),origin='manual')
+                    manual=self.window.art_cache.canonical_image_path('1')
+                    pending.clear()
+                    commit=self.case.commit_stock if kind=='stock_ipod' else self.case.commit_dual
+                    self.until(lambda:commit.called);self.case.drain()
+                plan=self.case.plan_stock if kind=='stock_ipod' else self.case.plan_dual
+                self.assertEqual(plan.call_args.kwargs['art_cache'].image_path('1'),manual)
+                commit.assert_called_once();self.assertIsNone(self.window._source_sync_waiting)
+
+    def test_cancel_or_mount_change_during_manual_cover_wait_never_starts_catalog_write(self):
+        from desktop.export_wait import cancel_source_syncs
+        for action in ('cancel','remount','new-batch'):
+            with self.subTest(action=action):
+                self.case.configure('stock_ipod');self.case.plan_stock.reset_mock();self.case.commit_stock.reset_mock()
+                pending={'1'}
+                with mock.patch.object(self.window._art_requests,'manual_pending',
+                        side_effect=lambda tid=None:bool(pending) if tid is None else tid in pending):
+                    self.case.request()
+                    if action=='cancel':self.assertTrue(cancel_source_syncs(self.window))
+                    elif action=='remount':self.window._device_mount_tokens[self.case.device]+=1
+                    else:
+                        self.window._export_batch={'active':object()}
+                        self.window._exporting=True
+                    pending.clear();QTest.qWait(150);self.app.processEvents()
+                self.case.plan_stock.assert_not_called();self.case.commit_stock.assert_not_called()
+                self.assertIsNone(self.window._source_sync_waiting)
+                if action=='new-batch':
+                    self.assertTrue(self.window._exporting)
+                    self.window._export_batch=None;self.window._exporting=False
+
+    def test_manual_settlement_capture_error_retires_wait_and_reports_the_owned_request(self):
+        for owned_batch in (False,True):
+            with self.subTest(owned_batch=owned_batch):
+                self.case.configure('stock_ipod')
+                self.case.plan_stock.reset_mock();self.case.commit_stock.reset_mock()
+                self.case.warning.reset_mock();self.case.information.reset_mock()
+                batch=self.export_batch() if owned_batch else None
+                pending={'1'};message='Generated selected-art capture failure'
+                with (mock.patch.object(self.window._art_requests,'manual_pending',
+                        side_effect=lambda tid=None:bool(pending) if tid is None else tid in pending),
+                      mock.patch.object(self.window,'_flash_status') as notice):
+                    self.case.request()
+                    self.assertTrue(self.window._source_sync_waiting)
+                    # The initial token was captured successfully. Its deferred
+                    # replacement fails after the earlier manual save settles.
+                    with mock.patch.object(self.window.art_cache,'selection_token',side_effect=OSError(message)):
+                        pending.clear()
+                        self.until(lambda:self.window._source_sync_waiting is None
+                                   and (not owned_batch or self.window._export_batch is None))
+                self.case.plan_stock.assert_not_called();self.case.commit_stock.assert_not_called()
+                self.assertFalse(self.window._exporting)
+                self.assertTrue(self.window.cancel_btn.isHidden())
+                self.assertTrue(self.window.progress.isHidden())
+                if owned_batch:
+                    self.assertEqual(len(batch['results']),1)
+                    self.assertEqual(batch['outcomes'],['failed'])
+                    self.assertIn(message,batch['results'][0][1])
+                    self.case.warning.assert_called_once()
+                    self.assertIn(message,self.case.warning.call_args.args[2])
+                else:
+                    self.assertTrue(any(message in str(call.args) for call in notice.call_args_list))
+                    self.case.warning.assert_not_called()
+                self.case.information.assert_not_called()
 
     def freeze_display(self):
         w=self.window
@@ -148,11 +232,107 @@ class StockCatalogSyncUi(unittest.TestCase):
         w._open_settings(); seat = self.case.seat()
         with mock.patch.object(w, '_request_ipod_export_capture') as capture:
             request_sync(w, (str(fixture.PLAYLIST_ID), 'Favorites', 1), device=self.case.device)
+            self.case.drain()
         capture.assert_called_once_with('stock', self.case.device, [w.lib.playlists[0]], reconcile=True)
         self.case.plan_stock.assert_not_called()
         self.case.commit_stock.assert_not_called()
         self.case.question.assert_not_called()
         self.assertEqual(self.case.seat(), seat)
+
+    def omitted_selection(self):
+        w=self.window;source=catalog_source_playlist(w.lib,w.lib.playlists[0])
+        baseline=self.witness()
+        binding=replace(baseline.bindings[0],members=(('1',1),),
+            source_label=source.label,source_members=source.identities)
+        witness=replace(baseline,bindings=(binding,))
+        w._stock_catalog_witness_cache[self.case.device]=witness
+        current=replace(self.case.snapshot,tracks=self.case.snapshot.tracks[:1],
+            playlists=(replace(self.case.snapshot.playlists[0],entries=self.case.snapshot.playlists[0].entries[:1]),))
+        w._stock_view_cache[self.case.device]=(current,None)
+        from soundbox import manifest
+        selected=w.lib.playlists[0]
+        shadow=StockIpodShadow(
+            current.identity_key,current.model,'',1,'generated',current.database_sha256,
+            current.artwork_database_sha256,{},{},{},
+            {manifest.playlist_key(selected):manifest.entry_for(selected)})
+        self.omission_shadow=shadow
+        self.enterContext(mock.patch.object(w.stock_ipod_shadow_store,'load',return_value=shadow))
+        return witness,current
+
+    def test_renewed_omission_witness_with_old_shadow_uses_full_capture_before_noop(self):
+        w=self.window;witness,_snapshot=self.omitted_selection()
+        shadow=self.omission_shadow
+        key=next(iter(shadow.playlists))
+        shadow.playlists[key]['tracks']=['1']
+        self.case.stock_plan.requires_commit=False;self.case.stock_plan.catalog_witness=witness
+        with (mock.patch('soundbox.stock_sync_reuse.stock_selection_reusable',return_value=True),
+              mock.patch.object(w,'_request_ipod_export_capture') as capture,
+              mock.patch('soundbox.stock_ipod.verify_stock_ipod_catalog_noop') as verify):
+            request_sync(w,(str(fixture.PLAYLIST_ID),'Favorites',1),device=self.case.device)
+            self.case.drain()
+        capture.assert_called_once_with('stock',self.case.device,[w.lib.playlists[0]],reconcile=True)
+        self.case.plan_stock.assert_not_called();self.case.commit_stock.assert_not_called()
+        verify.assert_not_called();w.stock_catalog_witness_store.save.assert_not_called()
+        self.case.warning.assert_not_called()
+
+    def test_current_omission_observations_keep_worker_catalog_noop_without_full_capture(self):
+        w=self.window;witness,snapshot=self.omitted_selection();threads=[]
+        self.case.stock_plan.requires_commit=False;self.case.stock_plan.catalog_witness=witness
+        def reusable(library,selected,observed,baseline,_shadow,omissions):
+            threads.append(threading.get_ident())
+            self.assertIsNot(library,w.lib)
+            self.assertEqual([p.pid for p in selected],['native-favorites'])
+            self.assertIs(observed,snapshot);self.assertIs(baseline,witness)
+            self.assertEqual(omissions.root,w._data_file.parent/'stock_source_observations')
+            return True
+        with (mock.patch('soundbox.stock_sync_reuse.stock_selection_reusable',side_effect=reusable),
+              mock.patch.object(w,'_request_ipod_export_capture') as capture,
+              mock.patch('soundbox.stock_ipod.verify_stock_ipod_catalog_noop') as verify):
+            request_sync(w,(str(fixture.PLAYLIST_ID),'Favorites',1),device=self.case.device)
+            self.case.drain()
+        self.assertTrue(threads);self.assertNotIn(threading.get_ident(),threads)
+        capture.assert_not_called();self.case.plan_stock.assert_called_once()
+        verify.assert_called_once_with(self.case.stock_plan)
+        self.case.commit_stock.assert_not_called();self.case.warning.assert_not_called()
+        self.assertFalse(w._device_coordinator.last_result.committed)
+
+    def test_cold_omission_handoff_never_recaptures_a_later_musical_edit(self):
+        w=self.window;self.omitted_selection()
+        with mock.patch.object(w,'_request_ipod_export_capture') as capture:
+            request_sync(w,(str(fixture.PLAYLIST_ID),'Favorites',1),device=self.case.device)
+            self.assertTrue(w._stock_plan_worker.wait(5000))
+            w.titles['1']='A later accepted title';w._invalidate_rows(['1'])
+            self.case.drain()
+        capture.assert_not_called();self.case.plan_stock.assert_not_called()
+        self.case.commit_stock.assert_not_called()
+        self.assertEqual(w.titles['1'],'A later accepted title')
+        self.assertIn('selected songs changed',str(self.case.warning.call_args))
+
+    def test_changed_catalog_with_current_omissions_uses_full_owned_sync_before_any_commit(self):
+        w=self.window;self.omitted_selection()
+        self.case.stock_plan.requires_commit=True
+        with (mock.patch('soundbox.stock_sync_reuse.stock_selection_reusable',return_value=True),
+              mock.patch.object(w,'_request_ipod_export_capture') as capture):
+            request_sync(w,(str(fixture.PLAYLIST_ID),'Favorites',1),device=self.case.device)
+            self.case.drain()
+        self.case.plan_stock.assert_called_once()
+        capture.assert_called_once_with('stock',self.case.device,[w.lib.playlists[0]],reconcile=True)
+        self.case.commit_stock.assert_not_called()
+        w.stock_catalog_witness_store.save.assert_not_called()
+        self.case.warning.assert_not_called()
+
+    def test_cold_omission_handoff_cannot_borrow_a_replacement_export_batch(self):
+        w=self.window;self.omitted_selection()
+        with mock.patch.object(w,'_request_ipod_export_capture') as capture:
+            request_sync(w,(str(fixture.PLAYLIST_ID),'Favorites',1),device=self.case.device)
+            self.assertTrue(w._stock_plan_worker.wait(5000))
+            newer={'active':object()};w._export_batch=newer;w._exporting=True
+            try:
+                self.case.drain()
+                self.assertIs(w._export_batch,newer);self.assertTrue(w._exporting)
+            finally:w._export_batch=None;w._exporting=False
+        capture.assert_not_called();self.case.plan_stock.assert_not_called()
+        self.case.commit_stock.assert_not_called();self.case.warning.assert_not_called()
 
     def test_ambiguous_source_rows_do_not_get_an_ordinal_device_target(self):
         w=self.window

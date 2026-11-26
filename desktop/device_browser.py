@@ -273,9 +273,15 @@ class DeviceBrowserMixin:
         process.start('diskutil', ['eject', dev])
 
     def _retire_ejected_device(self, dev: str):
-        """Remove the ejected row and cached facts in memory; start no scan."""
+        """Retire one mount, then keep a visible device page on its neighbor."""
         from .devices import forget_device_mount
-        from .trees import DEVPATH_ROLE
+        from .trees import COLLECTION_ROLE, DEVPATH_ROLE, DEVROLE_ROLE
+        rows=[self.device_tree.topLevelItem(i) for i in range(self.device_tree.topLevelItemCount())]
+        focused=(self._current_device_path==dev and self.stack.currentIndex()==1)
+        origin=next((i for i,item in enumerate(rows) if item.data(0,DEVPATH_ROLE)==dev
+                     and (item.data(0,DEVROLE_ROLE) or '')==getattr(self,'_current_device_role','')),0)
+        neighbor=next((item for item in (*rows[origin+1:],*reversed(rows[:origin]))
+                       if item.data(0,DEVPATH_ROLE)!=dev),None) if focused else None
         self._device_coordinator.disconnect(dev)
         forget_device_mount(dev)
         for index in range(self.device_tree.topLevelItemCount() - 1, -1, -1):
@@ -290,11 +296,24 @@ class DeviceBrowserMixin:
         self._stock_view_warming.discard(dev)
         if self._current_device_path == dev:
             self._current_device_path = ''
+            self._current_device_role = ''
             self._stock_snapshot = None
-            self.stack.setCurrentIndex(0)
+            if focused:self.stack.setCurrentIndex(0)
         self._set_device_poll_interval(bool(self._device_profiles))
         self._update_device_action_state()
         self._discard_stock_view_callbacks(dev, 'The device was ejected before its refresh completed')
+        if focused and neighbor is not None:
+            self.device_tree.setCurrentItem(neighbor)
+            self._on_device_click(neighbor,0)
+        elif focused and getattr(self,'lib',None) is not None:
+            # Select Collection through its ordinary prepared presentation,
+            # including when it was still current but visually deselected.
+            collection=self.sb_tree.topLevelItem(0)
+            if collection is not None and collection.data(0,COLLECTION_ROLE):
+                blocked=self.sb_tree.blockSignals(True)
+                try:self.sb_tree.setCurrentItem(collection)
+                finally:self.sb_tree.blockSignals(blocked)
+                self._on_custom_select(collection,None)
 
     def _finish_eject_attempt(self, dev: str, *, process=None, identity=None, owner=None) -> bool:
         if process is None:process = getattr(self, '_eject_proc', None)

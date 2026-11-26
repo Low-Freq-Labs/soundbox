@@ -74,6 +74,7 @@ captured = (manifest, json.dumps(manifest).encode())
 row = dict(id='one', title='Title', artist='Artist', album='', genre='', comments='',
            year='', bpm='', bpm_estimated=False)
 threads, projection_threads, drift_threads, timeline = [], [], [], []
+initial_art_cache, current_art_cache = object(), object()
 class Host(QObject):
     _supply_device_scan_playlists = MainWindow._supply_device_scan_playlists
     _managed_ipod_display_ids = MainWindow._managed_ipod_display_ids
@@ -81,6 +82,7 @@ class Host(QObject):
     lib = library
     overrides = {'one': 'Artist'}
     titles = {'one': 'Title'}
+    art_cache = current_art_cache
     def _sync_playlists(self):
         threads.append(QThread.currentThread() == app.thread())
         timeline.append('capture')
@@ -94,7 +96,7 @@ def compare(*_args, **_options):
     timeline.append('drift')
     return SimpleNamespace(count=lambda:3)
 host = Host()
-worker = DeviceScanWorker(None, defer_playlists=True)
+worker = DeviceScanWorker(None, defer_playlists=True, art_cache=initial_art_cache)
 host._dev_scan_worker = worker
 worker.playlists_requested.connect(host._supply_device_scan_playlists, Qt.QueuedConnection)
 worker.done.connect(lambda _result:timeline.append('ready'), Qt.QueuedConnection)
@@ -122,7 +124,10 @@ with mock.patch('desktop.workers.list_devices', return_value=[('USB','/synthetic
     observation.assert_called_once_with('/synthetic-usb')
     assert drift.call_args.args == (library, '/synthetic-usb', [playlist])
     assert drift.call_args.kwargs == dict(artist_overrides=host.overrides, title_overrides=host.titles,
-                                         display_rows={'one':row}, captured_manifest=captured)
+                                         display_rows={'one':row}, captured_manifest=captured,
+                                         art_cache=current_art_cache)
+    assert worker.art_cache is current_art_cache
+    assert drift.call_args.kwargs['art_cache'] is current_art_cache
     assert drift.call_args.kwargs['captured_manifest'] is captured
     assert worker.results[0][3] == 3
 '''

@@ -27,6 +27,7 @@ from .rekordbox_write import (ConflictError, RecoveryRequired, WriteProofError,
 from .source_acquisition import SourceContract, acquire_source
 from .state_io import atomic_bytes, sync_dir
 from .immutable_plan_proof import verify_once
+from .native_transaction import hash_evidence
 
 PROFILE = 'initial-mpeg1-cbr-no-info-stereo-44100-v1'
 AUTHORITY_FORMAT = 'soundbox-cbr-analysis-authority-v1'
@@ -213,7 +214,8 @@ def prepare(authority, track_id, track_uuid, result, output, *, data_root, opera
         atomic_bytes(output / name, xml_bytes)
     for name in NAMES:
         atomic_bytes(output / name, images[Path(name).suffix])
-    record['payload_sha256'] = {name: transport._sha(output / name) for name in PAYLOADS}
+    record['payload_sha256'] = dict(zip(PAYLOADS,
+        hash_evidence((output/name for name in PAYLOADS),transport._sha),strict=True))
     atomic_bytes(output / 'plan.json', _json(record))
     audio.revalidate(); _closed()
     if [source.stat().st_dev, source.stat().st_ino] != source_id or xml.read_bytes() != xml_bytes:
@@ -241,8 +243,8 @@ def load_plan(folder):
         raise WriteProofError('CBR analysis share/recovery/payload scope changed')
     for name in PAYLOADS:
         _regular(folder / name)
-        if transport._sha(folder / name) != record['payload_sha256'][name]:
-            raise RecoveryRequired('CBR analysis payload changed')
+    if hash_evidence((folder/name for name in PAYLOADS),transport._sha)!=[record['payload_sha256'][name] for name in PAYLOADS]:
+        raise RecoveryRequired('CBR analysis payload changed')
     if (folder / 'before.xml').read_bytes() != (folder / 'after.xml').read_bytes():
         raise WriteProofError('CBR analysis cannot change playlist XML')
     audio = MediaIdentity.from_dict(record['audio']); scan = _scan(record['scan'])

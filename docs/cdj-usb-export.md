@@ -33,8 +33,10 @@ the current USB namespace so different source libraries cannot replace each
 other's definitions or memberships.
 
 The desktop admits verified writable FAT32 or exFAT generic USBs. CdjSession pins
-mount/inode and volume UUID, excludes sources, stock/Rockbox layouts, hidden
-`.PIONEER`, symlinks and ambiguous FAT aliases. Ordinary stock/dual/Rockbox and
+mount/inode and volume UUID and excludes sources, hidden `.PIONEER`, symlinks and
+ambiguous FAT aliases. The default generic role rejects stock/Rockbox layouts;
+the explicit iPod USB role admits its verified same-mount layout and restricts
+writes to PIONEER, Contents and .soundbox-cdj. Ordinary stock/dual/Rockbox and
 explicit filesystem exporters retain their PIONEER exclusion. Supported Plus
 schema/version1000 and classic page/index checks run on bounded local catalog
 copies. Display reads include a stable local DB/WAL copy when rekordbox leaves
@@ -74,8 +76,9 @@ native analysis fail explicitly; there is no silent omission/transcoding.
 A playlist drop authorizes its pinned USB and continues straight through to
 publication. Export opens a two-column selector: playlists/folders on the left,
 connected USBs/iPods on the right. Folders start collapsed and open on demand.
-A sole target is preselected; multiple devices
-can be checked. One action queues each checked target through the existing
+A sole connected target is preselected; two or more start unchecked, including
+when opened from a particular device. One or several targets can be checked.
+One action queues each checked target through the existing
 serialized device lane, with source identity/playlist rebinding and target
 mount/UUID guards before each target. Cancellation clears remaining targets;
 iPod exports likewise continue through their own guarded planning/commit path
@@ -129,6 +132,14 @@ interrupted retirement resumes, reclaiming USB space. New copies still require
 peak transaction free space before commit. Worker ownership
 lasts through QThread.finished; shutdown drains active work with Qt events alive.
 Completion invalidates the browser cache without starting a final USB read.
+Publication accepts a single exact-case Unicode-equivalent filesystem spelling
+of a catalog path, including FAT's decomposed names. Case-only aliases, multiple
+equivalent directory entries, links and mount changes still refuse. Each existing
+path component receives a fresh no-follow identity check; directory-name lists
+are reused only while their observed identity and change stamps match.
+Progress separates preflight, copying and finalization, weights copied files by
+bytes and reports the active filename and byte count within large copies. A
+completed progress bar requires the joined successful result, not the last file.
 After a successful write, stale visible song rows are cleared with a browse
 notice while settings drafts and view state survive. A deliberate USB/tab click
 loads current metadata once; internal tab restoration does not. Failed, cancelled
@@ -222,9 +233,16 @@ fields stay hidden when older header state is restored; deliberate selections
 that exceed the viewport can scroll. Progress/count/Cancel share a fixed-height
 footer and cannot resize the browser.
 
-The generic USB menu is Export, Import “My Settings”, Reformat
-USB…, Eject. Import promotes recognized USB settings into SoundBox Global settings.
-Reformat presents the real volume name, capacity/affected mounted partitions and
+The ordinary USB menu is Export, Delete playlists, Eject, including the USB entry
+alongside an iPod. USB targets never Sync. Overwrite confirms the selected existing
+native playlist names before export. Delete confirms selected native leaf IDs,
+rechecks all three catalogs and preserves shared/unselected/unowned content.
+The iPod companion is the same USB surface and backend, with an explicit scoped
+admission that cannot touch stock/Rockbox namespaces. One physical mount still
+owns serialization and Eject. My Settings remains in the shared USB tabs.
+
+The retained, separately guarded formatting backend is outside this music menu.
+It presents the real volume name, capacity/affected mounted partitions and
 FAT32/exFAT choice, then requires its destructive confirmation. It revalidates the
 physical external USB and source separation (including native analysis paths).
 A same-filesystem quick erase reuses an existing full-capacity, single first MBR

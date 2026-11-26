@@ -32,6 +32,7 @@ from .source_acquisition import SourceContract, acquire_source
 from .media_probe import read_media_header
 from .cdj_usb import run_renderer
 from .immutable_plan_proof import verify_once
+from .native_transaction import hash_evidence
 
 FORMAT = 'soundbox-native-analysis-v1'
 PLAN_FORMAT = 'soundbox-native-analysis-plan-v1'
@@ -261,7 +262,8 @@ def prepare(authority, track_id, track_uuid, result, output, *, data_root, opera
             authority=asdict(authority),before=before_state,after=after_state,candidate=candidate,source_write_authority=False)
     for name in ('before.xml','after.xml'):atomic_bytes(output/name,xml_bytes)
     for name in NAMES:atomic_bytes(output/name,images[Path(name).suffix])
-    plan['payload_sha256']={n:_sha(output/n) for n in PAYLOADS};atomic_bytes(output/'plan.json',_json(plan))
+    plan['payload_sha256']=dict(zip(PAYLOADS,hash_evidence((output/n for n in PAYLOADS),_sha),strict=True))
+    atomic_bytes(output/'plan.json',_json(plan))
     audio.revalidate();assert_rekordbox_closed()
     if xml.read_bytes()!=xml_bytes:raise ConflictError('Native XML changed during analysis preparation')
     return load_plan(output)
@@ -286,8 +288,8 @@ def load_plan(folder):
             or Path(record['share']) != Path(record['source']).parent/'share'):
         raise WriteProofError('Saved component must use its exact native share/recovery root')
     if set(record['payload_sha256']) != set(PAYLOADS): raise WriteProofError('Unknown analysis payloads')
-    for name in PAYLOADS:
-        if _sha(folder/name) != record['payload_sha256'][name]: raise RecoveryRequired('Saved-component payload changed')
+    if hash_evidence((folder/name for name in PAYLOADS),_sha)!=[record['payload_sha256'][name] for name in PAYLOADS]:
+        raise RecoveryRequired('Saved-component payload changed')
     if (folder/'before.xml').read_bytes() != (folder/'after.xml').read_bytes():
         raise WriteProofError('Saved component cannot change playlist XML')
     audio = MediaIdentity.from_dict(record['audio'])
@@ -426,8 +428,8 @@ class AnalysisStore:
                 raise RecoveryRequired('Unknown saved-components receipt; preserved')
         if json.loads((self.archive/'operation.json').read_bytes()) != self._manifest():
             raise RecoveryRequired('Analysis archive identity changed')
-        for name in PAYLOADS:
-            if _sha(self.archive/name) != self.plan['payload_sha256'][name]: raise RecoveryRequired('Analysis archive bytes changed')
+        if hash_evidence((self.archive/name for name in PAYLOADS),_sha)!=[self.plan['payload_sha256'][name] for name in PAYLOADS]:
+            raise RecoveryRequired('Analysis archive bytes changed')
 
     def _install_payloads(self):
         if not self.archive.exists():

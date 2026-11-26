@@ -226,6 +226,14 @@ class MyTagsButton(QToolButton):
         self._rename_context = rename_context
         self._pending_creations = set(pending_creations)
         if signature != self._signature:
+            same_catalog = (len({tag.tag_id for tag in tags}) == len(tags)
+                            and Counter(signature) == Counter(self._signature or ()))
+            if same_catalog:
+                # Reposition accepted gestures without replacing controls under
+                # the pointer while their earlier source saves finish.
+                self.checkboxes = {tag.tag_id: self.checkboxes[tag.tag_id] for tag in tags}
+                self._signature = signature
+        if signature != self._signature:
             for box in self.checkboxes.values():
                 box.hide()
                 box.deleteLater()

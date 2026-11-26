@@ -70,6 +70,20 @@ class NativeTagTransactions(unittest.TestCase):
         self.assertTrue((self.store.root / 'baseline.db').is_file())
         self.assertFalse(self.store.journal.exists())
 
+    def test_backup_copy_uses_capture_proof_but_corrupt_destination_blocks_the_write(self):
+        original = tags.shutil.copyfileobj;before = self.source.read_bytes()
+        def corrupt_transfer(source, destination, *args):
+            original(source, destination, *args)
+            if Path(destination.name).name == 'baseline-new.db':
+                destination.seek(0);destination.write(b'corrupt destination bytes')
+        with mock.patch.object(tags.shutil, 'copyfileobj', side_effect=corrupt_transfer):
+            with self.assertRaisesRegex(offline.WriteProofError, 'backup did not verify'):
+                self.store.apply(self.request)
+        self.assertEqual(self.source.read_bytes(), before)
+        self.assertFalse((self.store.root / 'baseline.db').exists())
+        self.assertFalse((self.store.root / 'baseline.json').exists())
+        self.assertFalse(self.store.journal.exists())
+
     def test_unsynced_removal_is_a_real_delete_and_keeps_other_history(self):
         self.store.apply(self.request)
         remove = replace(self.request, tracks=(tags.SelectedTagTrack('2', 'track-two', True),), present=False)

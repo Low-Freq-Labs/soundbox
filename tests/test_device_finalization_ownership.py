@@ -49,6 +49,7 @@ class DeviceFinalizationOwnership(unittest.TestCase):
         coordinator.observe(self.identity)
         coordinator.last_result = DeviceOperationResult(committed=True)
         h = self.host = SimpleNamespace(lib=Library({}, [], '/synthetic/source.db'),
+            art_cache=None,  # This empty-library fixture has no selected artwork to compare.
             overrides={}, titles={}, custom={}, settings={}, _state_maintenance=False,
             _shutting_down=False, _export_batch=None, _exporting=False, _deleting=False,
             _pending_device_operation=None, _stock_view_callbacks={}, _stock_view_pending={},

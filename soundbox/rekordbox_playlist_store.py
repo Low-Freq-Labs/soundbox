@@ -30,6 +30,7 @@ from .rekordbox_write import (
     _json, _quote, _regular, _rows, encrypted_backup,
 )
 from .state_io import atomic_bytes, copy_state, sync_dir
+from .native_transaction import hash_evidence
 
 FORMAT = 'soundbox-native-playlists-v1'
 PAYLOADS = ('before.db','after.db','before.xml','after.xml')
@@ -504,7 +505,7 @@ class PlaylistStore:
 
     def _record(self):
         try:
-            _regular(self.journal);record=json.loads(self.journal.read_bytes())
+            _regular(self.journal);raw=self.journal.read_bytes();record=json.loads(raw)
             info=self.database.stat();a=self.authority
             if (record['format']!=FORMAT or record['source']!=str(self.database)
                     or record['library_id']!=a.library_id or record['schema_sha256']!=a.schema_sha256
@@ -516,14 +517,20 @@ class PlaylistStore:
             if (archive.parent!=self.root or not archive.name.startswith('playlist-')
                     or archive!=archive.resolve() or archive.stat().st_mode&0o077):
                 raise RecoveryRequired('Playlist recovery archive redirects')
-            for name in PAYLOADS:
-                if _sha(archive/name)!=record['payload_sha256'][name]:
+            digests=hash_evidence((archive/name for name in PAYLOADS),_sha)
+            for name,digest in zip(PAYLOADS,digests,strict=True):
+                if digest!=record['payload_sha256'][name]:
                     raise RecoveryRequired('Playlist recovery backup failed verification')
             _regular(archive/'operation.json')
-            if json.loads((archive/'operation.json').read_bytes())!=record:
+            archived=(archive/'operation.json').read_bytes()
+            if archived!=raw and json.loads(archived)!=record:
                 raise RecoveryRequired('Playlist recovery record differs from its archive')
             self._check_scope(record['request'])
-            semantic_key=(hashlib.sha256(_json(record)).hexdigest(),a)
+            # Current journals/archive records already share canonical bytes.
+            # Hash those freshly read bytes instead of re-encoding a potentially
+            # huge row plan at each guard. Noncanonical historical JSON retains
+            # its original parsed-equality path and independent reconstruction.
+            semantic_key=(hashlib.sha256(raw).hexdigest(),a)
             if semantic_key==self._verified_recovery_record_key:return record
             # Validate all evidence and intent on a fresh TEMP copy before the
             # live SQL connection is allowed to recover SQLite's own journal.
@@ -540,9 +547,9 @@ class PlaylistStore:
                         raise RecoveryRequired('Playlist recovery exceeds its original intent')
                 finally:conn.close()
             # Only the expensive pure semantic reconstruction is reused. Every
-            # invocation above still verifies ALL current payload bytes, exact
-            # journal/archive equality, source identity and authority. A changed
-            # byte/record cannot hit this one-entry instance-local memo.
+            # invocation reobserves payload epochs (fresh hashes on first lease
+            # use/change), journal/archive equality, source identity and authority.
+            # A changed byte/record cannot hit this semantic memo unchecked.
             self._verified_recovery_record_key=semantic_key
             return record
         except (OSError,ValueError,KeyError,TypeError) as exc:
@@ -854,12 +861,13 @@ class PlaylistStore:
                 atomic_bytes(archive/'after.xml',plan['xml'])
             # Seed only from the exact private bytes proved above, checking
             # every archive transfer before any source connection/publication.
-            # Later guards still hash all payloads and check live authority,
-            # paths, app absence and SQL; cold recovery reconstructs normally.
+            # Later guards reobserve these immutable private payloads within this
+            # lease and check live authority, paths, app absence and SQL. New
+            # leases/cold recovery hash independently before any source admission.
             payload_sha256={'before.db':before_sha,'after.db':after_sha,
                 'before.xml':hashlib.sha256(before_xml).hexdigest(),
                 'after.xml':hashlib.sha256(plan['xml']).hexdigest()}
-            if any(_sha(archive/name)!=digest for name,digest in payload_sha256.items()):
+            if hash_evidence((archive/name for name in payload_sha256),_sha)!=list(payload_sha256.values()):
                 raise RecoveryRequired('Playlist recovery transfer differs from verified payload')
             info=self.database.stat()
             record=dict(format=FORMAT,source=str(self.database),source_file_id=[info.st_dev,info.st_ino],
@@ -1373,7 +1381,7 @@ def _membership_replay_plan(conn, request, before_xml, original):
     final = {member['ID']: member for member in result['members']}
     # Match the original batch's stable catalog insertion order as well as its
     # complete row values. Existing tombstones retain their catalog positions.
-    values = [deepcopy(member) if member['PlaylistID'] != identity else final[member['ID']]
+    values = [planner._copy_row(member) if member['PlaylistID'] != identity else final[member['ID']]
               for member in original['members']
               if member['PlaylistID'] != identity or member['ID'] in final]
     values.extend(final[track['id']] for track in append['tracks'])

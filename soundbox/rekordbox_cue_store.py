@@ -165,7 +165,8 @@ class PilotCueStore(NativeTransactionLease):
             except RecoveryRequired:
                 pass  # no pending journal: replace damaged backup with current verified source
         self._guard()
-        with encrypted_backup(self.database) as baseline:
+        standalone_digest: list[str] = []
+        with encrypted_backup(self.database, standalone_digest=standalone_digest) as baseline:
             temp = self.root / 'baseline-new.db'
             if temp.exists() or temp.is_symlink():
                 raise RecoveryRequired('An unfinished baseline publication is preserved')
@@ -174,7 +175,9 @@ class PilotCueStore(NativeTransactionLease):
                 shutil.copyfileobj(src, dst, 1024 * 1024)
                 dst.flush()
                 os.fsync(dst.fileno())
-            sha = _file_sha(baseline)
+            # Compare the transferred bytes to the capture's integrity-bracketed
+            # digest. Reuse no later path observation or live source proof.
+            sha = standalone_digest[0] if standalone_digest else _file_sha(baseline)
             if _file_sha(temp) != sha:
                 raise WriteProofError('Encrypted cue backup did not verify')
             os.replace(temp, self.root / 'baseline.db')

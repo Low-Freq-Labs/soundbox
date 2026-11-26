@@ -120,7 +120,7 @@ class DeletedShadow(unittest.TestCase):
         self.assertIsNone(rebase_deleted_shadow(self.old,
             **{**arguments, 'artwork_updates': {}, 'artwork_sha256': '1' * 64}))
 
-    def test_actual_orphan_cleanup_prunes_only_deleted_source_and_renews_compacted_survivor_offsets(self):
+    def test_actual_orphan_cleanup_prunes_only_deleted_source_and_preserves_survivor_offsets(self):
         prior = rebase_export_witness(self.result.catalog_witness, device_key=self.key,
             previous_database=self.before, previous_artwork_sha256=self.old.artwork_database_sha256,
             rendered=self.after, artwork_sha256=self.art_sha)
@@ -130,6 +130,8 @@ class DeletedShadow(unittest.TestCase):
         self.favorites.keys[:] = ['new']; self.live.keys[:] = ['new']
         changed = self.export([self.favorites], changed.catalog_witness, artwork=True)
         changed = self.export([self.live], changed.catalog_witness, artwork=True)
+        artwork=self.f.ipod/'iPod_Control/Artwork'
+        pixels_before={path.name:path.read_bytes() for path in artwork.glob('*.ithmb')}
         self.delete(changed, extra_ids=(202,))  # Explicitly remove generated Keep Me too.
         self.assertEqual(self.deletion.deleted_track_count, 1)
         self.assertIsNotNone(self.deletion.rendered_artwork)
@@ -142,7 +144,9 @@ class DeletedShadow(unittest.TestCase):
         self.assertEqual(renewed.sources[source], self.old.sources[source])
         slot = next(slot for slot in self.deletion.rendered_artwork.slots if dbid in slot.track_dbids)
         self.assertEqual(renewed.artwork[art_key]['offsets'], {str(key): value for key, value in slot.offsets})
-        self.assertNotEqual(renewed.artwork[art_key]['offsets'], self.old.artwork[art_key]['offsets'])
+        self.assertEqual(renewed.artwork[art_key]['offsets'], self.old.artwork[art_key]['offsets'])
+        self.assertEqual(self.ithmb(),self.before_ithmb)
+        self.assertEqual({path.name:path.read_bytes() for path in artwork.glob('*.ithmb')},pixels_before)
         self.assertEqual(renewed.artwork[art_key]['cache_key'], self.old.artwork[art_key]['cache_key'])
         self.assertEqual(set(renewed.playlists), {'cust:Favorites', 'cust:Live Sets'})
 

@@ -319,6 +319,30 @@ class SuccessiveExportWitnesses(unittest.TestCase):
                 self.assertEqual((renewed.witness.rows, renewed.witness.bindings), ((), ()))
                 self.assertTrue(renewed.notice); self.assertFalse(renewed.warning)
 
+    def test_removing_selected_old_membership_does_not_report_lost_unselected_links(self):
+        f=self.f
+        f.playlist.keys[:]=['old','new']
+        first=self.export([f.playlist])
+        f.playlist.keys[:]=['old']
+        del f.library.tracks_by_id['new']
+        second=self.export([f.playlist],first.catalog_witness)
+        self.assertFalse(second.catalog_notice)
+        self.assertFalse(second.catalog_warning)
+        self.assertEqual([row.local_id for row in second.catalog_witness.rows],['old'])
+        self.assertEqual([row.key for row in second.catalog_witness.bindings],[f.playlist.pid])
+        self.assert_clean(second,[f.playlist])
+
+    def test_missing_row_still_warns_when_unselected_previous_playlist_needs_it(self):
+        first=self.export([self.favorites])
+        before=next(binding for binding in first.catalog_witness.bindings if binding.key=='cust:Favorites')
+        del self.f.library.tracks_by_id['new']
+        second=self.export([self.live],first.catalog_witness)
+        self.assertTrue(second.catalog_notice)
+        self.assertFalse(second.catalog_warning)
+        self.assertNotIn(before,second.catalog_witness.bindings)
+        self.assertEqual([row.key for row in second.catalog_witness.bindings],['cust:Live Sets'])
+        self.assert_clean(second,[self.live])
+
     def test_missing_or_changed_current_native_uuid_drops_only_that_binding(self):
         first = self.export([self.f.playlist])
         second = self.export([self.favorites], first.catalog_witness)

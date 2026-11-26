@@ -1,7 +1,7 @@
 """Dedicated CDJ USB boundary: bounded metadata capture and local rendering.
 
 Ordinary stock/Rockbox sessions retain their PIONEER exclusion. This module is
-admitted only for an explicitly selected generic USB, never an iPod/Rockbox.
+admitted for an explicit CDJ target; publication requires its separate role guard.
 Both library formats, shared payloads and display settings form one generation.
 """
 from __future__ import annotations
@@ -16,8 +16,9 @@ import stat
 import subprocess
 import sys
 import tempfile
+import unicodedata
 
-from .operation_control import OperationCancelled
+from .operation_control import OperationCancelled,checkpoint
 
 PROFILE_FILES = ('DEVSETTING.DAT', 'MYSETTING.DAT', 'MYSETTING2.DAT',
                  'DJMMYSETTING.DAT', 'djprofile.nxs')
@@ -161,6 +162,105 @@ def metadata_stamp(target,token):
             result.append((path,value))
         return tuple(result)
     finally:session.close()
+
+
+@dataclass(frozen=True)
+class CdjSetupReadiness:
+    """Attachment presence hint; never catalog validity or publication authority."""
+    state: str
+    reason: str
+    target: Path
+    mount_identity: tuple[int,int] | None
+    volume_uuid: str
+    target_role: str
+    ipod_control_identity: tuple[int,int] | None = None
+    stamps: tuple[tuple[str,tuple[int,...] | None],...] = ()
+
+
+_SETUP_DIRECTORY_LIMIT=8192
+_SETUP_PATHS=(*DATABASE_FILES,*('PIONEER/'+name for name in PROFILE_FILES),
+              *(DATABASE_FILES[2]+suffix for suffix in ('-wal','-shm','-journal')),
+              '.soundbox-cdj/pending.json','.soundbox-cdj/manifest.json')
+
+
+def _setup_stamp(session,relative,cache,*,directory=False):
+    """Only fixed parent names are inspected; no payload or recursive walk."""
+    if session.fd is None:raise ValueError('Setup read session is closed')
+    fd=os.dup(session.fd)
+    try:
+        parts=PurePosixPath(relative).parts
+        for index,part in enumerate(parts):
+            checkpoint();before=os.fstat(fd);key=_identity(before)
+            names=cache.get(key)
+            if names is None:
+                names={}
+                with os.scandir(fd) as entries:
+                    for count,entry in enumerate(entries,1):
+                        if count>_SETUP_DIRECTORY_LIMIT:raise ValueError('Too many names in a CDJ metadata parent')
+                        folded=unicodedata.normalize('NFD',entry.name).casefold()
+                        names.setdefault(folded,[]).append(entry.name)
+                if _identity(os.fstat(fd))!=key:raise ValueError('CDJ metadata parent changed during setup check')
+                cache[key]=names
+            found=names.get(unicodedata.normalize('NFD',part).casefold(),[])
+            if not found:raise FileNotFoundError(relative)
+            if found!=[part]:raise ValueError('Ambiguous FAT spelling in CDJ setup path')
+            if index<len(parts)-1:
+                child=os.open(part,os.O_RDONLY|os.O_NOFOLLOW|os.O_DIRECTORY,dir_fd=fd)
+                os.close(fd);fd=child
+                if os.fstat(fd).st_dev!=session.initial.st_dev:raise ValueError('CDJ setup crosses its mount')
+            else:
+                info=os.stat(part,dir_fd=fd,follow_symlinks=False)
+                valid=stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode)
+                if not valid or info.st_dev!=session.initial.st_dev:raise ValueError('Unsafe CDJ setup metadata entry')
+                session.revalidate()
+                return (info.st_dev,info.st_ino,info.st_mode,info.st_nlink,info.st_size,info.st_mtime_ns,info.st_ctime_ns)
+    finally:os.close(fd)
+
+
+def setup_readiness(target,*,token,volume_uuid,target_role='generic_usb') -> CdjSetupReadiness:
+    """One bounded attachment check, without catalog/audio/source payload reads."""
+    target=Path(target);session=None;mount=None;ipod=None
+    try:
+        checkpoint()
+        if target_role not in ('generic_usb','ipod_usb') or not volume_uuid:
+            raise ValueError('Verified USB role and volume identity are required')
+        if not target.is_absolute() or target.resolve(strict=True)!=target:
+            raise ValueError('CDJ setup target is linked or not canonical')
+        session=CdjReadSession(target,token);mount=(session.initial.st_dev,session.initial.st_ino)
+        cache: dict[tuple[int,...],dict[str,list[str]]]={}
+        def stamp(path,*,directory=False):
+            try:return _setup_stamp(session,path,cache,directory=directory)
+            except FileNotFoundError:return None
+        layout={}
+        for marker in ('iPod_Control','.rockbox','.PIONEER'):
+            observed=stamp(marker,directory=True)
+            layout[marker]=None if observed is None else observed[:4]
+            if observed is None:continue
+            if marker=='.PIONEER' or target_role=='generic_usb':raise ValueError('The selected CDJ role does not admit this device layout')
+            if marker=='iPod_Control':ipod=(observed[0],observed[1])
+        if target_role=='ipod_usb' and ipod is None:raise ValueError('The iPod USB layout is unavailable')
+        before=tuple((path,stamp(path)) for path in _SETUP_PATHS)
+        # Reobserve fixed entries, including absence, before publishing the hint.
+        cache.clear();after=tuple((path,stamp(path)) for path in _SETUP_PATHS)
+        if before!=after:raise ValueError('CDJ metadata changed during setup check')
+        for marker,expected in layout.items():
+            observed=stamp(marker,directory=True)
+            if (None if observed is None else observed[:4])!=expected:
+                raise ValueError('The device layout changed during setup check')
+        session.revalidate();entries=dict(after)
+        pending=('.soundbox-cdj/pending.json',*(DATABASE_FILES[2]+suffix for suffix in ('-wal','-shm','-journal')))
+        if any(entries[path] is not None for path in pending):raise ValueError('An existing CDJ update needs attention before setup')
+        has_catalog=any(entries[path] is not None for path in DATABASE_FILES)
+        if not has_catalog and entries['.soundbox-cdj/manifest.json'] is not None:
+            raise ValueError('An existing managed CDJ library is missing its catalogs; use explicit export recovery')
+        state='configured' if has_catalog else 'missing'
+        return CdjSetupReadiness(state,'Existing CDJ catalog metadata' if state=='configured' else '',
+            target,mount,volume_uuid,target_role,ipod,after)
+    except OperationCancelled:raise
+    except (OSError,ValueError,RuntimeError) as exc:
+        return CdjSetupReadiness('unavailable',str(exc),target,mount,volume_uuid,target_role,ipod)
+    finally:
+        if session is not None:session.close()
 
 
 @dataclass(frozen=True)

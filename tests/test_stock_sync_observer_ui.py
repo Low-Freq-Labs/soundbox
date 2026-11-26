@@ -1,5 +1,6 @@
 """Targeted effective-row capture and scalar stock status publication."""
 from dataclasses import replace
+from copy import deepcopy
 from pathlib import Path
 from threading import get_ident
 from time import monotonic
@@ -7,7 +8,7 @@ from types import MethodType, SimpleNamespace
 import unittest
 from unittest import mock
 
-from PySide6.QtCore import QEventLoop, Qt
+from PySide6.QtCore import QEventLoop, QTimer, Qt
 from PySide6.QtWidgets import QApplication
 
 from desktop.app import MainWindow
@@ -17,8 +18,10 @@ from soundbox import stock_ipod
 from soundbox.library import Track
 from soundbox.device_operations import DeviceOperationCoordinator, DeviceSessionIdentity
 from soundbox.stock_ipod_info import read_stock_ipod_snapshot
+from soundbox.stock_ipod_capture import capture_stock_ipod_native
 from soundbox.stock_ipod_shadow import StockIpodSyncStatus
 from tests import test_ipod_export_effective_snapshot as export_fixture
+from tests import test_device_navigation_publication as navigation_fixture
 from tests.support.ipod import play_counts, rewrite_catalog
 
 
@@ -38,7 +41,7 @@ class StockSyncObserverUi(unittest.TestCase):
         self.token = f.ipod.stat().st_dev
         self.stored_witness = result.catalog_witness
         self.store = SimpleNamespace(load=lambda _:self.stored_witness)
-        self.host = SimpleNamespace(lib=f.library,overrides={},titles={},_shutting_down=False,
+        self.host = SimpleNamespace(lib=f.library,overrides={},titles={},art_cache=None,_shutting_down=False,
             _stock_catalog_witness_cache={self.dev:result.catalog_witness},
             stock_catalog_witness_store=self.store,stock_ipod_shadow_store=self.case.shadow,
             _sync_playlists=lambda:(),_managed_ipod_display_ids=mock.Mock(
@@ -52,7 +55,7 @@ class StockSyncObserverUi(unittest.TestCase):
                 side_effect=AssertionError('Scalar status rebuilt native tables'))),
             _update_device_action_state=mock.Mock())
 
-    def scan(self, *, cold=False):
+    def scan(self, *, cold=False, inspections=1):
         f = self.f; host = self.host
         worker = DeviceScanWorker(None,defer_playlists=True)
         host._dev_scan_worker = worker
@@ -94,8 +97,8 @@ class StockSyncObserverUi(unittest.TestCase):
                 self.assertTrue(worker.wait(1000),'Generated status worker did not retire')
             finally:
                 worker.cancel(); worker.wait()
-        self.assertEqual(len(threads),1)
-        self.assertNotEqual(threads[0],main)
+        self.assertEqual(len(threads),inspections)
+        self.assertTrue(all(thread!=main for thread in threads))
         self.assertIs(worker.results[0][4],profile)
         self.assertFalse(profile.stock_write)
         worker.deleteLater()
@@ -120,6 +123,124 @@ class StockSyncObserverUi(unittest.TestCase):
         self.stored_witness = result.catalog_witness
         self.assertEqual(self.scan().results[0][3],0)
         self.assertNotIn('unselected',{call.args[0].track_id for call in self.host._row_for.call_args_list})
+
+    def test_real_clean_postcommit_scan_returns_both_actions_to_export_and_later_drift_to_sync(self):
+        self.desired['old']['title']='Generated committed display change'
+        dirty=self.scan()
+        self.assertGreater(dirty.results[0][3],0)
+        result=stock_ipod.commit_stock_ipod_sync(self.case._plan(self.case._capture(self.desired)))
+        self.assertFalse(result.catalog_warning)
+        self.stored_witness=result.catalog_witness
+        self.host._stock_catalog_witness_cache[self.dev]=result.catalog_witness
+        clean=self.scan()
+        self.assertEqual(clean.results[0][3],0)
+        self.assertEqual(clean.stock_status[self.dev].state,'up_to_date')
+
+        case=navigation_fixture.DeviceNavigationPublication();case.setUp()
+        self.addCleanup(case.doCleanups)
+        w=case.window
+        for timer in w.findChildren(QTimer):timer.stop()
+        profile=clean.results[0][4]
+        profile.label='Generated iPod';profile.has_rockbox=False;profile.rockbox_export=False
+        profile.stock_preview=True;profile.cdj_export=False
+        profile.stock_format=self.snapshot.stock_format
+        w.lib=self.f.library;w.custom={}
+        w._device_profiles={self.dev:profile}
+        w._device_mount_tokens={self.dev:self.token}
+        w._device_coordinator=DeviceOperationCoordinator()
+        w._device_coordinator.observe(DeviceSessionIdentity(self.dev,self.token))
+        w._current_device_path=self.dev
+        fresh=read_stock_ipod_snapshot(self.f.ipod,volume_uuid='generated-volume',
+            native_capture=capture_stock_ipod_native(self.f.ipod,include_artwork=True))
+        status=clean.stock_status[self.dev]
+        fresh=replace(fresh,sync_state=status.state,sync_detail=status.detail,
+            sync_local_changes=status.local_changes,sync_committed_at=status.committed_at)
+        w._stock_view_cache={self.dev:(fresh,None)};w._stock_snapshot=fresh
+        w._stock_catalog_witness_cache={self.dev:result.catalog_witness}
+        w._drift_cache={self.dev:dirty.results[0][3]}
+        pages=w.stock_ipod_pages;pages.set_snapshot(fresh)
+        facts=DeviceFacts(volume_uuid='generated-volume',filesystem_name='fat32',writable=True)
+        completed=[]
+        def publish(worker):
+            for _name,_path,_free,_drift,observed in worker.results:
+                observed.label='Generated iPod';observed.has_rockbox=False;observed.rockbox_export=False
+                observed.stock_preview=True;observed.cdj_export=False
+                observed.stock_format=self.snapshot.stock_format
+            w._on_devices_scanned(worker.results,mount_tokens=worker.mount_tokens)
+            w._publish_stock_sync_observations(worker)
+        def refreshed(_dev,*,after_finished,**_options):
+            publish(clean)
+            after_finished()
+        with (mock.patch('desktop.app.device_facts',return_value=facts),
+              mock.patch('desktop.app.device_fs',return_value='fat32'),
+              mock.patch.object(w,'_refresh_device_surfaces',side_effect=refreshed)):
+            w._update_device_action_state()
+            self.assertEqual((w.device_sync_btn.text(),pages.sync_playlist_button.text()),('Sync','Sync'))
+            # A normal poll must also publish its changed drift action when
+            # the native view's detailed scalar status was already identical.
+            publish(clean)
+            self.assertEqual((w.device_sync_btn.text(),pages.sync_playlist_button.text()),('Export','Export'))
+            w._drift_cache[self.dev]=dirty.results[0][3]
+            w._update_device_action_state()
+            # The native view is already clean while old sidebar drift remains;
+            # the real finalizer must publish the actual clean scan before its
+            # completion boundary, rather than clearing flags on commit alone.
+            w._finalize_ipod_operation(self.dev,lambda:completed.append(
+                (w.device_sync_btn.text(),pages.sync_playlist_button.text())))
+            self.assertEqual(completed,[('Export','Export')])
+            self.assertEqual(w._drift_cache[self.dev],0)
+            self.assertIsNone(w._device_finalization_token)
+            self.desired['old']['title']='Generated later unsynced edit'
+            later=self.scan()
+            self.assertGreater(later.results[0][3],0)
+            publish(later)
+            self.assertEqual((w.device_sync_btn.text(),pages.sync_playlist_button.text()),('Sync','Sync'),
+                (w._drift_cache,w._stock_view_cache[self.dev][0].sync_state,
+                 later.stock_status[self.dev],w._stock_view_pending))
+
+    def test_adopted_export_identity_survives_native_catalog_and_fresh_library_readback(self):
+        from soundbox import manifest,playlist_unification,rekordbox_playlist_plan
+        from soundbox.library import Playlist
+        from soundbox.rekordbox_playlist_store import request_for
+        case=navigation_fixture.DeviceNavigationPublication();case.setUp()
+        self.addCleanup(case.doCleanups)
+        w=case.window
+        for timer in w.findChildren(QTimer):timer.stop()
+        uuid='00000000-0000-4000-8000-000000001000'
+        catalog=dict(nodes=[dict(ID='1000',UUID=uuid,Name='Adopted',ParentID='root',
+            Seq=1,Attribute=0,rb_local_deleted=0)],members=[dict(ID=str(index),
+            UUID=f'00000000-0000-4000-8000-{index:012d}',PlaylistID='1000',
+            ContentID=key,TrackNo=index,rb_local_deleted=0) for index,key in enumerate(('1','2'),1)])
+        catalog['revision']=rekordbox_playlist_plan.revision(catalog['nodes'],catalog['members'])
+        w.lib.playlists=[Playlist('Adopted',[],['1','2'],'1000')]
+        w.lib.source_playlist_catalog=catalog
+        state=playlist_unification.new(w.lib.source,w.lib.source_library_id)
+        state['customs_done']=True;state['nodes']={'custom:Adopted':dict(id='1000',uuid=uuid)}
+        w.settings[playlist_unification.KEY]=state;w.custom={'Adopted':['1','2']}
+        w._apply_settings_to_lib(configure_artwork=False)
+        baseline={'playlists':{'cust:Adopted':manifest.entry_for(w.lib.playlists[0])}}
+        def assert_clean():
+            self.assertEqual(w.lib.playlists[0].export_key,'cust:Adopted')
+            self.assertFalse(any(p.pid for p in w._sync_playlists()))
+            self.assertFalse(manifest.diff(baseline,w.lib,w._sync_playlists(),expected_profile=None).any())
+        assert_clean()
+        for prepared in (None,()):
+            with self.subTest(prepared=prepared):
+                raw=replace(w.lib,playlists=[replace(p,export_key='') for p in w.lib.playlists])
+                # Raw source/cache rows alone would report exactly the phantom
+                # removal. Production publication must derive the accepted alias
+                # before the observer sees this library, including sparse ACKs.
+                self.assertEqual(manifest.diff(baseline,raw,expected_profile=None).removed,
+                    [('cust:Adopted','Adopted')])
+                self.assertTrue(w._on_refresh_done(raw,prepared_native_ids=prepared))
+                assert_clean()
+        # Ordinary native edit publication reconstructs Playlist objects from
+        # the returned catalog rather than preserving the old Python objects.
+        request=request_for(catalog,'rename',identity='1000',name='Adopted')
+        old=w.lib.playlists[0]
+        w._native_apply_catalog(deepcopy(catalog),request)
+        self.assertIsNot(w.lib.playlists[0],old)
+        assert_clean()
 
     def test_playback_changes_refresh_once_merge_from_native_and_keep_header_clean(self):
         from desktop.stock_catalog_sync import has_sync_source, needs_sync
@@ -179,6 +300,89 @@ class StockSyncObserverUi(unittest.TestCase):
         worker = self.scan(cold=True)
         self.assertIsNone(worker.results[0][3])
         self.assertEqual(worker.stock_status[self.dev].state,'comparison_pending')
+
+    def test_worker_refreshes_stale_art_revision_without_mutating_the_publisher_or_opening_audio(self):
+        from soundbox.artwork import ArtCache
+        from soundbox.artwork_identity import BoundArtCache
+        cache=ArtCache(self.f.base/'observer-art').for_library(self.f.library)
+        self.host.art_cache=cache
+        old_token=cache.selection_token(('old','new'))
+        other=BoundArtCache(cache.root,self.f.library)
+        other.store_none('old')
+        self.assertFalse(cache.selection_current(old_token))
+        revision=cache._revision;owner=cache.scope_owner;threads=[]
+        original=cache.observation_view
+        def observe(library):
+            threads.append(get_ident())
+            return original(library)
+        with (mock.patch.object(cache,'observation_view',side_effect=observe) as observed,
+              mock.patch.object(BoundArtCache,'__init__',side_effect=AssertionError('Observer constructed a cache')),
+              mock.patch.object(cache._area,'publish',side_effect=AssertionError('Observer wrote art state')),
+              mock.patch.object(cache,'_rebuild_default_assignments',side_effect=AssertionError('Observer rebalanced defaults'))):
+            for _ in range(2):
+                worker=self.scan()
+                self.assertEqual(worker.results[0][3],0)
+                self.assertEqual(worker.stock_status[self.dev].state,'up_to_date')
+                self.assertFalse(worker.stock_comparison_errors)
+            self.refresh_cached_view()
+            self.assertEqual(self.host._stock_view_cache[self.dev][0].sync_state,'up_to_date')
+            self.assertEqual(observed.call_count,3)
+        self.assertTrue(all(thread!=get_ident() for thread in threads))
+        self.assertIs(self.host.art_cache,cache)
+        self.assertIs(cache.scope_owner,owner)
+        self.assertEqual(cache._revision,revision)
+        self.assertFalse(cache.selection_current(old_token))
+
+    def test_retired_art_comparison_failure_logs_once_until_recovery_without_clearing_drift(self):
+        from soundbox.artwork import ArtCache
+        from soundbox.artwork_identity import BoundArtCache
+        from desktop.stock_catalog_sync import needs_sync
+        cache=ArtCache(self.f.base/'observer-retired-art').for_library(self.f.library)
+        current=BoundArtCache(cache.root,self.f.library)
+        self.host.art_cache=cache;self.host.custom={};cache.retire()
+        fresh=read_stock_ipod_snapshot(self.f.ipod,volume_uuid='generated-volume',
+            native_capture=capture_stock_ipod_native(self.f.ipod,include_artwork=True))
+        pending=replace(fresh,sync_state='local_changes',sync_local_changes=629)
+        self.host._stock_view_cache[self.dev]=(pending,None)
+        self.host._drift_cache={self.dev:None}
+        with mock.patch('desktop.app.LOG.warning') as warning:
+            for _ in range(2):
+                worker=self.scan(inspections=0)
+                self.assertIsNone(worker.results[0][3])
+                self.assertNotIn(self.dev,worker.stock_status)
+                self.assertIn('StateChangedError',worker.stock_comparison_errors[self.dev])
+                MainWindow._publish_stock_sync_observations(self.host,worker)
+            warning.assert_called_once()
+            self.assertTrue(needs_sync(self.host,self.dev))
+            self.assertIs(self.host._stock_view_cache[self.dev][0],pending)
+            self.host.art_cache=current
+            clean=self.scan()
+            self.assertEqual(clean.results[0][3],0)
+            MainWindow._publish_stock_sync_observations(self.host,clean)
+            self.assertFalse(self.host._stock_comparison_warnings)
+            self.assertEqual(self.host._stock_view_cache[self.dev][0].sync_state,'up_to_date')
+
+    def test_queued_art_observations_cannot_publish_after_revision_retirement_restore_or_owner_change(self):
+        from soundbox.artwork import ArtCache
+        from soundbox.artwork_identity import BoundArtCache
+        for change in ('revision','retirement','restore','owner'):
+            with self.subTest(change=change):
+                cache=ArtCache(self.f.base/('observer-fence-'+change)).for_library(self.f.library)
+                self.host.art_cache=cache
+                worker=self.scan()
+                self.assertEqual(worker.results[0][3],0)
+                self.assertTrue(worker.comparison_current(cache))
+                if change=='revision':cache.store_none('old')
+                elif change=='retirement':cache.retire()
+                elif change=='restore':cache._area.generation+=1
+                else:self.host.art_cache=BoundArtCache(cache.root,self.f.library)
+                self.assertFalse(worker.comparison_current(self.host.art_cache))
+                before=self.host._stock_view_cache[self.dev]
+                self.host.stock_ipod_pages.set_sync_status.reset_mock()
+                MainWindow._publish_stock_sync_observations(self.host,worker)
+                self.assertIs(self.host._stock_view_cache[self.dev],before)
+                self.host.stock_ipod_pages.set_sync_status.assert_not_called()
+                self.assertFalse(self.host._stock_view_pending)
 
     def test_cold_known_view_refreshes_scoped_witness_then_next_capture_completes(self):
         self.host._stock_catalog_witness_cache.clear()

@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QApplication
 from desktop.devices import DeviceFacts
 from desktop.usb_device_view import UsbDevicePages, UsbSnapshot
 from desktop.workers import DeviceScanWorker
+from soundbox.device_profile import DeviceProfile
 
 
 class PassiveUsbDiscovery(unittest.TestCase):
@@ -20,7 +21,8 @@ class PassiveUsbDiscovery(unittest.TestCase):
         self.root = Path(self.area.name)
         self.target = str(self.root)
         self.token = self.root.stat().st_dev
-        self.profile = SimpleNamespace(kind='generic_usb', has_stock_ipod=False)
+        self.profile = DeviceProfile('generic_usb', 'USB', 'exfat', False, False,
+                                     False, False, False)
         self.enterContext(mock.patch('desktop.workers.list_devices', return_value=[('USB', self.target, 400)]))
         self.enterContext(mock.patch('desktop.workers.device_profile', return_value=self.profile))
         self.enterContext(mock.patch('desktop.devices.discovery_needs_retry', return_value=False))
@@ -146,6 +148,7 @@ class UsbPresentation(unittest.TestCase):
             _sync_cue_editing=mock.Mock(), _flash_status=mock.Mock(),
             _usb_view_cache={target: snapshot}, _usb_view_requests={target},
             _current_device_path=target, _device_mount_tokens={target: 1},
+            _current_device_role='', _device_profiles={target:profile},
             _refresh_devices=mock.Mock(side_effect=AssertionError('Completion scanned USB')),
             _update_device_action_state=mock.Mock(), usb_device_pages=pages)
         host._present_usb_device = lambda dev: pages.set_snapshot(host._usb_view_cache[dev],
@@ -275,6 +278,7 @@ class UsbPresentation(unittest.TestCase):
             _set_device_poll_interval=mock.Mock(), _update_device_action_state=mock.Mock(),
             _refresh_devices=mock.Mock(side_effect=AssertionError('Eject caused a device scan')),
             **{name: {target: object(), other: object()} for name in names})
+        host.stack.currentIndex.return_value=0
         host._discard_stock_view_callbacks = lambda dev, message: MainWindow._discard_stock_view_callbacks(host,dev,message)
         with mock.patch('desktop.devices.forget_device_mount') as forget, \
                 mock.patch('desktop.device_browser.os.stat', side_effect=AssertionError('Eject stat')):
@@ -287,7 +291,7 @@ class UsbPresentation(unittest.TestCase):
         self.assertEqual(host._usb_view_requests, {other})
         self.assertEqual(host._stock_view_warming, {other})
         self.assertEqual(host._current_device_path, '')
-        host.stack.setCurrentIndex.assert_called_once_with(0)
+        host.stack.setCurrentIndex.assert_not_called()
         host._refresh_devices.assert_not_called()
 
 

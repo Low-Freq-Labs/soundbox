@@ -9,6 +9,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 import sqlite3
 from uuid import UUID, uuid4
@@ -87,12 +88,25 @@ def _swaps(before,desired):
     return result
 
 
-def _clock(value):
+def _parse_clock(value):
     if not isinstance(value,str):return False
     try:
         parsed=datetime.strptime(value,'%Y-%m-%d %H:%M:%S.%f +00:00')
         return parsed.year>=1970 and parsed.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]+' +00:00'==value
     except ValueError:return False
+
+
+@lru_cache(maxsize=2048)
+def _clock_string(value:str):
+    return _parse_clock(value)
+
+
+def _clock(value):
+    # A captured immutable request is revalidated through admission, recovery
+    # and queued presentation. Reuse only this pure bounded string parse; every
+    # request, clock renewal, native identity and source guard remains fresh.
+    if type(value) is str and len(value)==30:return _clock_string(value)
+    return _parse_clock(value)
 
 
 def validate_request(request):

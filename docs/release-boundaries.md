@@ -35,8 +35,9 @@ Build/install validation is recorded in the current handoff.
 
 “Public” means intended shared product scope, subject to the release gates in
 [ROADMAP.md](ROADMAP.md), not a declaration that today's build is ready to ship.
-Device management is shared: selected-playlist Export, Import My Settings,
-confirmed Reformat USB and Eject are current generic-USB controls; iPod tools
+Device management is shared: selected-playlist Export/Delete, consented Configure
+for an unconfigured USB, Import My Settings, confirmed Reformat USB and Eject are
+current generic-USB controls; iPod tools
 retain their own sync/maintenance surfaces. Raw filesystem editing and generic
 Erase backends remain legacy maintenance code, not the current visible device UI.
 Validated rekordbox-compatible/CDJ USB export is shared product scope.
@@ -120,8 +121,9 @@ discovery; this design does not import or describe them.
 The same main window, deck, library and device tabs remain. The online fetch,
 rescan, URL and Unknown-Artist discovery actions disappear. “Choose cover art…”
 still opens local selection. The artist catalog retains local image controls.
-Selected-playlist Export, Import My Settings, confirmed Reformat USB and Eject
-remain shared USB controls. Managed iPod Sync/Delete/Verify retain their own
+Selected-playlist Export/Delete, consented Configure, Import My Settings,
+confirmed Reformat USB and Eject remain shared USB controls. Managed iPod
+Sync/Delete/Verify retain their own
 device-specific safeguards. Retained raw-file-editing and generic Erase backends
 are legacy maintenance code, not current visible device controls.
 Generic USB completion/eject perform no final read;

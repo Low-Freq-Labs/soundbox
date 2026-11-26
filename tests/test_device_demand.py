@@ -62,15 +62,22 @@ class DeviceDemand(unittest.TestCase):
         win.device_tree.addTopLevelItem(item)
         return item
 
-    def test_usb_view_constructs_only_usb_and_retains_shared_column_geometry(self):
+    def test_usb_view_constructs_only_usb_with_independent_playlist_geometry(self):
         win = self.window()
         item = self.select(win, SimpleNamespace(kind='generic_usb', has_stock_ipod=False))
         win.table.setColumnWidth(0, 417)
+        win.table.setColumnWidth(1, 137)
+        win.table.setColumnHidden(2, True)
         win._on_device_click(item, 0)
         pages = win.usb_device_pages
         self.assertIs(win.device_content_stack.widget(2), pages)
         self.assertEqual(win.device_content_stack.currentIndex(), 2)
-        self.assertEqual(pages.playlist_tree.columnWidth(0), win.table.columnWidth(0))
+        tree = pages.playlist_tree
+        self.assertEqual(tree.columnCount(), 3)
+        self.assertEqual([tree.headerItem().text(i) for i in range(3)],
+                         ['Playlist / Track', 'Tracks', 'Type'])
+        self.assertEqual((tree.columnWidth(1), tree.columnWidth(2)), (70, 150))
+        self.assertFalse(tree.isColumnHidden(2))
         self.assertNotIn('stock_ipod_pages', vars(win))
         self.assertIs(win.usb_device_pages, pages)
         self.assertEqual(win.device_content_stack.count(), 3)

@@ -194,6 +194,7 @@ class StockIpodSyncStatus:
     database_sha256: str = ""
     artwork_database_sha256: str | None = None
     play_counts_sha256: str | None = None
+    change_summary: tuple[tuple[str, int], ...] = ()
 
 
 def retained_source_rows(shadow: StockIpodShadow, before: Sequence[tuple[int, str, int]],
@@ -368,7 +369,8 @@ class StockIpodShadowStore:
         with _store_lock(path):
             _atomic_json(path, shadow.as_dict())
 
-    def replace_if_current(self, before: StockIpodShadow, renewed: StockIpodShadow | None) -> bool:
+    def replace_if_current(self, before: StockIpodShadow, renewed: StockIpodShadow | None,
+                           *, same_generation: bool = False) -> bool:
         """Replace/retire only the exact cache entity returned by ``load``.
 
         The live cache leaf is exclusively claimed, then checked against its
@@ -377,8 +379,12 @@ class StockIpodShadowStore:
         """
         if before._storage_token is None:
             return False
+        if same_generation and (renewed is None or any(getattr(renewed, name) != getattr(before, name)
+                for name in ('committed_at', 'model', 'serial_number', 'database_sha256',
+                             'artwork_database_sha256', 'ithmb'))):
+            raise ValueError('A no-op shadow renewal must preserve the native generation and layout')
         if renewed is not None and (renewed.identity_key != before.identity_key
-                                     or renewed.generation != before.generation + 1):
+                                     or renewed.generation != before.generation + (0 if same_generation else 1)):
             raise ValueError('Delete shadow renewal has an invalid identity or generation')
         path = self.path_for(before.identity_key)
         with _store_lock(path):

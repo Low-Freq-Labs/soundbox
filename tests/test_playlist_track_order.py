@@ -13,7 +13,7 @@ from desktop.app import MainWindow
 from desktop.model import COLUMNS, TrackModel
 from desktop.rekordbox_playlists import NativePlaylistsMixin
 from soundbox.library import Library, Playlist, Track
-from soundbox import playlist_track_order, rekordbox_playlist_store as store
+from soundbox import playlist_track_order, rekordbox_playlist_store as store, rekordbox_playlist_plan as plans
 from soundbox.rekordbox_write import WriteProofError
 
 
@@ -141,6 +141,49 @@ class NativeTrackOrderBatch(unittest.TestCase):
             if table not in ('djmdSongPlaylist', 'agentRegistry'):
                 self.assertEqual(self.state()['tables'][table], before['tables'][table], table)
         saved = self.state(); self.writer.apply(request); self.assertEqual(self.state(), saved)
+
+    def test_flat_copy_plan_has_exact_original_canonical_bytes_and_detached_results(self):
+        from soundbox.rekordbox_write import _connect,_json
+        library=self.library();rows=self.members()
+        request,_=playlist_track_order.request(library,'1000',[rows[-1]],rows[1])
+        xml=self.writer.xml.read_bytes();conn=_connect(self.writer.database,readonly=True)
+        try:
+            with (mock.patch.object(plans,'_copy_row',deepcopy),
+                  mock.patch.object(plans,'_copy_rows',deepcopy)):
+                original=store.build_plan(conn,request,xml)
+            actual=store.build_plan(conn,request,xml)
+        finally:conn.close()
+        encode=lambda plan:_json({**plan,'xml':plan['xml'].hex()})
+        self.assertEqual(encode(actual),encode(original))
+        self.assertEqual(store.planner._digest(actual['changes']),store.planner._digest(original['changes']))
+        actual['changes'][0]['before']['updated_at']='detached mutation'
+        self.assertNotEqual(actual,original)
+        self.assertEqual(self.members(),rows)
+
+    def test_flat_row_copies_preserve_aliasing_fallbacks_and_mutation_isolation(self):
+        class CustomText(str):pass
+        class CustomRow(dict):pass
+        row={'text':'hello','integer':1,'float':1.5,'bool':True,'blob':b'bytes','null':None}
+        actual=plans._copy_row(row)
+        self.assertEqual(actual,deepcopy(row));self.assertIsNot(actual,row)
+        actual['text']='changed';self.assertEqual(row['text'],'hello')
+        copied=plans._copy_rows([row,row])
+        self.assertIs(copied[0],copied[1]);self.assertIsNot(copied[0],row)
+        shared=[];left={'nested':shared};right={'nested':shared}
+        copied=plans._copy_rows([left,right,left])
+        self.assertIs(copied[0],copied[2]);self.assertIs(copied[0]['nested'],copied[1]['nested'])
+        copied[0]['nested'].append('changed');self.assertEqual(shared,[])
+        cycle={};cycle['self']=cycle
+        copied=plans._copy_row(cycle);self.assertIs(copied['self'],copied)
+        container=[];container.append(container)
+        copied=plans._copy_rows(container);self.assertIs(copied[0],copied)
+        for row in (CustomRow(value=[]),{'custom':CustomText('hello')},{'buffer':bytearray(b'bytes')}):
+            with self.subTest(row=row):
+                actual=plans._copy_row(row);expected=deepcopy(row)
+                self.assertEqual(actual,expected);self.assertIs(type(actual),type(expected))
+                self.assertEqual([type(value) for value in actual.values()],
+                                 [type(value) for value in expected.values()])
+        with self.assertRaises(TypeError):plans._copy_row({'uncopyable':memoryview(b'bytes')})
 
     def test_noop_and_replaced_occurrence_cannot_publish_a_guess(self):
         library = self.library(); rows = self.members()

@@ -64,6 +64,10 @@ feedback while the ordered canonical save finishes. Native dispatch waits for it
 durable acknowledgement; Retry/Discard retain their exact queue ownership and
 visible storage errors. Pending definition dependencies wait for verified native
 creation and ACK before their own source dispatch.
+Healthy tag-order intentions compose exact per-category before/after chains from
+the newest projected order, including repeated targets. A scoped ACK/publication
+handoff keeps older readbacks from replacing a newer tail; source/restore changes,
+failed heads and structural definitions retain their separate admission barriers.
 Sparse canonical and GUI patches share `apply_state_patch`, copying each affected
 dictionary ancestor once rather than once per selected song. Whole recency-state
 validation remains bounded by100,000ranks; it is a separately measured residual.
@@ -631,7 +635,7 @@ multi-file/SQL recovery proof; no publish-to-source API) · `rekordbox_grid_stor
 (accepted track-bound source transactions and explicit library authority) · `device_profile` (read-only device
 classification and stock-iPod readiness planning) · `stock_ipod` (observed-format
 two-phase iTunesDB/artwork render/validate/commit adapter) · `stock_artwork`
-(content-addressed MA446 RGB565 preparation and ArtworkDB/ithmb layout) ·
+(content-addressed model-specific RGB565 preparation and ArtworkDB/ithmb layout) ·
 `stock_ipod_shadow` (disposable Mac-side per-device delta baseline) ·
 `stock_ipod_info` (strictly read-only stock/dual device snapshots) ·
 `dual_ipod` (schema-3 single-copy stock/Rockbox plan, rollback, and ownership) ·
@@ -766,7 +770,8 @@ reader when either native library exists; no live SQL is opened on the USB.
 Native preference controls queue an explicit Save generation through the same
 worker lane. The UI does no removable-device I/O in widget callbacks.
 A USB playlist drop carries target-bound authorization through preparation into
-commit without another dialog. The Export dialog selects playlists/folders on
+commit; replacing selected existing playlists first obtains the named overwrite
+confirmation. The Export dialog selects playlists/folders on
 the left and connected devices on the right. A source-bound queue captures each
 checked target mount/UUID, rebinds selected playlist IDs for each target and uses
 the existing serialized exporters. Cancellation/shutdown clear pending targets.
@@ -810,8 +815,9 @@ The shared device header is 26 points; TrackBrowserTree builds on BrowserDetailT
 to make folders/playlists nonselectable single-click containers while preserving
 track selection, stock reorder and independent checkboxes. BrowserDetailTree
 continues the regular
-24-point alternating grid below real rows. USB song rows use COLUMNS and shared
-browser header state. Immutable CdjSong records retain actual USB audio/analysis
+24-point alternating grid below real rows. USB and stock playlist pages use the
+same three-column frame; library browser header fitting, ordering and visibility
+never modify it. Immutable CdjSong records retain actual USB audio/analysis
 references; explicit activation validates them in the device lane and uses a
 separate device track ID, without source cue overlays/edit authority. USB view
 mementos are keyed by volume UUID, with tab, hierarchy/selection and scroll saved
@@ -869,7 +875,8 @@ Its progress/Cancel/count/status order keeps the controls anchored across phase
 and count changes without changing browser geometry. Long status text elides.
 
 `desktop.browser_scrollbar.BrowserScrollBar` overlays a visible row scrollbar
-at the frame’s right edge in TrackTable, Artists and USB playlist views. Qt’s
+at the frame’s right edge in TrackTable and Artists. USB and stock playlist
+trees retain their independent shared device frame and native scrollbars. Qt’s
 hidden native bar retains range, wheel/keyboard and24-point row scrolling;
 bidirectional value/range synchronization drives the visible control. Geometry
 starts below the header and follows viewport resize/show, including horizontal
@@ -880,8 +887,8 @@ free width without borrowing from Title. Window resizing gives spare width to
 Title; narrowing or showing extra columns can reduce other widths only as needed. Saved/default layouts fit under
 a guarded section-resize loop. The visible viewport's Resize/Show events supply the
 available width, including the row scrollbar’s overlaid strip. Ordinary layouts fit without horizontal
-scrolling; if selected fields exceed even their minimum widths, all three browser
-views allow horizontal scrolling so every field remains reachable. Saved layouts
+scrolling; if selected fields exceed even their minimum widths, both library
+browser views allow horizontal scrolling so every field remains reachable. Saved layouts
 record columns_keys: restoring an older ten-column Qt header must explicitly keep
 new metadata fields hidden. Artists mirrors shared widths and visibility.
 ScrollPerItem keeps 24-point rows aligned with the sidebar. TrackModel declines
@@ -1165,8 +1172,8 @@ separate additive transaction: a pinned Clickwheel version renders only in a
 temporary tree; SoundBox validates the output, writes recovery bytes,
 atomically copies new media/artwork, and commits `iTunesDB` last. Curated
 baseline JPEGs remain the shared Rockbox/stock source of truth. A low-priority,
-playback-aware worker prepares content-addressed MA446 RGB565 100×100 and
-200×200 payloads under AppData ahead of sync only while a stock-capable iPod is
+playback-aware worker prepares content-addressed RGB565 payloads for attached
+devices' observed pixel profiles under AppData ahead of sync only while a stock-capable iPod is
 attached. A locator index skips unchanged JPEGs, and manual art changes queue
 only affected tracks while connected. Successful commits
 atomically publish a Mac-side `stock_ipod_state/` shadow keyed by library
@@ -2359,6 +2366,14 @@ pure inventory of those exact freshly checked private bytes; every source captur
 remains fresh. Locator preparation seeds proof only after archive DB/XML transfers
 match known hashes bracketed around their complete proofs. Removal cache hits
 freshly verify raw plan/authority/source and all payload/resource bytes.
+
+The November24 follow-up scopes private archive verification to the exclusive
+`NativeTransactionLease`. `native_transaction.hash_evidence` fully hashes first
+use and changed evidence, then reobserves complete file epochs and private parent
+identities for reuse before unlock. Only same-filesystem local native archives
+qualify; source observations and iPod/FAT evidence do not. Context copies expire
+with the lease. `rekordbox_playlist_store` also compares durable raw copies before
+repeating JSON decoding. See [measurements](performance-audit.md#minimal-native-and-ipod-transactions--november24-follow-up).
 
 Prep scheduling distinguishes general ownership deferral from native-owner
 backoff. Genuine lane release promotes a delayed wake to the next event turn;

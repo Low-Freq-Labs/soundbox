@@ -33,7 +33,7 @@ if TYPE_CHECKING:
     from soundbox.stock_artwork import StockArtworkCache
 
 from .devices import (
-    DeviceFacts, device_facts, device_profile, list_devices, refresh_device_mount,
+    DeviceFacts, device_facts, device_profile, device_target_profile, list_devices, refresh_device_mount,
 )
 from .analysis_fence import AnalysisWriteFence
 
@@ -362,6 +362,8 @@ class DeviceScanWorker(QThread):
     """Enumerate connection facts and iPod drift off the UI thread.
 
     CDJ USBs have no drift state; their catalogs load only on browser requests.
+    Each eligible connection may check fixed setup markers once, without parsing
+    or opening the native catalog payloads.
 
     Touching a removable volume (os.statvfs, reading the manifest) can BLOCK for
     seconds on macOS fskit whenever the stick is busy — during our own export, or
@@ -380,7 +382,8 @@ class DeviceScanWorker(QThread):
                  title_overrides=None, stock_shadow_store=None,
                  stock_models=None, known_paths=None,
                  known_mount_tokens=None, usb_views=None, usb_requests=None,
-                 defer_playlists=False, stock_catalog_witnesses=None, stock_catalog_store=None):
+                 defer_playlists=False, stock_catalog_witnesses=None, stock_catalog_store=None,
+                 art_cache=None, usb_setup_known=None):
         super().__init__()
         self.lib = lib
         self.extra = extra or []  # custom SoundBox playlists (not in lib.playlists)
@@ -396,6 +399,8 @@ class DeviceScanWorker(QThread):
         self.usb_views = dict(usb_views or {})
         self.usb_requests = frozenset(usb_requests or ())
         self.usb_snapshots = {}
+        self.usb_setup_known = frozenset(usb_setup_known or ())
+        self.usb_setup_results = {}
         self.mount_tokens: dict[str, int] = {}
         self.new_paths: tuple[str, ...] = ()
         self.results: list | None = []
@@ -411,12 +416,16 @@ class DeviceScanWorker(QThread):
         self.stock_catalog_witnesses = dict(stock_catalog_witnesses or {})
         self.stock_catalog_store = stock_catalog_store
         self.stock_status = {}
+        self.stock_comparison_errors = {}
+        self._art_observation = None
+        self._art_observation_token = None
+        self.art_cache = art_cache
         self.captured_source_scope = ((str(lib.source),lib.source_kind,lib.source_library_id)
                                       if lib is not None and hasattr(lib,'source') else None)
 
     def provide_playlists(self, extra, *, lib, artist_overrides,
                           title_overrides, error=None, stock_shadow_store=None,display_rows=None,
-                          stock_catalog_witnesses=None,stock_catalog_store=None):
+                          stock_catalog_witnesses=None,stock_catalog_store=None,art_cache=None):
         """Publish one GUI-captured snapshot before the worker reads drift."""
         if not self.cancellation.is_set():
             self.extra = list(extra or ())
@@ -424,6 +433,7 @@ class DeviceScanWorker(QThread):
             self.artist_overrides = dict(artist_overrides or {})
             self.title_overrides = dict(title_overrides or {})
             self.stock_shadow_store = stock_shadow_store
+            self.art_cache = art_cache
             self.stock_catalog_witnesses = dict(stock_catalog_witnesses or {})
             self.stock_catalog_store = stock_catalog_store
             self.captured_source_scope = ((str(lib.source),lib.source_kind,lib.source_library_id)
@@ -436,6 +446,12 @@ class DeviceScanWorker(QThread):
     def cancel(self):
         self.cancellation.set()
         self._playlists_ready.set()
+
+    def comparison_current(self, art_cache):
+        """Queued observations still belong to the captured publisher/revision."""
+        if self.art_cache is not None and self.art_cache is not art_cache:return False
+        return (self._art_observation_token is None or
+                self._art_observation.selection_current(self._art_observation_token))
 
     def _capture_playlists(self):
         """Wait only after detection; cancellation never needs GUI delivery."""
@@ -464,6 +480,48 @@ class DeviceScanWorker(QThread):
         if not supports_stock_write(model):
             return profile
         return replace(profile, model=model)
+
+    def _probe_usb_setup(self, path, profile):
+        """Observe fixed setup markers once per eligible mounted USB identity."""
+        usb_profile = (device_target_profile(profile, 'ipod_usb')
+                       if getattr(profile, 'has_stock_ipod', False) else profile)
+        if (usb_profile is None or usb_profile.kind not in {'generic_usb', 'ipod_usb'}
+                or not usb_profile.cdj_export):
+            return
+        token = self.mount_tokens.get(path, 0)
+        facts = device_facts(path, cached_only=True)
+        if (not token or not facts.volume_uuid or facts.writable is not True
+                or (usb_profile.kind == 'generic_usb' and facts.media_type.casefold() == 'ipod')):
+            return
+        identity = (path, token, facts.volume_uuid, usb_profile.kind)
+        if identity in self.usb_setup_known:
+            return
+        try:
+            before = os.stat(path, follow_symlinks=False)
+        except OSError:
+            return
+        if before.st_dev != token:
+            return
+        from soundbox.cdj_usb import setup_readiness
+        try:
+            with operation_scope(self.cancellation):
+                readiness = setup_readiness(path, token=token, volume_uuid=facts.volume_uuid,
+                                            target_role=usb_profile.kind)
+        except OperationCancelled:
+            self.cancel()
+            return
+        if self.cancellation.is_set() or self.isInterruptionRequested():
+            return
+        try:
+            current = os.stat(path, follow_symlinks=False)
+        except OSError:
+            return
+        if (current.st_dev, current.st_ino) != (before.st_dev, before.st_ino):
+            return
+        if (readiness.mount_identity is not None
+                and (current.st_dev, current.st_ino) != readiness.mount_identity):
+            return
+        self.usb_setup_results[path] = (*identity, readiness)
 
     def run(self):
         started = time.monotonic()
@@ -523,6 +581,16 @@ class DeviceScanWorker(QThread):
         if needs_playlists and self._defer_playlists and not self._capture_playlists():
             self.results = None
             return
+        observed_art_cache=self.art_cache
+        artwork_error=None
+        try:
+            observe=getattr(observed_art_cache,'observation_view',None)
+            if needs_playlists and self.lib is not None and observe is not None:
+                observed_art_cache=observe(self.lib)
+                self._art_observation=observed_art_cache
+                self._art_observation_token=observed_art_cache.selection_token(())
+        except Exception as exc:  # noqa: BLE001 — an unavailable view leaves status unknown
+            artwork_error=exc
         out = []
         for name, path, free, raw_profile in raw_profiles:
             if self.cancellation.is_set() or self.isInterruptionRequested():
@@ -530,11 +598,17 @@ class DeviceScanWorker(QThread):
                 return
             drift = None
             profile = self._effective_profile(path, raw_profile)
+            self._probe_usb_setup(path, profile)
+            if self.cancellation.is_set() or self.isInterruptionRequested():
+                self.usb_setup_results.clear()
+                self.results = None
+                return
             # Publish the first usable row with its actual sync status. The
             # disabled discovery row is already visible; dashboard preload must
             # not delay the first status check by another full read/pass.
             if profile.kind != 'generic_usb' and self.lib is not None and self._playlist_capture_error is None:
                 try:
+                    if artwork_error is not None:raise artwork_error
                     if path in self._drift_capture_errors:
                         raise ValueError('The iPod ownership manifest could not be read')
                     captured=self.drift_captures.get(path)
@@ -546,9 +620,12 @@ class DeviceScanWorker(QThread):
                         title_overrides=self.title_overrides,
                         display_rows=self.display_rows,
                         captured_manifest=captured,
+                        art_cache=observed_art_cache,
                     ))
                     drift = dr.count() if dr else 0
-                except Exception:  # noqa: BLE001 - a bad manifest never breaks the poll
+                except Exception as exc:  # noqa: BLE001 - a bad manifest never breaks the poll
+                    if profile.kind=='stock_ipod':
+                        self.stock_comparison_errors[path]=type(exc).__name__+': '+str(exc)[:240]
                     drift = None
                 if (
                     drift == 0
@@ -587,25 +664,31 @@ class DeviceScanWorker(QThread):
                             extra_playlists=tuple(self.extra),
                             catalog_witness=witness,
                             display_rows=self.display_rows,
+                            art_cache=observed_art_cache,
                         )
                         self.stock_status[path] = status
                         if status.state == 'comparison_pending':
                             drift = None
                         elif status.state not in {"up_to_date", "untracked"}:
                             drift = max(1, status.local_changes)
-                    except Exception:  # noqa: BLE001 - keep polling read-only
+                    except Exception as exc:  # noqa: BLE001 - keep polling read-only
+                        self.stock_comparison_errors[path]=type(exc).__name__+': '+str(exc)[:240]
                         drift = None
-            if not getattr(profile, 'has_stock_ipod', False):
+            requested = path in self.usb_requests
+            usb_profile = (device_target_profile(profile, 'ipod_usb')
+                           if getattr(profile, 'has_stock_ipod', False) else profile)
+            if usb_profile is not None and (not getattr(profile, 'has_stock_ipod', False)
+                                           or requested or path in self.usb_views):
                 from .usb_device_view import UsbSnapshot, read_usb_snapshot, read_native_usb_snapshot
                 cached = self.usb_views.get(path)
                 token = self.mount_tokens.get(path, 0)
                 invalid = cached is None or cached.mount_token != token or path in self.new_paths
                 # Native catalogs are read only when the user opens the USB
                 # browser or explicitly refreshes it, never for idle status.
-                requested = path in self.usb_requests
-                if requested or (profile.kind != 'generic_usb' and invalid):
+                cdj_target = usb_profile.kind in {'generic_usb', 'ipod_usb'}
+                if requested or (not cdj_target and invalid):
                     try:
-                        reader = read_native_usb_snapshot if profile.kind == 'generic_usb' else read_usb_snapshot
+                        reader = read_native_usb_snapshot if cdj_target else read_usb_snapshot
                         cached = reader(path, token, device_facts(path, cached_only=True))
                     except Exception as exc:
                         cached = UsbSnapshot(Path(path), token, DeviceFacts(), error=str(exc))
@@ -614,6 +697,10 @@ class DeviceScanWorker(QThread):
                 if cached is not None:
                     self.usb_snapshots[path] = cached
             out.append((name, path, free, drift, profile))
+        if self.cancellation.is_set() or self.isInterruptionRequested():
+            self.usb_setup_results.clear()
+            self.results = None
+            return
         log = LOG.info if out else LOG.debug
         log(
             "Device scan completed for %d mount(s) in %.2fs",

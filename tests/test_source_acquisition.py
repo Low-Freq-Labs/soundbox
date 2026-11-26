@@ -14,6 +14,29 @@ from tests.test_rockbox_media import _tagged_mp3
 
 
 class AcquisitionTests(unittest.TestCase):
+    def test_provider_wait_reports_only_actual_bounded_retries_before_sleep(self):
+        from threading import Event
+        from soundbox import source_read_retry
+        from soundbox.operation_control import operation_scope
+        events=[];waits=[]
+        source=Path('/generated/cloud/Waiting song.wav')
+        def waiting(delay,cancel):
+            waits.append((delay,cancel))
+            self.assertEqual(events[-1],('Waiting for cloud source',len(waits),2,source.name))
+        with (mock.patch.object(source_read_retry,'is_cloud_storage_source',return_value=True),
+              mock.patch.object(source_read_retry,'_wait',side_effect=waiting),
+              operation_scope(Event(),lambda *args:events.append(args))):
+            retry=source_read_retry.ProviderReadRetry()
+            self.assertTrue(retry.wait_after(OSError(81,'Generated provider readiness'),source))
+            self.assertTrue(retry.wait_after(OSError(81,'Generated provider readiness'),source))
+            self.assertFalse(retry.wait_after(OSError(81,'Exhausted retry budget'),source))
+            self.assertFalse(source_read_retry.ProviderReadRetry().wait_after(OSError(13,'Permission denied'),source))
+            with mock.patch.object(source_read_retry,'is_cloud_storage_source',return_value=False):
+                self.assertFalse(source_read_retry.ProviderReadRetry().wait_after(OSError(81,'Not cloud'),source))
+        self.assertEqual(waits,[(3.0,None),(3.0,None)])
+        self.assertEqual(events,[('Waiting for cloud source',1,2,source.name),
+                                 ('Waiting for cloud source',2,2,source.name)])
+
     def test_expected_digest_never_pairs_old_bytes_with_a_replacement_or_rewrite_epoch(self):
         for replacement in (False,True):
             with self.subTest(replacement=replacement),tempfile.TemporaryDirectory() as directory:

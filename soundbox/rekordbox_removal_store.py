@@ -28,6 +28,7 @@ from .rekordbox_write import (_connect,_identity,_rows,_quote,_json,_digest,_cel
     _inactive_journal_proof,encrypted_backup,WriteProofError,ConflictError,RecoveryRequired)
 from .source_acquisition import acquire_source,SourceContract,SourceAcquisitionError
 from .state_io import atomic_bytes,sync_dir
+from .native_transaction import hash_evidence
 
 FORMAT='soundbox-native-removal-v1'
 AUTHORITY_FORMAT='soundbox-removal-authority-v1'
@@ -229,9 +230,10 @@ class RemovalStore:
                         !=(selected['native_id'],selected['uuid'],selected['path'],str(self.database),self.authority.library_id)
                         or not isinstance(row.get('display'),dict) or type(row['display'].get('title')) is not str):
                     raise RecoveryRequired('Native-only removal history differs from its exact selection')
-        for name in ('before.db','after.db','before.xml','after.xml'):
-            p=folder/name;_regular(p)
-            if _sha(p)!=plan['payloads'][name]:raise RecoveryRequired('Native removal recovery bytes changed')
+        names=('before.db','after.db','before.xml','after.xml')
+        for name in names:_regular(folder/name)
+        if hash_evidence((folder/name for name in names),_sha)!=[plan['payloads'][name] for name in names]:
+            raise RecoveryRequired('Native removal recovery bytes changed')
         for index,resource in enumerate(plan['resources']):
             expected=folder/'resources'/str(index)
             if Path(resource['backup'])!=expected or expected.resolve()!=expected:
@@ -402,7 +404,8 @@ class RemovalStore:
                         targets=targets,timestamp=built['timestamp'],xml_clocks=built['xml_clocks'],
                         playlist_labels=[next((r['Name'] for r in tables['djmdPlaylist'] if r['ID']==pid),pid) for pid in built['playlists']],
                         database_epoch=database_epoch,wal_epoch=wal_epoch,
-                        payloads={name:_sha(folder/name) for name in ('before.db','after.db','before.xml','after.xml')})
+                        payloads=dict(zip(('before.db','after.db','before.xml','after.xml'),
+                            hash_evidence((folder/name for name in ('before.db','after.db','before.xml','after.xml')),_sha),strict=True)))
                     if native_only:
                         plan['native_only']=True
                         plan['history']={entry['id']:dict(id=entry['native_id'],uuid=entry['native']['uuid'],

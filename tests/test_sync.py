@@ -406,6 +406,36 @@ class TestSyncEndToEnd(unittest.TestCase):
         for playlist in (first, second):
             self.assertIn("Good One.flac", (self.target / f"Playlists/{playlist.name}.m3u8").read_text())
 
+    def test_stock_rejected_wavex_exports_to_rockbox_with_original_samples(self):
+        import numpy as np
+        import soundfile as sf
+        from soundbox import stock_ipod
+        source = self.src / 'rockbox24.wav'
+        sf.write(source, np.arange(1764, dtype=np.int32).reshape(-1, 2) * 256,
+                 44_100, format='WAVEX', subtype='PCM_24')
+        original = source.read_bytes()
+        expected, rate = sf.read(source, dtype='int32')
+        self.assertIn('PCM_24', stock_ipod._stock_wav_header_omission(source.resolve()))
+        track = Track('wavex', 'Rockbox 24', 'Fixture', source.as_uri())
+        playlist = Playlist('Rockbox', [], ['wavex'], pid='rockbox')
+        library = Library({'wavex': track}, [playlist], self.xml)
+        cache = RockboxMediaCache(self.root / 'media-cache')
+        report = sync_mod.run(library, [playlist], self.target, layout='tree',
+                              dry_run=False, rockbox_media_cache=cache)
+        self.assertFalse(any(row.errors for row in report.playlists))
+        exported = self.target / 'Music/Fixture/Rockbox 24/Rockbox 24.wav'
+        observed, observed_rate = sf.read(exported, dtype='int32')
+        np.testing.assert_array_equal(observed, expected)
+        self.assertEqual(observed_rate, rate)
+        self.assertEqual(sf.info(exported).subtype, 'PCM_24')
+        self.assertEqual(_riff_info_values(exported), ('Rockbox 24', 'Fixture'))
+        self.assertIn('Rockbox 24.wav', (self.target / 'Playlists/Rockbox.m3u8').read_text())
+        self.assertFalse((self.target / 'iPod_Control').exists())
+        repeated = sync_mod.resync(library, self.target, rockbox_media_cache=cache)
+        self.assertEqual(repeated.playlists, [])
+        self.assertTrue(exported.is_file())
+        self.assertEqual(source.read_bytes(), original)
+
     def test_normalized_rockbox_explicit_sync_has_zero_audio_work_when_unchanged(self):
         source = self.src / "actual.wav"
         with wave.open(str(source), "wb") as output:

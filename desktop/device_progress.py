@@ -21,10 +21,15 @@ _STOCK_PHASES = {
 
 
 def stock_phase_progress(stage, done, total):
-    """Map completed phase units, never elapsed time or source acquisition bytes."""
-    phase = _STOCK_PHASES.get(stage)
-    if phase is None or type(done) is not int or type(total) is not int or done < 0 or total < 0:
+    """Map completed phase units; source bytes expose detail without advancing."""
+    if type(done) is not int or type(total) is not int or done < 0 or total < 0:
         return None
+    if stage == 'Acquiring source':
+        return PhaseProgress('Preparing source', None, 'bytes')
+    if stage == 'Waiting for cloud source':
+        return PhaseProgress('Waiting for cloud source', None, 'retries')
+    phase = _STOCK_PHASES.get(stage)
+    if phase is None:return None
     message, base, span, unit = phase
     value = base + span * min(done, total) // total if total else None
     return PhaseProgress(message, value, unit)

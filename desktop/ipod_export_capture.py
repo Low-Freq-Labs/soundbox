@@ -16,6 +16,7 @@ from .devices import device_facts
 from .ipod_export_fences import (capture_fences,require_fences,refresh_physical_fences,
                                  selected_media_jobs,SelectedExportError,SelectedExportWait)
 from .state_commit import StateCommitter
+from .export_wait import selected_artwork_pending
 
 
 class ChooseIpodPlaylists(SelectedExportError):
@@ -285,6 +286,8 @@ def _canonical_projection(host,playlists,ids):
 
 def _build(host,request):
     selected=_resolve(host,request);projected,baseline=_projection_selection(host,request,selected)
+    if selected_artwork_pending(host,(tid for playlist in projected for tid in playlist.effective_keys)):
+        raise SelectedExportWait('Saving selected artwork')
     data=capture_fences(host,projected);require_fences(data)
     ids=list(dict.fromkeys(key for p in projected for key in p.effective_keys))
     rows=effective_rows(host,ids)
@@ -407,6 +410,8 @@ def request_ipod_export(host,kind,dev,playlists,*,options=None,ready,failed):
         try:
             selected=_resolve(host,request);projected,_baseline=_projection_selection(host,request,selected)
             require_fences(capture_fences(host,projected))
+            if selected_artwork_pending(host,(tid for playlist in projected for tid in playlist.effective_keys)):
+                raise SelectedExportWait('Saving selected artwork')
         except SelectedExportWait as error:
             host._start_pulse(str(error));QTimer.singleShot(100,poll);return
         except Exception as error:reject(error);return

@@ -331,7 +331,8 @@ class LiveTagStore:
                 # the current source safely replaces an unavailable old backup.
                 self._backed_up = False
         self._guard()
-        with encrypted_backup(self.database) as source:
+        standalone_digest: list[str] = []
+        with encrypted_backup(self.database, standalone_digest=standalone_digest) as source:
             temp = self.root / 'baseline-new.db'
             if temp.exists() or temp.is_symlink():
                 raise RecoveryRequired('An unfinished baseline publication is preserved')
@@ -340,7 +341,7 @@ class LiveTagStore:
                 shutil.copyfileobj(src, dst, 1024 * 1024)
                 dst.flush()
                 os.fsync(dst.fileno())
-            sha = _file_sha(source)
+            sha = standalone_digest[0] if standalone_digest else _file_sha(source)
             if _file_sha(temp) != sha:
                 raise WriteProofError('The encrypted rekordbox backup did not verify')
             os.replace(temp, self.root / 'baseline.db')

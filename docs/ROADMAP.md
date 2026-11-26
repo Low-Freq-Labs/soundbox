@@ -44,6 +44,11 @@ mount/USB provenance. Observed writable FAT32 iTunesDB/signature profiles govern
 writer admission; remembered device/model labels do not grant permission.
 Generic USBs keep explicit selected-playlist CDJ export, with no automatic Sync
 status or idle catalog comparisons.
+An iPod also exposes that ordinary USB export role on the same volume, with
+independent playlist choices. Missing CDJ catalogs offer attachment-scoped setup;
+replacing a selected USB playlist asks for Overwrite. Both roles share physical
+busy/eject ownership. Multiple export targets require explicit selection, and
+ejecting the visible device selects a surviving neighbor.
 
 The installed iPod export update captures a durable selected generation while automatic
 metadata is paused or running, keeps routine metadata progress out of the footer,
@@ -54,7 +59,10 @@ delivered. The installed follow-up corrects stale hidden device caches,
 optional-association success popups, association loss across separate exports,
 Delete/re-export acceleration and metadata-only pending state. It
 offers Sync only for observed pending linked-playlist changes and avoids full
-payload reads to omit definite unsupported WAVs. Exact current source/
+payload reads to omit proved unsupported sources. Stock Export also includes
+its exact linked managed playlists in one captured operation, so exporting a
+new playlist finishes pending work without a separate Sync. Existing linked
+selections use catalog Sync and retained audio contracts. Exact current source/
 install/check status is in HANDOFF. The current
 new-copy iTunes codec profile remains narrower than Classic hardware support;
 AAC/ALAC/AIFF expansion and retained dual promotion are separate open work.

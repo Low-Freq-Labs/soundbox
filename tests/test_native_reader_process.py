@@ -94,6 +94,8 @@ class NativeReaderProcessTests(unittest.TestCase):
         second = self.reader.read_metadata(previous)
         self.assertEqual(second.tracks_by_id['1'].name, 'New native title')
         self.assertNotEqual(first.tracks_by_id['1'].name, second.tracks_by_id['1'].name)
+        self.assertNotEqual(first.tracks_by_id['1'].source_cue_revision,
+                            second.tracks_by_id['1'].source_cue_revision)
         self.assertEqual(second.tracks_by_id['1'].location_uri, first.tracks_by_id['1'].location_uri)
         self.assertIsNot(first.tracks_by_id['1'].source_cue_refs, second.tracks_by_id['1'].source_cue_refs)
 

@@ -2,6 +2,7 @@
 from dataclasses import replace
 import hashlib
 import io
+import json
 from pathlib import Path
 import struct
 import unittest
@@ -69,7 +70,20 @@ class StockPlaylistOrder(unittest.TestCase):
                 old_rows = _list(old[kind])[1]; new_rows = _list(new[kind])[1]
                 self.assertCountEqual(old_rows, new_rows)
                 self.assertEqual(old_rows[0], new_rows[0])  # Native master remains anchored.
-        result = commit_stock_playlist_order(plan)
+        write = DeviceSession.atomic_write
+        saved_before = []
+        def publish(session, path, data):
+            if Path(path).resolve() == self.db.resolve():
+                backups = list((self.root/'.soundbox/stock-ipod-recovery').glob('*/iTunesDB.before'))
+                self.assertEqual(len(backups), 1)
+                saved_before.append(backups[0].read_bytes())
+                self.assertEqual(saved_before[-1], original)
+                self.assertEqual((backups[0].parent/'Play Counts.before').read_bytes(), self.history)
+                self.assertEqual(self.db.read_bytes(), original)
+            return write(session, path, data)
+        with mock.patch.object(DeviceSession, 'atomic_write', publish):
+            result = commit_stock_playlist_order(plan)
+        self.assertEqual(saved_before, [original])
         parsed = parse_itunesdb(io.BytesIO(self.db.read_bytes()))
         self.assertEqual([row['Title'] for row in parsed['mhlp'] if not row.get('isMaster')], ['Other','Favorites'])
         self.assertEqual(get_ipod_tracks(parsed), get_ipod_tracks(parse_itunesdb(io.BytesIO(original))))
@@ -77,7 +91,12 @@ class StockPlaylistOrder(unittest.TestCase):
         self.assertEqual((result.copied_tracks,result.rewritten_tracks,result.deleted_media_files), (0,0,0))
         self.assertEqual(result.catalog_playlist_updates, 2)
         self.assertFalse((self.root/'iPod_Control/Music').exists())
-        self.assertEqual((result.recovery_directory/'iTunesDB.before').read_bytes(), original)
+        receipt = json.loads((result.recovery_directory/'plan.json').read_bytes())
+        self.assertEqual(receipt['transaction_state'], 'committed')
+        self.assertTrue(receipt['payload_retirement']['complete'])
+        self.assertEqual(receipt['payload_retirement']['retired_files'], 2)
+        self.assertEqual(receipt['payload_retirement']['retired_bytes'], len(original) + len(self.history))
+        self.assertEqual(list(result.recovery_directory.rglob('*.before')), [])
         self.assertFalse((result.recovery_directory/'Play Counts.consumed').exists())
         with self.assertRaisesRegex(stock_ipod.StockIpodError,'cannot enter composite rollback'):
             stock_ipod.rollback_committed_stock_ipod_sync(plan.sync_plan,result)

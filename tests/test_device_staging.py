@@ -12,6 +12,7 @@ from unittest import mock
 
 from soundbox import device_staging
 from soundbox import manifest
+from soundbox import sync
 from soundbox.cdj_transaction import CdjSession
 
 from soundbox.sync import DeviceSession
@@ -19,6 +20,42 @@ from soundbox.sync import clean_applefiles
 
 
 class DeviceStaging(unittest.TestCase):
+    def test_known_copy_digest_needs_one_source_read_and_independent_destination_proof(self):
+        with tempfile.TemporaryDirectory() as area:
+            root=Path(area).resolve();sources=root/'sources';sources.mkdir();target=root/'target';target.mkdir()
+            source=sources/'payload';source.write_bytes(b'captured bytes'*1000)
+            destination=target/'copied';session=DeviceSession(target,[source],create=False)
+            digest=hashlib.sha256(source.read_bytes()).hexdigest()
+            with mock.patch.object(sync,'_sha256',side_effect=AssertionError('Redundant source hash')):
+                session.atomic_copy(source,destination,expected_sha256=digest)
+            self.assertEqual(destination.read_bytes(),source.read_bytes())
+            with self.assertRaisesRegex(OSError,'verification'):
+                session.atomic_copy(source,destination,expected_sha256='0'*64)
+            self.assertEqual(destination.read_bytes(),source.read_bytes())
+            self.assertFalse(list(target.glob('*.sbpart')))
+
+    def test_source_replacement_or_changed_copy_blocks_publication_and_preserves_destination(self):
+        with tempfile.TemporaryDirectory() as area:
+            root=Path(area).resolve();sources=root/'sources';sources.mkdir();target=root/'target';target.mkdir()
+            source=sources/'payload';source.write_bytes(b'captured bytes'*1000)
+            destination=target/'copied';destination.write_bytes(b'keep old payload')
+            session=DeviceSession(target,[source],create=False)
+            digest=hashlib.sha256(source.read_bytes()).hexdigest();copy=sync.copy_stream
+            def replace_after_copy(input_file,output):
+                copy(input_file,output)
+                replacement=source.with_suffix('.replacement');replacement.write_bytes(source.read_bytes())
+                replacement.replace(source)
+            with mock.patch.object(sync,'copy_stream',side_effect=replace_after_copy):
+                with self.assertRaisesRegex(OSError,'Source payload changed'):
+                    session.atomic_copy(source,destination,expected_sha256=digest)
+            self.assertEqual(destination.read_bytes(),b'keep old payload')
+            def corrupt_copy(_source,output):output.write(b'wrong copied bytes')
+            with mock.patch.object(sync,'copy_stream',side_effect=corrupt_copy):
+                with self.assertRaisesRegex(OSError,'verification'):
+                    session.atomic_copy(source,destination,expected_sha256=digest)
+            self.assertEqual(destination.read_bytes(),b'keep old payload')
+            self.assertFalse(list(target.glob('*.sbpart')))
+
     @contextmanager
     def allocation_identity(self):
         """Model the FD and name transition measured on a real FAT32 image."""

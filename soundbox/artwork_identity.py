@@ -81,8 +81,10 @@ class BoundArtCache(ArtCache):
         except KeyError:
             raise ValueError('Artwork song is outside the captured library') from None
 
+    @_art_read
     def for_library(self, library):
         if (not self._retired and self._generation == self._area.generation
+                and self._revision == self._area.art_revision
                 and source_identity(library) == self.source_identity
                 and _bindings(library) == self._bindings):
             return self
@@ -91,6 +93,13 @@ class BoundArtCache(ArtCache):
                 and current.source_identity == self.source_identity):
             current._scope_owner = self.scope_owner
         return current
+
+    @_art_read
+    def observation_view(self, library=None):
+        if library is not None and (source_identity(library) != self.source_identity
+                or _bindings(library) != self._bindings):
+            raise ValueError('Artwork observation belongs to a different source or song binding')
+        return super().observation_view(library)
 
     @_art_read
     def handoff_selection(self, previous: ArtworkSelection) -> ArtworkSelection | None:

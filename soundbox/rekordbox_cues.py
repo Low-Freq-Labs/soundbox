@@ -6,15 +6,20 @@ Inputs are raw snapshot rows, not the lossy display/analysis cue dictionaries.
 """
 from __future__ import annotations
 
+from collections import OrderedDict
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
+from math import isfinite
 import re
+from struct import pack, unpack
+from sys import getsizeof
+from threading import Lock
 from typing import Any, Literal
 from uuid import UUID
 
-from .rekordbox_write import ConflictError, WriteProofError, _cell, _digest
+from .rekordbox_write import ConflictError, WriteProofError, _digest
 
 Row = dict[str, Any]
 _CUE_COLUMNS = (
@@ -33,6 +38,94 @@ _AGGREGATE_COLUMNS = (
 _INTERNAL = frozenset(('rb_data_status', 'rb_local_data_status',
                        'rb_local_deleted', 'rb_local_synced', 'usn', 'rb_local_usn'))
 _FORMATS = frozenset((1, 11, 12))  # native MP3, WAV, AIFF references only
+_REVISION_SCALARS = (str, int, bytes, type(None))
+
+
+class _RevisionCache:
+    """Bounded pure results; keys contain every freshly observed native cell."""
+
+    def __init__(self, entries=8192, byte_limit=96 * 1024 * 1024,
+                 entry_limit=128 * 1024):
+        self.entries = entries
+        self.byte_limit = byte_limit
+        self.entry_limit = entry_limit
+        self._values: OrderedDict[tuple, tuple[str, int]] = OrderedDict()
+        self._bytes = 0
+        self._lock = Lock()
+
+    def get(self, key) -> str | None:
+        with self._lock:
+            found = self._values.get(key)
+            if found is not None:
+                self._values.move_to_end(key)
+                return found[0]
+        return None
+
+    def remember(self, key, revision):
+        def row_size(row):
+            return (getsizeof(row) + getsizeof(row[0]) + getsizeof(row[1])
+                    + sum(map(getsizeof, row[0])) + sum(map(getsizeof, row[1]))
+                    + sum(getsizeof(value[0]) for value in row[1] if type(value) is tuple))
+        # Conservatively count shared strings/scalars repeatedly, including
+        # OrderedDict bookkeeping. Oversized opaque rows remain uncached.
+        rows = (key[0], *key[1], *((key[2],) if key[2] is not None else ()))
+        weight = getsizeof(key) + getsizeof(key[1]) + sum(map(row_size, rows)) + getsizeof(revision) + 256
+        if not self.entries or weight > min(self.entry_limit, self.byte_limit):
+            return
+        with self._lock:
+            old = self._values.pop(key, None)
+            if old is not None:
+                self._bytes -= old[1]
+            self._values[key] = (revision, weight)
+            self._bytes += weight
+            while len(self._values) > self.entries or self._bytes > self.byte_limit:
+                _, (_, removed) = self._values.popitem(last=False)
+                self._bytes -= removed
+
+
+_REVISION_CACHE = _RevisionCache()
+
+
+def _revision_row_key(row):
+    if type(row) is not dict:
+        return None
+    keys = tuple(row)
+    if any(type(key) is not str for key in keys):
+        return None
+    values = []
+    for value in row.values():
+        if type(value) in _REVISION_SCALARS:
+            values.append(value)
+        elif type(value) is float and isfinite(value):
+            # Tuple inputs are never admitted; this marker cannot collide with
+            # another SQLite cell. IEEE bytes distinguish signed zero and int.
+            values.append((pack('>d', value),))
+        else:
+            return None
+    return keys, tuple(values)
+
+
+def _revision_key_row(key):
+    return dict(zip(key[0], (unpack('>d', value[0])[0] if type(value) is tuple else value
+                             for value in key[1])))
+
+
+def _revision_cells(row):
+    if row is None:
+        return None
+    encoded = None
+    for key, value in row.items():
+        if isinstance(value, bytes):
+            if encoded is None:
+                encoded = dict(row)
+            encoded[key] = {'blob': value.hex()}
+    return row if encoded is None else encoded
+
+
+def _revision_digest(track, cues, aggregate) -> str:
+    return _digest({'track': _revision_cells(track),
+                    'cues': [_revision_cells(row) for row in cues],
+                    'aggregate': _revision_cells(aggregate)})
 
 
 @dataclass(frozen=True)
@@ -44,12 +137,30 @@ class CueSnapshot:
     @property
     def revision(self) -> str:
         """Includes opaque fields and all cues, independent of SQL row order."""
-        def cells(row):
-            return {k: _cell(v) for k, v in row.items()} if row is not None else None
         try:
-            return _digest({'track': cells(self.track),
-                            'cues': [cells(r) for r in sorted(self.cues, key=lambda r: r['ID'])],
-                            'aggregate': cells(self.aggregate)})
+            track = _revision_row_key(self.track)
+            cue_rows = tuple(_revision_row_key(row) for row in self.cues)
+            aggregate = None if self.aggregate is None else _revision_row_key(self.aggregate)
+            if (track is None or any(row is None for row in cue_rows)
+                    or (self.aggregate is not None and aggregate is None)):
+                return _revision_digest(self.track, sorted(self.cues, key=lambda r: r['ID']),
+                                        self.aggregate)
+            if any(type(row[1][row[0].index('ID')]) is not str for row in cue_rows):
+                return _revision_digest(self.track, sorted(self.cues, key=lambda r: r['ID']),
+                                        self.aggregate)
+            cue_rows = tuple(sorted(cue_rows, key=lambda row: row[1][row[0].index('ID')]))
+            key = track, cue_rows, aggregate
+            found = _REVISION_CACHE.get(key)
+            if found is not None:
+                return found
+            # Compute from the immutable captured cells, so later input mutation
+            # cannot publish a digest under an earlier key. No source observation,
+            # authority or SQL read is retained or bypassed by this pure reuse.
+            revision = _revision_digest(_revision_key_row(track),
+                                        [_revision_key_row(row) for row in cue_rows],
+                                        None if aggregate is None else _revision_key_row(aggregate))
+            _REVISION_CACHE.remember(key, revision)
+            return revision
         except (KeyError, TypeError, ValueError) as exc:
             raise WriteProofError('Invalid cue snapshot') from exc
 

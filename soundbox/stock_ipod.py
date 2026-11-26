@@ -59,7 +59,9 @@ from .library import Library, Playlist, Track
 from .paths import is_within
 from contextlib import ExitStack
 from .source_acquisition import SourceContract, acquire_source
-from .transaction_outcome import record_outcome
+from .source_read_retry import is_cloud_storage_source, ProviderReadRetry
+from .transaction_outcome import (RecoveryPayloads, begin_recovery, record_outcome,
+                                  resume_completed_payload_retirement)
 from .operation_control import (
     checkpoint, cancellation_disabled, CommittedOperationError, OperationCancelled,
     phase_progress, record_metric,
@@ -97,7 +99,8 @@ from .ipod_export_witness import (build_export_witness, rebase_export_witness,
                                   stored_metadata, verify_export_witness)
 from .stock_ipod_playlist_binding import PlaylistBinding, source_playlist_identity
 from .playlist_names import normalize_playlist_name, unique_playlist_names
-from .stock_plan_observations import NegativeSourceOmissions, PlanTimings
+from .stock_plan_observations import (NegativeSourceOmissions, PlanTimings, source_epoch,
+                                      STOCK_SOURCE_PROFILE as _STOCK_SOURCE_PROFILE)
 from .stock_ipod_format import StockWriteFormat, inspect_stock_write_format, stock_renderer_capabilities, _artwork_formats
 from .stock_ipod_signing import verified_stock_signing_context, sign_stock_database
 from .stock_ipod_native_preserve import preserve_native_catalog
@@ -109,7 +112,6 @@ SUPPORTED_SUFFIXES = STOCK_AUDIO_SUFFIXES
 SUPPORTED_MODELS = {
     "MA446": ("iPod Video", "5.5th Gen"),
 }
-_STOCK_SOURCE_PROFILE = "ma446-mp3-pcm16-stereo-44100-v1"
 _WAV_OMISSIONS = NegativeSourceOmissions()
 
 
@@ -287,6 +289,8 @@ class StockIpodSyncPlan:
     captured_export: bool = False
     catalog_notice: str = ""
     preserve_play_counts: bool = False
+    noop_shadow_before: StockIpodShadow | None = field(default=None, repr=False, compare=False)
+    noop_source_epochs: tuple[tuple[Path, tuple[int, ...]], ...] | None = field(default=None, repr=False, compare=False)
 
     @property
     def bytes_to_copy(self) -> int:
@@ -398,6 +402,7 @@ class StockIpodCommitResult:
     catalog_artwork_updates: int = 0
     catalog_witness: StockCatalogWitness | None = field(default=None, repr=False, compare=False)
     catalog_notice: str = ""
+    recovery_payloads: RecoveryPayloads | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass(frozen=True)
@@ -613,87 +618,173 @@ def _stock_wav_omission(subtype: str, rate: int, channels: int) -> str:
     )
 
 
-def _stock_wav_header_omission(path: Path) -> str | None:
-    """Reject a definite unsupported PCM/float WAV without reading its audio.
+def _negative_stock_sources(cache_root: Path | None, target: Path) -> NegativeSourceOmissions:
+    if cache_root is None:
+        return _WAV_OMISSIONS
+    resolved = cache_root.expanduser().resolve()
+    if resolved.is_relative_to(target) or target.is_relative_to(resolved):
+        raise StockIpodError('The disposable stock source cache must be outside the iPod target')
+    return NegativeSourceOmissions(root=cache_root, profile=_STOCK_SOURCE_PROFILE)
 
-    This never admits a source or supplies a content proof. Compatible, unknown,
-    malformed and unstable headers use the ordinary full acquisition path.
-    """
-    if path.suffix.lower() != ".wav":
-        return None
 
-    def epoch(observed: os.stat_result) -> tuple[int, ...]:
-        return (observed.st_dev, observed.st_ino, observed.st_mode,
-                observed.st_nlink, observed.st_size, observed.st_mtime_ns,
-                observed.st_ctime_ns)
+def _wav_header_fallback(reason: str) -> str | None:
+    record_metric('stock_wav_fallback_' + reason)
+    return None
 
-    try:
+
+def _read_stock_wav_header(source: Any, source_size: int) -> str | None:
+    """Read only bounded known RIFF/RF64 framing; never admit an audio file."""
+    header = source.read(12)
+    if len(header) != 12 or header[8:] != b"WAVE" or header[:4] not in {b"RIFF", b"RF64"}:
+        return _wav_header_fallback('container')
+    rf64 = header[:4] == b'RF64'
+    data_size = sample_count = None
+    if rf64:
+        # RF64's mandatory first ds64 replaces sentinel RIFF/data sizes. Only
+        # its complete no-table form is understood here; other framing captures.
+        if header[4:8] != b'\xff' * 4 or source.read(8) != b'ds64' + struct.pack('<I', 28):
+            return _wav_header_fallback('framing')
+        fields = source.read(28)
+        if len(fields) != 28:
+            return _wav_header_fallback('framing')
+        riff_size, data_size, sample_count, table_count = struct.unpack('<QQQI', fields)
+        if table_count or data_size > source_size:
+            return _wav_header_fallback('framing')
+        end = riff_size + 8
+    else:
+        end = struct.unpack_from('<I', header, 4)[0] + 8
+    if not max(36, source.tell()) <= end <= source_size:
+        return _wav_header_fallback('framing')
+    for _ in range(128):
         checkpoint()
-        if path.resolve(strict=True) != path:
-            _WAV_OMISSIONS.discard(path)
+        if source.tell() + 8 > end:
+            return _wav_header_fallback('framing')
+        chunk = source.read(8)
+        if len(chunk) != 8:
+            return _wav_header_fallback('framing')
+        kind, size = struct.unpack('<4sI', chunk)
+        next_chunk = source.tell() + size + size % 2
+        if next_chunk > end:
+            return _wav_header_fallback('framing')
+        if kind == b'fmt ':
+            if size < 16:
+                return _wav_header_fallback('framing')
+            fields = source.read(min(size, 40))
+            if len(fields) != min(size, 40):
+                return _wav_header_fallback('framing')
+            tag, channels, rate, byte_rate, align, bits = struct.unpack_from('<HHIIHH', fields)
+            extensible = tag == 0xFFFE
+            if extensible:
+                if size != 40 or len(fields) != 40:
+                    return _wav_header_fallback('format')
+                extension_size, valid_bits, channel_mask = struct.unpack_from('<HHI', fields, 16)
+                tag = struct.unpack_from('<I', fields, 24)[0]
+                if (extension_size != 22 or tag not in {1, 3}
+                        or fields[28:40] != bytes.fromhex('00001000800000aa00389b71')
+                        or not 0 < valid_bits <= bits
+                        or tag == 3 and valid_bits != bits
+                        or channel_mask and channel_mask.bit_count() != channels):
+                    return _wav_header_fallback('format')
+            subtypes = ({8: 'PCM_U8', 16: 'PCM_16', 24: 'PCM_24', 32: 'PCM_32'}
+                        if tag == 1 else {32: 'FLOAT', 64: 'DOUBLE'} if tag == 3 else {})
+            subtype = subtypes.get(bits)
+            if (subtype is None or not 1 <= channels <= 32 or not 1 <= rate <= 768_000
+                    or align != channels * (bits // 8) or byte_rate != rate * align):
+                return _wav_header_fallback('format')
+            if rf64 and (data_size is None or sample_count is None
+                         or data_size % align or sample_count != data_size // align
+                         or source.tell() + data_size > end):
+                return _wav_header_fallback('framing')
+            if rf64 or extensible or subtype != 'PCM_16' or rate != 44_100 or channels != 2:
+                return _stock_wav_omission(subtype, rate, channels)
+            record_metric('stock_wav_header_compatible')
             return None
-        before = path.lstat()
-        if not stat_mod.S_ISREG(before.st_mode):
-            _WAV_OMISSIONS.discard(path)
-            return None
-        previous = _WAV_OMISSIONS.get(path, epoch(before))
-        if previous:
-            if epoch(path.lstat()) != epoch(before) or path.resolve(strict=True) != path:
-                _WAV_OMISSIONS.discard(path)
-                return None
-            checkpoint()
-            record_metric('stock_wav_omission_memo_hits')
-            return previous
-        flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
-        record_metric('stock_wav_header_probes')
-        with os.fdopen(os.open(path, flags), "rb", buffering=0) as source:
-            if epoch(os.fstat(source.fileno())) != epoch(before):
-                return None
-            header = source.read(12)
-            if len(header) != 12 or header[:4] != b"RIFF" or header[8:] != b"WAVE":
-                return None
-            end = struct.unpack_from("<I", header, 4)[0] + 8
-            if not 36 <= end <= before.st_size:
-                return None
-            reason = None
-            for _ in range(128):
-                checkpoint()
-                if source.tell() + 8 > end:
-                    return None
-                chunk = source.read(8)
-                if len(chunk) != 8:
-                    return None
-                kind, size = struct.unpack("<4sI", chunk)
-                next_chunk = source.tell() + size + size % 2
-                if next_chunk > end:
-                    return None
-                if kind == b"fmt ":
-                    if size < 16:
-                        return None
-                    fields = source.read(min(size, 40))
-                    if len(fields) != min(size, 40):
-                        return None
-                    tag, channels, rate, byte_rate, align, bits = struct.unpack_from("<HHIIHH", fields)
-                    subtypes = ({8: "PCM_U8", 16: "PCM_16", 24: "PCM_24", 32: "PCM_32"}
-                                if tag == 1 else {32: "FLOAT", 64: "DOUBLE"} if tag == 3 else {})
-                    subtype = subtypes.get(bits)
-                    if (subtype is None or not 1 <= channels <= 32 or not 1 <= rate <= 768_000
-                            or align != channels * (bits // 8) or byte_rate != rate * align):
-                        return None
-                    if subtype != "PCM_16" or rate != 44_100 or channels != 2:
-                        reason = _stock_wav_omission(subtype, rate, channels)
-                    break
-                source.seek(next_chunk)
-            if (epoch(os.fstat(source.fileno())) != epoch(before)
-                    or epoch(path.lstat()) != epoch(before)
-                    or path.resolve(strict=True) != path):
-                return None
-            checkpoint()
-            if reason:_WAV_OMISSIONS.remember(path, epoch(before), reason)
-            return reason
-    except (OSError, ValueError, struct.error):
-        _WAV_OMISSIONS.discard(path)
+        source.seek(next_chunk)
+    return _wav_header_fallback('chunk_budget')
+
+
+def _stock_wav_header_omission(path: Path, *,
+        omissions: NegativeSourceOmissions | None = None) -> str | None:
+    """Reject definite stock-only WAV incompatibility with bounded fresh reads.
+
+    A retained negative is exact-epoch/profile bound. Compatible, unknown and
+    malformed headers still use full acquisition. Provider readiness and a
+    ctime-only hydration transition retry only this small header, not the audio.
+    """
+    if path.suffix.lower() != '.wav':
         return None
+    memo = omissions if omissions is not None else _WAV_OMISSIONS
+    readiness = ProviderReadRetry()
+    unstable = 0
+    nonblocking = True
+    while True:
+        try:
+            checkpoint()
+            if path.resolve(strict=True) != path:
+                memo.discard(path)
+                return _wav_header_fallback('identity')
+            before = path.lstat()
+            if not stat_mod.S_ISREG(before.st_mode):
+                memo.discard(path)
+                return _wav_header_fallback('identity')
+            previous = memo.get(path, source_epoch(before))
+            if previous:
+                if source_epoch(path.lstat()) != source_epoch(before) or path.resolve(strict=True) != path:
+                    memo.discard(path)
+                    return _wav_header_fallback('unstable')
+                checkpoint()
+                record_metric('stock_wav_omission_memo_hits')
+                return previous
+            record_metric('stock_wav_header_probes')
+            flags = os.O_RDONLY | os.O_NOFOLLOW | (os.O_NONBLOCK if nonblocking else 0)
+            with os.fdopen(os.open(path, flags), 'rb', buffering=0) as source:
+                opened = os.fstat(source.fileno())
+                reason = _read_stock_wav_header(source, before.st_size)
+                closed = os.fstat(source.fileno())
+            after = path.lstat()
+            if path.resolve(strict=True) != path:
+                memo.discard(path)
+                return _wav_header_fallback('identity')
+            epochs = [source_epoch(row) for row in (before, opened, closed, after)]
+            if len(set(epochs)) != 1:
+                # Retry only a metadata hydration transition on the SAME file.
+                # Replacement, size/mtime/mode/link changes retain full capture.
+                if not unstable and all(row[:-1] == epochs[0][:-1] for row in epochs):
+                    unstable += 1
+                    record_metric('stock_wav_header_stability_retries')
+                    continue
+                memo.discard(path)
+                return _wav_header_fallback('unstable')
+            checkpoint()
+            if reason:
+                memo.remember(path, source_epoch(before), reason)
+            return reason
+        except OSError as exc:
+            memo.discard(path)
+            if readiness.wait_after(exc, path):
+                # Some providers hydrate only on a blocking open. The retry
+                # still reads the same bounded header, never the audio payload.
+                nonblocking = False
+                record_metric('stock_wav_header_readiness_retries')
+                continue
+            return _wav_header_fallback('io')
+        except (ValueError, struct.error):
+            memo.discard(path)
+            return _wav_header_fallback('framing')
+
+
+def _remember_stock_snapshot_omission(path: Path, observation: os.stat_result,
+        reason: str, memo: NegativeSourceOmissions) -> None:
+    # Full acquisition may discover a definite format unsupported by the header
+    # reader. Unreadable/transient errors are not format facts (memo validates).
+    if path.suffix.lower() not in {'.wav', '.mp3'} or not reason:
+        return
+    try:
+        if (path.resolve(strict=True) == path and stat_mod.S_ISREG(observation.st_mode)
+                and source_epoch(path.lstat()) == source_epoch(observation)):
+            memo.remember(path, source_epoch(observation), reason)
+    except OSError:
+        pass
 
 
 def _stock_media_omission(path: Path) -> str:
@@ -1348,6 +1439,7 @@ def inspect_stock_ipod_sync_status(
     native_capture: StockIpodNativeCapture | None = None,
     catalog_witness: StockCatalogWitness | None = None,
     display_rows: Mapping[str, Mapping] | None = None,
+    art_cache: Any | None = None,
 ) -> StockIpodSyncStatus:
     """Compare one mounted iPod with its Mac shadow without writing either."""
     from collections import Counter
@@ -1357,9 +1449,9 @@ def inspect_stock_ipod_sync_status(
     observed_sha = native_capture.database_sha256
     observed_art = native_capture.artwork_database_sha256 if native_capture.includes_artwork else None
 
-    def result(state, detail, local_changes=0, committed_at='') -> StockIpodSyncStatus:
+    def result(state, detail, local_changes=0, committed_at='', change_summary=()) -> StockIpodSyncStatus:
         return StockIpodSyncStatus(state, detail, local_changes, committed_at, observed_sha, observed_art,
-                                   native_capture.play_counts_sha256)
+                                   native_capture.play_counts_sha256, change_summary)
 
     shadow = shadow_store.load(identity_key)
     if shadow is None:
@@ -1443,15 +1535,28 @@ def inspect_stock_ipod_sync_status(
         ):
             changed.add(f"source:{track_id or source_text}")
     from .stock_ipod_observation import linked_artwork_matches
+    current_artwork_keys = {}
+    if (catalog_witness is not None and catalog_witness.device_key == identity_key
+            and catalog_witness.source == (str(library.source), library.source_kind, library.source_library_id)
+            and catalog_witness.database_sha256 == observed_sha
+            and catalog_witness.artwork_database_sha256 == observed_art):
+        current_artwork_keys = {row.local_id: row.artwork_key for row in catalog_witness.rows
+                                if row.artwork_key}
     artwork_pending = observed is not None and not linked_artwork_matches(observed, shadow, native_capture)
+    if artwork_pending and observed is not None and all(str(row.get('track_id') or '') in current_artwork_keys
+            for dbid, row in shadow.artwork.items() if int(dbid) in observed.dbids):
+        artwork_pending = False  # Exact-current catalog saves supersede an older fast shadow.
     for dbid, row in shadow.artwork.items():
         if row.get('track_id') and str(row['track_id']) not in linked_ids:
             continue
         if observed is not None:
             if int(dbid) not in observed.dbids:
                 continue
-            if observed.artwork_links.get(int(dbid)) != int(row.get('image_id') or 0):
+            if (observed.artwork_links.get(int(dbid)) != int(row.get('image_id') or 0)
+                    and str(row.get('track_id') or '') not in current_artwork_keys):
                 artwork_pending = True
+        if art_cache is not None:
+            continue
         art_path = str(row.get("art_path") or "")
         if not art_path:
             continue
@@ -1465,6 +1570,20 @@ def inspect_stock_ipod_sync_status(
             or stat.st_mtime_ns != int(row.get("art_mtime_ns") or -1)
         ):
             changed.add(f"art:{row.get('track_id') or art_path}")
+    if art_cache is not None:
+        from .artwork_observation import stock_changes
+        # Source playlist baselines also retain deliberately omitted songs.
+        # Only actual exported correspondence creates a stock-art obligation;
+        # full source membership drift remains compared independently above.
+        exported_artwork_ids = {str(row.get('track_id') or '') for row in shadow.sources.values()}
+        if (catalog_witness is not None and catalog_witness.device_key == identity_key
+                and catalog_witness.source == (str(library.source), library.source_kind, library.source_library_id)):
+            exported_artwork_ids.update(local for binding in catalog_witness.bindings
+                                        for local, _dbid in binding.members)
+        artwork_ids = linked_ids & exported_artwork_ids
+        changed.update(stock_changes(shadow, library,
+            artwork_ids if observed is None else artwork_ids & observed.local_ids,
+            native_capture, art_cache, current_artwork_keys))
     # Playback belongs to the iPod. Its captured digest refreshes SoundBox's
     # read-only view; history is merged only by an explicit guarded write.
     metadata_pending = artwork_pending
@@ -1530,11 +1649,15 @@ def inspect_stock_ipod_sync_status(
         except (ValueError, TypeError, KeyError, OverflowError):
             metadata_pending = True
     if changed:
+        categories = {'source:': 'source', 'art:': 'artwork', 'metadata:': 'song_details'}
+        summary = Counter(next((kind for prefix, kind in categories.items() if key.startswith(prefix)),
+                               'playlist') for key in changed)
         return result(
             "local_changes",
             f"{len(changed)} library change(s) ready to plan",
             len(changed),
             shadow.committed_at,
+            tuple(sorted(summary.items())),
         )
     if metadata_pending:
         return result('comparison_pending', 'Song details are not ready for comparison',
@@ -1565,6 +1688,7 @@ def plan_stock_ipod_catalog_update(
     usb_family: str = "",
     incremental: bool = False,
     firewire_guid: str = '',
+    omission_cache_root: Path | None = None,
 ) -> StockIpodSyncPlan:
     """Sync cached catalog associations; acquire only verified new additions.
 
@@ -1576,6 +1700,7 @@ def plan_stock_ipod_catalog_update(
     from .export_snapshot import source_paths
     planning = _StockProgress('iTunes planning', 4, 'Reading iPod library')
     root = Path(target).expanduser().resolve(strict=True)
+    negative_sources = _negative_stock_sources(omission_cache_root, root)
     guard_paths = source_paths(library)
     session = DeviceSession(root, list(guard_paths), create=False)
     if str(filesystem or "").lower() not in {"msdos", "fat32", "fat"}:
@@ -1719,7 +1844,8 @@ def plan_stock_ipod_catalog_update(
                 omissions.append(StockMediaOmission(
                     local, new_track.name, source, _stock_media_omission(source)))
                 continue
-            header_omission = _stock_wav_header_omission(source)
+            header_omission = (negative_sources.current(source) if source.suffix.lower() == '.mp3'
+                               else _stock_wav_header_omission(source, omissions=negative_sources))
             if header_omission:
                 omissions.append(StockMediaOmission(local, new_track.name, source, header_omission))
                 continue
@@ -1727,6 +1853,7 @@ def plan_stock_ipod_catalog_update(
                     Path(tempfile.gettempdir()) / 'soundbox-source-staging') as acquired:
                 omission = _stock_media_omission(acquired.path)
                 if omission:
+                    _remember_stock_snapshot_omission(source, acquired.observation, omission, negative_sources)
                     omissions.append(StockMediaOmission(local, new_track.name, source, omission))
                     continue
                 technical = _technical_audio(acquired.path)
@@ -1756,6 +1883,7 @@ def plan_stock_ipod_catalog_update(
                 if local in added_matches)),
             unmatched_track_ids=tuple(local for local in row.unmatched_track_ids if local not in added_matches))
             if row.device_playlist_id in membership_updates else row for row in recognized)
+    negative_sources.flush()
     prepared = {}
     for (local, _dbid), match in matched.items():
         checkpoint()
@@ -2010,6 +2138,7 @@ def plan_stock_ipod_sync(
     display_rows: Mapping[str, Mapping] | None = None,
     catalog_witness: StockCatalogWitness | None = None,
     extra_playlists: tuple[Playlist, ...] = (),
+    omission_cache_root: Path | None = None,
 ) -> StockIpodSyncPlan:
     """Render and validate a complete stock-iPod sync without target writes."""
     timings = PlanTimings('stock')
@@ -2018,6 +2147,7 @@ def plan_stock_ipod_sync(
         sum(len(library.resolve(playlist)) for playlist in selected) + 4,
         'Reading iPod library')
     root = Path(target).expanduser().resolve(strict=True)
+    negative_sources = _negative_stock_sources(omission_cache_root, root)
     guard_paths = tuple(getattr(library, 'export_source_paths', ()))
     planning_session = DeviceSession(root, list(guard_paths), create=False)
     if str(filesystem or "").lower() not in {"msdos", "fat32", "fat"}:
@@ -2156,6 +2286,7 @@ def plan_stock_ipod_sync(
     captured_hashes: dict[Path, str] = {}
     captured_technical: dict[Path, tuple[int, int, int]] = {}
     captured_observations: dict[Path, os.stat_result] = {}
+    retained_source_contracts: dict[Path, dict] = {}
 
     def capture_properties(path: Path, planned=None) -> None:
         with acquire_source(SourceContract(
@@ -2164,6 +2295,7 @@ def plan_stock_ipod_sync(
                 (rockbox_media_cache.root if rockbox_media_cache else
                  Path(tempfile.gettempdir()) / "soundbox-source-staging")) as snapshot:
             compatibility[path] = _stock_media_omission(snapshot.path)
+            _remember_stock_snapshot_omission(path, snapshot.observation, compatibility[path], negative_sources)
             captured_hashes[path] = snapshot.sha256
             captured_observations[path] = snapshot.observation
             if not compatibility[path]:
@@ -2185,23 +2317,33 @@ def plan_stock_ipod_sync(
                         if shadow is not None and not allow_dual_boot and planned is None else None)
             observed = path.stat() if retained else None
             epoch = ([observed.st_dev, observed.st_ino, observed.st_size,
-                      observed.st_mtime_ns, observed.st_ctime_ns] if observed else None)
+                      observed.st_mtime_ns, observed.st_ctime_ns] if observed else [])
             if (retained and observed is not None
                     and retained.get("stock_media_profile") == _STOCK_SOURCE_PROFILE
-                    and retained.get("source_epoch") == epoch
+                    and isinstance(retained.get("source_epoch"), list)
+                    and len(retained["source_epoch"]) == 5
+                    and retained["source_epoch"][:4] == epoch[:4]
+                    and (retained["source_epoch"] == epoch or is_cloud_storage_source(path))
+                    and retained.get("source_size") == epoch[2]
+                    and retained.get("mtime_ns") == epoch[3]
                     and len(str(retained.get("source_sha256") or "")) == 64
                     and isinstance(retained.get("stock_technical"), list)
                     and len(retained["stock_technical"]) == 3
                     and all(isinstance(value, int) and value >= 0
                             for value in retained["stock_technical"])):
-                # This is the old accepted contract, not a new proof. Keep its
-                # exact epoch; never bless a changed inode/ctime with old bytes.
+                # Normal Sync retains committed File Provider inventory across
+                # ctime-only churn. This does not prove today's
+                # source bytes: carry the old epoch verbatim, including ctime.
+                # New paths/inodes, size or mtime changes still acquire bytes.
                 compatibility[path] = ""
                 captured_hashes[path] = str(retained["source_sha256"])
-                captured_observations[path] = observed
+                retained_source_contracts[path] = retained
                 technical = retained["stock_technical"]
                 captured_technical[path] = (int(technical[0]), int(technical[1]),
                                             int(technical[2]))
+                record_metric('stock_retained_source_contracts')
+                if retained["source_epoch"] != epoch:
+                    record_metric('stock_retained_ctime_changes')
             elif (allow_dual_boot and path.suffix.lower() in {".mp3", ".wav"}
                     and isinstance(planned, PlannedRockboxMedia)
                     and planned.source_sha256_verified
@@ -2220,7 +2362,8 @@ def plan_stock_ipod_sync(
                 if planned.stock_technical is not None:
                     captured_technical[path] = planned.stock_technical
             else:
-                header_omission = _stock_wav_header_omission(path)
+                header_omission = (negative_sources.current(path) if path.suffix.lower() == '.mp3'
+                                   else _stock_wav_header_omission(path, omissions=negative_sources))
                 if header_omission:
                     compatibility[path] = header_omission
                 else:
@@ -2296,6 +2439,7 @@ def plan_stock_ipod_sync(
                             f"{payload_omission}")
                     resolved.append((track, source, payload))
             planning.advance(label=track.name)
+    negative_sources.flush()
     if missing:
         raise StockIpodError(
             f"{len(missing)} selected source track(s) are missing; first: {missing[0]}")
@@ -2388,7 +2532,11 @@ def plan_stock_ipod_sync(
         )
         for source in sources
     }
-    existing_by_content: dict[tuple[int, str, str], int] = {}
+    # Equal bytes can belong to several distinct source identities. Retain all
+    # eligible native records so claiming one cannot manufacture another copy
+    # while an identical, unclaimed record is already indexed.
+    existing_by_content: dict[tuple[int, str, str], list[int]] = {}
+    existing_content_ids: dict[tuple[int, str, str], set[int]] = {}
     managed_sources: dict[Path, tuple[int, Path, int, str]] = {}
     managed_source_dbids: set[int] = set()
     parsed_by_dbid = {
@@ -2454,22 +2602,40 @@ def plan_stock_ipod_sync(
     desired_content_keys = original_content_keys | payload_content_keys
     wanted_shapes = {
         (size, suffix) for size, suffix, _sha256_value in desired_content_keys}
+    shadow_sources_by_dbid: dict[int, list[Path]] = {}
+    shadow_dbids_by_source: dict[Path, int] = {}
+    reserved_dbids: dict[int, Path] = {}
+
+    def remember_content(key: tuple[int,str,str], dbid: int) -> None:
+        identities=existing_content_ids.setdefault(key,set())
+        if dbid not in identities:
+            identities.add(dbid)
+            existing_by_content.setdefault(key,[]).append(dbid)
+
     if shadow is not None:
         live_dbids = {int(raw.get("dbid") or 0) for raw in parsed_tracks}
-        for row in shadow.sources.values():
+        for source_text,row in shadow.sources.items():
             try:
                 dbid = int(row.get("dbid") or 0)
                 size = int(row.get("size") or -1)
                 suffix = str(row.get("suffix") or "").lower()
                 sha256 = str(row.get("sha256") or "")
+                if dbid in managed_source_dbids or (size,suffix) not in wanted_shapes:
+                    continue
                 relative = Path(str(row.get("device_path") or ""))
                 landed = root / relative
+                native = parsed_by_dbid.get(dbid)
+                candidate_location = _location_path(root,str((native or {}).get('location') or ''))
                 if (
-                    dbid in live_dbids and (size, suffix) in wanted_shapes
+                    dbid in live_dbids and candidate_location==landed
                     and len(sha256) == 64 and landed.is_file()
                     and landed.stat().st_size == size
                 ):
-                    existing_by_content[(size, suffix, sha256)] = dbid
+                    source=Path(source_text)
+                    shadow_sources_by_dbid.setdefault(dbid,[]).append(source)
+                    shadow_dbids_by_source[source]=dbid
+                    if (size,suffix) in wanted_shapes:
+                        remember_content((size,suffix,sha256),dbid)
             except (OSError, TypeError, ValueError):
                 continue
         # A valid shadow only knows local sources selected in earlier SoundBox
@@ -2478,11 +2644,27 @@ def plan_stock_ipod_sync(
         # size/suffix candidates against live bytes before ever planning a copy.
         # This preserves the fast path for known songs without duplicating an
         # older playlist's audio after a partial shadow bootstrap.
-        unproven = desired_content_keys - set(existing_by_content)
+        # A selected source keeps its exact saved native association. Other
+        # sources cannot borrow that record merely because their bytes match.
+        # Historical shared associations retain the first selected owner and
+        # split subsequent distinct sources through the ordinary copy path.
+        source_positions={source:index for index,source in enumerate(sources)}
+        reserved_dbids={dbid:min(owners,key=lambda source:source_positions.get(source,len(sources)))
+                        for dbid,owners in shadow_sources_by_dbid.items()}
+        needed: dict[tuple[int,str,str],int] = {}
+        for source in unmanaged_sources:
+            for requested_content in {(payload_sizes[source],payload_by_source[source].suffix.lower(),payload_hashes[source]),
+                                      (source.stat().st_size,source.suffix.lower(),source_hashes[source])}:
+                needed[requested_content]=needed.get(requested_content,0)+1
+        available={key:sum(dbid not in reserved_dbids or reserved_dbids[dbid] in source_positions
+                           for dbid in candidates) for key,candidates in existing_by_content.items()}
+        unproven = {key for key in desired_content_keys if available.get(key,0)<needed[key]}
         unproven_shapes = {(size, suffix) for size, suffix, _sha256 in unproven}
         for raw in parsed_tracks:
             if not unproven:
                 break
+            dbid=int(raw['dbid'])
+            if dbid in managed_source_dbids or dbid in shadow_sources_by_dbid:continue
             location_path = _location_path(
                 root, str(raw.get("location") or ""))
             if location_path is None or not location_path.is_file():
@@ -2493,8 +2675,9 @@ def plan_stock_ipod_sync(
                 continue
             content_key = (shape[0], shape[1], _sha256(location_path))
             if content_key in unproven:
-                existing_by_content[content_key] = int(raw["dbid"])
-                unproven.remove(content_key)
+                remember_content(content_key,dbid)
+                available[content_key]=available.get(content_key,0)+1
+                if available[content_key]>=needed[content_key]:unproven.remove(content_key)
                 unproven_shapes = {
                     (size, suffix) for size, suffix, _sha256 in unproven}
     else:
@@ -2507,11 +2690,10 @@ def plan_stock_ipod_sync(
             shape = (location_path.stat().st_size, location_path.suffix.lower())
             if shape not in wanted_shapes:
                 continue
-            existing_by_content[(shape[0], shape[1], _sha256(location_path))] = int(
-                raw["dbid"])
+            remember_content((shape[0],shape[1],_sha256(location_path)),int(raw['dbid']))
 
     source_to_dbid: dict[Path, int] = {}
-    content_to_dbid: dict[tuple[int, str, str], int] = dict(existing_by_content)
+    content_to_dbid = existing_by_content
     claimed_dbids: set[int] = set()
     copies: list[StockMediaCopy] = []
     adoptions: list[StockMediaAdoption] = []
@@ -2520,6 +2702,23 @@ def plan_stock_ipod_sync(
     first_track_for_source: dict[Path, Track] = {}
     for track, source, _payload in resolved:
         first_track_for_source.setdefault(source, track)
+
+    def content_match(source: Path,key: tuple[int,str,str]) -> int | None:
+        exact=shadow_dbids_by_source.get(source)
+        if (exact is not None and exact in existing_content_ids.get(key,()) and exact not in claimed_dbids
+                and reserved_dbids.get(exact,source)==source):return exact
+        candidates=[dbid for dbid in content_to_dbid.get(key,())
+                    if dbid not in claimed_dbids and reserved_dbids.get(dbid,source)==source]
+        if not candidates:return None
+        # On a cold cache, exact content is the admission proof. Matching the
+        # effective label only chooses among already-proved identical records,
+        # preserving their identities when playlist order changes.
+        title,artist=_effective_track_metadata(first_track_for_source[source],source,
+            derive_artists=derive_artists,artist_overrides=artist_overrides,
+            title_overrides=title_overrides,library=library,display_rows=display_rows)
+        return next((dbid for dbid in candidates
+                     if (parsed_by_dbid[dbid].get('title'),parsed_by_dbid[dbid].get('artist'))==(title,artist)),candidates[0])
+
     for source in sources:
         checkpoint()
         payload = payload_by_source[source]
@@ -2548,14 +2747,10 @@ def plan_stock_ipod_sync(
             source_to_dbid[source] = managed_dbid
             claimed_dbids.add(managed_dbid)
             continue
-        planned_dbid = content_to_dbid.get(payload_key)
-        if planned_dbid in claimed_dbids:
-            planned_dbid = None
+        planned_dbid = content_match(source,payload_key)
         matched_original = False
         if planned_dbid is None:
-            planned_dbid = content_to_dbid.get(original_key)
-            if planned_dbid in claimed_dbids:
-                planned_dbid = None
+            planned_dbid = content_match(source,original_key)
             matched_original = planned_dbid is not None
         if planned_dbid is None:
             planned_dbid = _new_dbid(occupied_dbids)
@@ -2607,7 +2802,6 @@ def plan_stock_ipod_sync(
                 technical_override=captured_technical[source],
                 display_rows=display_rows,
             ))
-            content_to_dbid[payload_key] = planned_dbid
         elif matched_original and original_key != payload_key:
             raw = parsed_by_dbid.get(planned_dbid)
             live = _location_path(root, str((raw or {}).get("location") or ""))
@@ -2624,7 +2818,6 @@ def plan_stock_ipod_sync(
                 dbid=planned_dbid,
                 media_plan=media_plan,
             ))
-            content_to_dbid[payload_key] = planned_dbid
         source_to_dbid[source] = planned_dbid
         # A distinct canonical source is a distinct logical library track even
         # when its bytes match another source. Reuse each live/new DB record at
@@ -3059,6 +3252,11 @@ def plan_stock_ipod_sync(
                 "stock_media_profile": _STOCK_SOURCE_PROFILE,
                 "stock_technical": list(captured_technical[source]),
             })
+        elif source in retained_source_contracts:
+            source_contract = retained_source_contracts[source]
+            shadow_sources[str(source)].update({key: source_contract[key] for key in (
+                "source_size", "mtime_ns", "source_epoch", "source_sha256",
+                "stock_media_profile", "stock_technical")})
     previous_managed_keys = set(managed_playlist_keys_before)
     shadow_playlists = {
         key: dict(value) for key, value in (shadow.playlists if shadow else {}).items()
@@ -3094,6 +3292,8 @@ def plan_stock_ipod_sync(
                 "cache_key": slot.cache_key,
                 "offsets": {str(key): value for key, value in slot.offsets},
             })
+            if dbid in prepared_by_dbid:
+                shadow_art_row['source_sha256'] = prepared_by_dbid[dbid].source_sha256
             local_art_track_id = track_id_by_dbid.get(dbid, "")
             image_path = (
                 art_cache.image_path(local_art_track_id)
@@ -3189,18 +3389,32 @@ def plan_stock_ipod_sync(
         catalog_notice=catalog_notice,
         captured_export=display_rows is not None,
     )
-    if (not plan.requires_commit and shadow is not None and shadow_store is not None
-            and shadow_sources != shadow.sources
-            and not shadow_store.root.resolve().is_relative_to(root)):
-        # A legacy baseline may be a true no-op forever. Retain newly acquired
-        # Mac source proofs without manufacturing a device commit/generation.
-        # Another generation wins; a disposable-cache failure is advisory.
-        try:
-            if shadow_store.load(identity_key) == shadow:
-                shadow_store.save(replace(shadow, sources=shadow_sources))
-        except (OSError, ValueError):
-            logging.getLogger("soundbox").warning(
-                "Could not enrich disposable stock source proofs", exc_info=True)
+    if not plan.requires_commit and not plan.dual_boot:
+        noop_epochs = []
+        for source in sorted({path for path in source_observations.values() if path is not None}):
+            checkpoint()
+            before = source.lstat()
+            current_epoch = source_epoch(before)
+            if not stat_mod.S_ISREG(before.st_mode) or source.resolve(strict=True) != source:
+                raise StockIpodError('A selected source changed before no-op acceptance: ' + str(source))
+            captured_source = captured_observations.get(source)
+            retained_source = retained_source_contracts.get(source)
+            if captured_source is not None:
+                valid = current_epoch == source_epoch(captured_source)
+            elif retained_source is not None:
+                old_epoch = retained_source.get('source_epoch') or ()
+                actual = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+                valid = (len(old_epoch) == 5 and tuple(old_epoch[:4]) == actual[:4]
+                         and (tuple(old_epoch) == actual or is_cloud_storage_source(source)))
+            elif source.suffix.lower() not in SUPPORTED_SUFFIXES:
+                valid = True  # The stock-only suffix policy inspected no media bytes.
+            else:
+                valid = bool(compatibility.get(source) and
+                             negative_sources.get(source, current_epoch) == compatibility[source])
+            if not valid or source_epoch(source.lstat()) != current_epoch:
+                raise StockIpodError('A selected source changed before no-op acceptance: ' + str(source))
+            noop_epochs.append((source, current_epoch))
+        plan = replace(plan, noop_shadow_before=shadow, noop_source_epochs=tuple(noop_epochs))
     planning.advance(label='Validated iPod export plan')
     timings.mark('finalize')
     return plan
@@ -3225,6 +3439,58 @@ def committed_stock_export_witness(
         return plan.catalog_witness, ''
     except Exception as exc:
         return None, f'The device operation succeeded, but its comparison baseline could not be verified: {exc}'
+
+
+def accept_stock_ipod_noop(plan: StockIpodSyncPlan) -> StockIpodCommitResult:
+    """Acknowledge a checked full no-op without changing any device entity.
+
+    Planning leaves the previous source membership baseline intact. Only the
+    owned completion boundary can publish its exact checked replacement.
+    """
+    checkpoint()
+    if plan.requires_commit or plan.dual_boot:
+        raise StockIpodError('A verified no-write stock plan is required')
+    session = DeviceSession(plan.target, list(plan.source_guard_paths), create=False)
+    if session.mount_identity != plan.target_mount_identity:
+        raise StockIpodError('The iPod was remounted before no-op acceptance')
+    _db_path(plan.target)
+    captured = capture_stock_ipod_native(plan.target, include_artwork=True)
+    expected_playback = plan.play_counts_sha256_before or ''
+    if (captured.database_sha256 != plan.database_sha256_before
+            or captured.play_counts_sha256 != expected_playback):
+        raise StockIpodError('Stock catalogs changed before no-op acceptance')
+    before = plan.noop_shadow_before
+    if before is not None and captured.artwork_database_sha256 != before.artwork_database_sha256:
+        raise StockIpodError('Stock artwork changed before no-op acceptance')
+    witness = plan.catalog_witness
+    if witness is not None:
+        verify_export_witness(witness, captured.database, captured.artwork_database_sha256)
+    for source, expected in plan.noop_source_epochs or ():
+        checkpoint()
+        if (source.resolve(strict=True) != source or source_epoch(source.lstat()) != expected):
+            raise StockIpodError('A selected source changed before no-op acceptance: ' + str(source))
+    session.revalidate()
+    checkpoint()
+    shadow_updated = False
+    if before is not None and plan.shadow_store is not None:
+        if (plan.catalog_only or plan.incremental_catalog or plan.noop_source_epochs is None
+                or before.identity_key != plan.identity_key
+                or before.database_sha256 != captured.database_sha256
+                or plan.shadow_store.root.resolve().is_relative_to(plan.target)):
+            raise StockIpodError('The full captured no-op baseline is unavailable')
+        renewed = replace(before, sources=plan.shadow_sources, artwork=plan.shadow_artwork,
+                          playlists=plan.shadow_playlists)
+        if renewed != before:
+            if not plan.shadow_store.replace_if_current(before, renewed, same_generation=True):
+                raise StockIpodError('The stock comparison baseline changed before no-op acceptance')
+            shadow_updated = True
+        else:
+            current = plan.shadow_store.load(before.identity_key)
+            if (current != before or current is None or current._storage_token != before._storage_token):
+                raise StockIpodError('The stock comparison baseline changed before no-op acceptance')
+    return StockIpodCommitResult(plan.target / '.soundbox', 0, 0, plan.reused_track_count, 0,
+        plan.playlist_names, plan.database_sha256_before, shadow_updated=shadow_updated,
+        catalog_witness=witness, catalog_warning=plan.catalog_warning, catalog_notice=plan.catalog_notice)
 
 
 def commit_stock_ipod_sync(
@@ -3409,7 +3675,7 @@ def commit_stock_ipod_sync(
 
     stamp = time.strftime("%Y%m%d-%H%M%S")
     recovery = Path(".soundbox") / "stock-ipod-recovery" / (
-        f"{stamp}-{plan.database_sha256_before[:12]}")
+        f"{stamp}-{secrets.token_hex(8)}-{plan.database_sha256_before[:12]}")
     try:
         statvfs = os.statvfs(plan.target)
         free = statvfs.f_bavail * statvfs.f_frsize
@@ -3431,15 +3697,20 @@ def commit_stock_ipod_sync(
             f"Not enough free space for the recoverable stock transaction: "
             f"needs {required} bytes, has {free} bytes.")
     recovery_abs = session.guard(recovery)
+    previous_retirement_warnings = resume_completed_payload_retirement(session, 'stock-ipod-recovery')
+    recovery_payloads = begin_recovery(session, recovery)
+    payload_paths = [recovery / 'iTunesDB.before']
     phase_progress('Preparing iPod recovery', 0, 1, 'Saving the current iPod catalogs')
     session.atomic_write(recovery / "iTunesDB.before", original_database)
     if original_play_counts is not None:
         session.atomic_write(recovery / "Play Counts.before", original_play_counts)
+        payload_paths.append(recovery / 'Play Counts.before')
     for artwork_item in plan.artwork_before:
         source = session.guard(artwork_item.relative_path)
         destination = recovery / "artwork" / (
             artwork_item.relative_path.name + ".before")
-        session.atomic_copy(source, session.guard(destination))
+        session.atomic_copy(source, session.guard(destination), expected_sha256=artwork_item.sha256)
+        payload_paths.append(destination)
     for rewrite in plan.rewrites:
         if plan.dual_boot:
             continue
@@ -3447,7 +3718,8 @@ def commit_stock_ipod_sync(
         destination = (
             recovery / "media" / rewrite.relative_path.parent
             / (rewrite.relative_path.name + ".before"))
-        session.atomic_copy(source, session.guard(destination))
+        session.atomic_copy(source, session.guard(destination), expected_sha256=rewrite.sha256_before)
+        payload_paths.append(destination)
     manifest = json.dumps({**plan.summary(), "transaction_state": "executing"}, indent=2, sort_keys=True).encode("utf-8") + b"\n"
     session.atomic_write(recovery / "plan.json", manifest)
     if plan.rendered_artwork is not None and plan.rendered_artwork.incremental:
@@ -3476,6 +3748,7 @@ def commit_stock_ipod_sync(
         )
 
     phase_progress('Preparing iPod recovery', 1, 1, 'Saved the current iPod catalogs')
+    recovery_payloads = recovery_payloads.remember(session, payload_paths)
     media_progress = _StockProgress('iTunes media', plan.bytes_to_copy, 'Copying songs to iPod')
     copied: list[Path] = []
     rewritten: list[StockMediaRewrite] = []
@@ -3546,6 +3819,7 @@ def commit_stock_ipod_sync(
                     session.revalidate()
                     os.replace(destination, saved)
                     rewritten.append(rewrite_item)
+                    recovery_payloads = recovery_payloads.remember(session, (saved.relative_to(plan.target),))
                 session.atomic_copy(copy_source, destination)
                 if not plan.dual_boot:
                     rewritten.append(rewrite_item)
@@ -3629,6 +3903,7 @@ def commit_stock_ipod_sync(
                 consumed.parent.mkdir(parents=True, exist_ok=True)
                 session.revalidate()
                 os.replace(play_counts, consumed)
+                recovery_payloads = recovery_payloads.remember(session, (consumed.relative_to(plan.target),))
             session.revalidate()
         database_progress.advance(label='Saved songs and playlists')
     except Exception as original_exc:
@@ -3705,6 +3980,10 @@ def commit_stock_ipod_sync(
             record_outcome(session, recovery, "recovery required" if rollback_failures else "rolled back",
                            error=str(original_exc), local_root=(plan.rockbox_media_cache.root
                                if plan.rockbox_media_cache else Path(tempfile.gettempdir()) / "soundbox-source-staging"))
+            if not rollback_failures:
+                try:recovery_payloads.retire(session)
+                except (OSError, RuntimeError, ValueError) as cleanup_error:
+                    logging.getLogger('soundbox').warning('Rolled-back iPod payload cleanup retained evidence: %s', cleanup_error)
             setattr(original_exc, "recovery_status", "recovery required" if rollback_failures else "rolled back")
             if rollback_failures:
                 failure = StockIpodError(
@@ -3779,6 +4058,11 @@ def commit_stock_ipod_sync(
         cleanup_progress.report('Checking catalog correspondence', force=True)
         witness, witness_warning = ((None, '') if plan.dual_boot else
                                     committed_stock_export_witness(plan, session))
+        if not plan.dual_boot and not cleanup_failures:
+            try:recovery_payloads.retire(session)
+            except (OSError, RuntimeError, ValueError) as cleanup_error:
+                cleanup_failures.append(f'Transient transaction payload cleanup: {cleanup_error}')
+        cleanup_failures.extend(previous_retirement_warnings)
         cleanup_progress.advance(label='Cleanup needs attention' if cleanup_failures else 'Finished export cleanup')
         return StockIpodCommitResult(
             recovery_directory=recovery_abs,
@@ -3810,6 +4094,7 @@ def commit_stock_ipod_sync(
             catalog_playlist_updates=len(plan.catalog_playlist_updates),
             catalog_artwork_updates=plan.catalog_artwork_track_count,
             catalog_witness=witness,
+            recovery_payloads=recovery_payloads if plan.dual_boot else None,
         )
 
     except Exception as exc:
@@ -3819,7 +4104,8 @@ def commit_stock_ipod_sync(
                 recovery_directory=recovery_abs, copied_tracks=len(copied),
                 recovered_tracks=len(plan.adoptions), reused_tracks=plan.reused_track_count,
                 rewritten_tracks=len(rewritten), playlists=plan.playlist_names,
-                database_sha256=hashlib.sha256(plan.rendered_database).hexdigest()),
+                database_sha256=hashlib.sha256(plan.rendered_database).hexdigest(),
+                recovery_payloads=recovery_payloads if plan.dual_boot else None),
         ) from exc
 
 
@@ -3918,6 +4204,9 @@ def rollback_committed_stock_ipod_sync(
             raise StockIpodError(
                 f"New stock media changed before rollback: {destination}")
         destination.unlink(missing_ok=True)
+
+    record_outcome(session, recovery.relative_to(plan.target), 'rolled back',
+                   error='The composite outer generation was rolled back')
 
 
 def plan_stock_ipod_playlist_delete(
@@ -4024,6 +4313,15 @@ def plan_stock_ipod_playlist_delete(
         if not raw.get("isMaster")
     ]
     smart_raw = list(parsed.get("mhlp_smart") or [])
+    # Confirmation names a native playlist ID. Never collapse two rows behind
+    # that ID into one selection or remove an unselected row's memberships.
+    # Apple's ordinary Videos alias and canonical smart index have distinct IDs.
+    playlist_ids_seen: set[int] = set()
+    for raw_playlist in (*raw_regular,*smart_raw):
+        identity=int(raw_playlist.get('playlistID') or 0)
+        if identity in playlist_ids_seen:
+            raise StockIpodError('Existing iTunesDB playlist identity is ambiguous')
+        playlist_ids_seen.add(identity)
 
     def removable_system_playlist(raw: dict) -> bool:
         return (
@@ -4164,36 +4462,30 @@ def plan_stock_ipod_playlist_delete(
     deleted_has_art = any(
         int(raw_by_dbid[dbid].get("mhiiLink") or 0) for dbid in deleted_dbids)
     rendered_artwork: RenderedStockArtwork | None = None
-    if remaining_has_art and deleted_dbids:
+    if remaining_has_art and deleted_has_art:
         checkpoint()
         phase_progress('Preparing retained artwork', 0, 1, '')
         if not write_format.supports_artwork:
             raise StockIpodError(write_format.artwork_reason)
-        if stock_art_cache is None:
-            raise StockIpodError(
-                "Existing artwork requires the stock artwork cache for safe compaction")
-        rendered_artwork = render_stock_artwork(
+        # Retire unreferenced ArtworkDB entries without moving any surviving
+        # pixels. Native links, opaque image metadata and fixed offsets remain
+        # exact; unchanged ithmb payloads require no copy, hash or backup.
+        rendered_artwork = render_incremental_stock_artwork(
             track_infos,
             {},
-            cache=stock_art_cache,
             existing_artwork_dir=root / "iPod_Control" / "Artwork",
+            expected_artwork_database=captured.artwork_database,
         )
     managed_artwork_paths = _native_artwork_paths(captured, write_format, stock_art_cache)
     artwork_delete_paths = tuple(
         relative for relative in managed_artwork_paths
         if deleted_has_art and rendered_artwork is None and (root / relative).is_file()
     )
-    artwork_output_paths = (
-        (
-            Path("iPod_Control") / "Artwork" / "ArtworkDB",
-            *(item.relative_path for item in rendered_artwork.ithmb_files),
-        )
-        if rendered_artwork is not None else ()
-    )
+    artwork_output_paths = ((Path('iPod_Control/Artwork/ArtworkDB'),)
+        if rendered_artwork is not None and rendered_artwork.publish_artwork_db else ())
     artwork_before = tuple(
-        StockArtworkBefore(relative, (root / relative).stat().st_size, _sha256(root / relative))
-        for relative in dict.fromkeys(artwork_output_paths)
-        if (root / relative).is_file()
+        StockArtworkBefore(relative,len(captured.artwork_database or b''),captured.artwork_database_sha256)
+        for relative in artwork_output_paths
     )
     artwork_delete_entities = []
     for relative in artwork_delete_paths:
@@ -4450,32 +4742,24 @@ def commit_stock_ipod_playlist_delete(
         if (not live.is_file() or live.stat().st_size != before.size
                 or _sha256(live) != before.sha256):
             raise StockIpodError(f"Artwork changed after dry-run: {relative}")
+    artwork_output_paths: tuple[Path,...] = ()
     if plan.rendered_artwork is not None:
-        output_paths = (Path("iPod_Control/Artwork/ArtworkDB"),
-                        *(item.relative_path for item in plan.rendered_artwork.ithmb_files))
-        for relative in output_paths:
+        if (not plan.rendered_artwork.incremental or plan.rendered_artwork.range_writes
+                or any(item.segments for item in plan.rendered_artwork.ithmb_files)):
+            raise StockIpodError('Native deletion can only prune artwork metadata')
+        artwork_output_paths = ((Path('iPod_Control/Artwork/ArtworkDB'),)
+            if plan.rendered_artwork.publish_artwork_db else ())
+        for relative in artwork_output_paths:
             checkpoint()
             if relative not in before_by_path and session.guard(relative).exists():
                 raise StockIpodError(f"Artwork file appeared after dry-run: {relative}")
         for ithmb in plan.rendered_artwork.ithmb_files:
-            digest = hashlib.sha256()
-            size = 0
-            for segment in ithmb.segments:
-                checkpoint()
-                if (not segment.path.is_file() or segment.path.stat().st_size != segment.size
-                        or _sha256(segment.path) != segment.sha256):
-                    raise StockIpodError(f"Prepared artwork changed after dry-run: {segment.path}")
-                size += segment.size
-                with segment.path.open("rb") as handle:
-                    while True:
-                        checkpoint()
-                        chunk = handle.read(1024 * 1024)
-                        checkpoint()
-                        if not chunk:
-                            break
-                        digest.update(chunk)
-            if size != ithmb.size or digest.hexdigest() != ithmb.sha256:
-                raise StockIpodError(f"Prepared artwork layout changed: {ithmb.relative_path}")
+            checkpoint()
+            live=session.guard(ithmb.relative_path)
+            observed=live.lstat()
+            if (not stat_mod.S_ISREG(observed.st_mode) or observed.st_size!=ithmb.before_size
+                    or observed.st_mtime_ns!=ithmb.before_mtime_ns):
+                raise StockIpodError(f'Artwork layout changed after dry-run: {ithmb.relative_path}')
 
     checkpoint()
     stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -4494,13 +4778,19 @@ def commit_stock_ipod_playlist_delete(
     if required > free:
         raise StockIpodError(f'Not enough free space for the recoverable deletion: needs {required} bytes, has {free} bytes.')
     recovery_abs = session.guard(recovery)
+    previous_retirement_warnings = resume_completed_payload_retirement(session, 'stock-ipod-recovery')
+    recovery_payloads = begin_recovery(session, recovery)
+    payload_paths = [recovery / 'iTunesDB.before']
     session.atomic_write(recovery / 'iTunesDB.before', original_database)
     if original_play_counts is not None:
         session.atomic_write(recovery / 'Play Counts.before', original_play_counts)
+        payload_paths.append(recovery / 'Play Counts.before')
     for artwork_item in plan.artwork_before:
         checkpoint()
         session.atomic_copy(session.guard(artwork_item.relative_path),
-                            session.guard(recovery / 'artwork' / (artwork_item.relative_path.name + '.before')))
+                            session.guard(recovery / 'artwork' / (artwork_item.relative_path.name + '.before')),
+                            expected_sha256=artwork_item.sha256)
+        payload_paths.append(recovery / 'artwork' / (artwork_item.relative_path.name + '.before'))
     candidates = [('media', item) for item in plan.media_deletes]
     candidates.extend(('artwork', item) for item in plan.artwork_delete_entities)
     claims = [recovery / 'claimed' / f'{position:08d}.pending'
@@ -4513,23 +4803,20 @@ def commit_stock_ipod_playlist_delete(
                     for (kind, item), claim in zip(candidates, claims, strict=True)]}
     session.atomic_write(recovery / 'plan.json',
                          json.dumps(journal, indent=2, sort_keys=True).encode() + b'\n')
+    recovery_payloads = recovery_payloads.remember(session, payload_paths)
 
     artwork_committed = False
     database_committed = False
     try:
-        if plan.rendered_artwork is not None:
-            phase_progress('Saving retained artwork', 0, len(plan.rendered_artwork.ithmb_files), '')
-            for position, ithmb in enumerate(plan.rendered_artwork.ithmb_files):
-                checkpoint()
-                destination = session.guard(ithmb.relative_path)
-                session.atomic_concat([part.path for part in ithmb.segments], destination)
-                if destination.stat().st_size != ithmb.size or _sha256(destination) != ithmb.sha256:
-                    raise StockIpodError(f'Committed artwork failed verification: {destination}')
-                phase_progress('Saving retained artwork', position + 1,
-                               len(plan.rendered_artwork.ithmb_files), '')
+        if artwork_output_paths:
+            assert plan.rendered_artwork is not None
+            phase_progress('Saving retained artwork', 0, 1, '')
             artwork_db = session.guard(Path('iPod_Control/Artwork/ArtworkDB'))
             session.atomic_write(artwork_db, plan.rendered_artwork.artwork_db)
             artwork_committed = True
+            if _sha256(artwork_db)!=hashlib.sha256(plan.rendered_artwork.artwork_db).hexdigest():
+                raise StockIpodError('Committed artwork database failed verification')
+            phase_progress('Saving retained artwork', 1, 1, '')
         checkpoint()
         phase_progress('Saving iPod playlists', 0, 1, '')
         checkpoint()
@@ -4541,6 +4828,7 @@ def commit_stock_ipod_playlist_delete(
                 consumed.parent.mkdir(parents=True, exist_ok=True)
                 session.revalidate()
                 os.replace(play_counts, consumed)
+                recovery_payloads = recovery_payloads.remember(session, (consumed.relative_to(plan.target),))
             session.revalidate()
         phase_progress('Saving iPod playlists', 1, 1, '')
     except Exception as original_exc:
@@ -4556,11 +4844,8 @@ def commit_stock_ipod_playlist_delete(
                         session.atomic_write(play_counts, original_play_counts)
                     except Exception as rollback_exc:
                         rollback_failures.append(f'Play Counts: {rollback_exc}')
-            if artwork_committed or plan.rendered_artwork is not None:
-                paths = (Path('iPod_Control/Artwork/ArtworkDB'),
-                         *(item.relative_path for item in (plan.rendered_artwork.ithmb_files
-                             if plan.rendered_artwork is not None else ())))
-                for relative in paths:
+            if artwork_committed or artwork_output_paths:
+                for relative in artwork_output_paths:
                     destination = session.guard(relative)
                     rollback_before = before_by_path.get(relative)
                     try:
@@ -4573,6 +4858,10 @@ def commit_stock_ipod_playlist_delete(
                         rollback_failures.append(f'{relative}: {rollback_exc}')
             record_outcome(session, recovery, 'recovery required' if rollback_failures else 'rolled back',
                            error=str(original_exc))
+            if not rollback_failures:
+                try:recovery_payloads.retire(session)
+                except (OSError, RuntimeError, ValueError) as cleanup_error:
+                    logging.getLogger('soundbox').warning('Rolled-back iPod delete payload cleanup retained evidence: %s', cleanup_error)
             setattr(original_exc, 'recovery_status', 'recovery required' if rollback_failures else 'rolled back')
             if rollback_failures:
                 failure = StockIpodError('Stock deletion failed and exact rollback was incomplete; '
@@ -4607,6 +4896,14 @@ def commit_stock_ipod_playlist_delete(
         record_outcome(session, recovery, 'committed',
                        error='\n'.join(failures))
         baselines = _finish_deleted_baselines(plan, session, original_database)
+        if not failures and not cleanup_cancelled:
+            try:
+                if candidates:
+                    recovery_payloads = recovery_payloads.remember(session, directories=(recovery / 'claimed',))
+                recovery_payloads.retire(session)
+            except (OSError, RuntimeError, ValueError) as cleanup_error:
+                failures.append(f'Transient transaction payload cleanup: {cleanup_error}')
+        failures.extend(previous_retirement_warnings)
     return StockIpodDeleteResult(
         recovery_directory=recovery_abs, playlists=plan.playlist_names,
         deleted_track_records=plan.deleted_track_count, deleted_media_files=deleted_files,

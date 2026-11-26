@@ -69,6 +69,38 @@ class EncryptedCaptureBackup(unittest.TestCase):
                 self.assertEqual(self.rows(clone), [('One',)])
         self.assertEqual(self.source.read_bytes(), before)
 
+    def test_proved_digest_is_capture_scoped_and_only_reported_for_standalone_bytes(self):
+        digest = []
+        with writer.encrypted_backup(self.source, standalone_digest=digest) as path:
+            self.assertEqual(digest, [sha(path)])
+        self.assertEqual(digest, [])
+        conn = writer._connect(self.source)
+        try:
+            conn.execute('PRAGMA journal_mode=WAL');conn.execute('PRAGMA wal_autocheckpoint=0')
+            conn.execute("UPDATE djmdContent SET Title='Committed WAL' WHERE ID='1'")
+            with writer.encrypted_backup(self.source, standalone_digest=digest) as path:
+                self.assertEqual(digest, [])
+                self.assertEqual(self.rows(path), [('Committed WAL',)])
+        finally:conn.close()
+        self.assertEqual(digest, [])
+        stale = ['stale proof from another capture']
+        with self.assertRaisesRegex(writer.WriteProofError, 'fresh capture'):
+            with writer.encrypted_backup(self.source, standalone_digest=stale):
+                self.fail('Stale capture output was reused')
+
+    def test_digest_clears_when_capture_or_its_consumer_fails(self):
+        digest = []
+        with self.assertRaisesRegex(RuntimeError, 'consumer failed'):
+            with writer.encrypted_backup(self.source, standalone_digest=digest):
+                self.assertTrue(digest)
+                raise RuntimeError('consumer failed')
+        self.assertEqual(digest, [])
+        with mock.patch.object(writer, '_integrity', side_effect=writer.WriteProofError('invalid capture')):
+            with self.assertRaisesRegex(writer.WriteProofError, 'invalid capture'):
+                with writer.encrypted_backup(self.source, standalone_digest=digest):
+                    self.fail('Invalid capture published a digest')
+        self.assertEqual(digest, [])
+
     def test_committed_nonempty_wal_uses_original_folding_and_preserves_source_pair(self):
         conn = writer._connect(self.source)
         try:

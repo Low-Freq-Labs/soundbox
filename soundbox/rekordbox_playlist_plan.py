@@ -10,6 +10,40 @@ from uuid import UUID
 from .rekordbox_write import _digest
 
 
+_IMMUTABLE_CELLS=(str,int,float,bool,bytes,type(None))
+
+
+def _flat_row(row):
+    return all(type(key) is str and type(value) in _IMMUTABLE_CELLS for key,value in row.items())
+
+
+def _copy_row(row):
+    """Detach raw SQL cells without recursive scalar-copy dispatch.
+
+    Snapshot before checking types. This changes allocation only, never native
+    admission; nested values and custom containers retain deepcopy semantics.
+    """
+    if type(row) is dict:
+        snapshot=dict(row)
+        if _flat_row(snapshot):return snapshot
+    return deepcopy(row)
+
+
+def _copy_rows(rows):
+    """Retain deepcopy's repeated-row aliasing and general fallback behavior."""
+    if type(rows) is not list:return deepcopy(rows)
+    copied={};result=[]
+    for row in rows:
+        if type(row) is not dict:return deepcopy(rows)
+        identity=id(row)
+        if identity not in copied:
+            snapshot=dict(row)
+            if not _flat_row(snapshot):return deepcopy(rows)
+            copied[identity]=snapshot
+        result.append(copied[identity])
+    return result
+
+
 def local(row):
     if (any(type(row.get(k)) is not int or row[k]!=0 for k in
             ('rb_data_status','rb_local_data_status','rb_local_deleted'))
@@ -343,7 +377,7 @@ def _base(playlist,members,counter):
         raise ValueError('Membership belongs to another playlist')
     if len({r['ID'] for r in members})!=len(members):
         raise ValueError('Native membership identity is ambiguous')
-    rows=sorted((deepcopy(r) for r in members if r.get('rb_local_deleted')==0),key=lambda r:r['TrackNo'])
+    rows=sorted((_copy_row(r) for r in members if r.get('rb_local_deleted')==0),key=lambda r:r['TrackNo'])
     if [r['TrackNo'] for r in rows]!=list(range(1,len(rows)+1)):
         raise ValueError('Native song order is ambiguous')
     for row in rows:local(row)
@@ -352,7 +386,7 @@ def _base(playlist,members,counter):
 
 def _changes(table,before,after):
     left={r['ID']:r for r in before};right={r['ID']:r for r in after}
-    return [dict(table=table,id=key,before=deepcopy(left.get(key)),after=deepcopy(right.get(key)))
+    return [dict(table=table,id=key,before=_copy_row(left.get(key)),after=_copy_row(right.get(key)))
             for key in sorted(left.keys()|right.keys()) if left.get(key)!=right.get(key)]
 
 
@@ -361,7 +395,7 @@ def _result(before,members,counter,current,*,playlists_before=(),playlists_after
     changes+=_changes('djmdPlaylist',playlists_before,playlists_after)
     if current!=counter:
         changes.append(dict(table='agentRegistry',id='localUpdateCount',
-                            before=deepcopy(counter),after=current))
+                            before=_copy_row(counter),after=current))
     return dict(changes=changes,members=members,counter=current,source_write_authority=False)
 
 
@@ -531,13 +565,13 @@ def append(playlist,members,counter,content,*,identity,uuid,timestamp,allow_dupl
     if content.get('rb_local_deleted') or not content.get('ID') or not content.get('UUID'):
         raise ValueError('Native Collection track identity is unavailable')
     if not allow_duplicate and any(r['ContentID']==content['ID'] for r in rows):
-        return _result(members,deepcopy(members),counter,deepcopy(counter))
+        return _result(members,_copy_rows(members),counter,_copy_row(counter))
     if str(UUID(identity))!=identity or str(UUID(uuid))!=uuid:
         raise ValueError('Invalid native membership identity')
     if any(r.get('ID')==identity or r.get('UUID')==uuid for r in members):
         raise ValueError('Native membership identity collides with retained history')
     current=_counter(counter)
-    after=[*deepcopy(members),dict(ID=identity,PlaylistID=playlist['ID'],ContentID=content['ID'],
+    after=[*_copy_rows(members),dict(ID=identity,PlaylistID=playlist['ID'],ContentID=content['ID'],
         TrackNo=len(rows)+1,UUID=uuid,rb_data_status=0,rb_local_data_status=0,rb_local_deleted=0,
         rb_local_synced=0,usn=None,rb_local_usn=current['int_1'],created_at=timestamp,updated_at=timestamp)]
     return _result(members,after,counter,current)
@@ -553,7 +587,7 @@ def remove(playlist,members,counter,membership_id,*,timestamp,survivor_timestamp
     rows=_base(playlist,members,counter)
     target=next((r for r in rows if r['ID']==membership_id),None)
     if target is None:raise ValueError('Expected native membership disappeared')
-    current=_counter(counter);after=deepcopy(members)
+    current=_counter(counter);after=_copy_rows(members)
     deleted=_deleted(target,current,timestamp)
     after=[r for r in after if r['ID']!=membership_id]
     if deleted is not None:after.append(deleted)

@@ -25,6 +25,20 @@ def write_wave(path, *, width=3, rate=44_100, channels=2):
         handle.writeframes(bytes(width * channels * 441))
 
 
+def write_waveex(path, *, width=3, format_tag=1, size=None):
+    channels, rate = 2, 44_100
+    align = width * channels
+    fields = (struct.pack('<HHIIHHHHII', 0xFFFE, channels, rate, rate * align,
+                          align, width * 8, 22, width * 8, 3, format_tag)
+              + bytes.fromhex('00001000800000aa00389b71'))
+    data_size = align * 441 if size is None else size - 68
+    with path.open('wb') as handle:
+        handle.write(b'RIFF' + struct.pack('<I', data_size + 60) + b'WAVEfmt '
+                     + struct.pack('<I', len(fields)) + fields
+                     + b'data' + struct.pack('<I', data_size))
+        handle.truncate(68 + data_size)
+
+
 class StockHeaderRejection(unittest.TestCase):
     def setUp(self):
         area = tempfile.TemporaryDirectory()
@@ -93,6 +107,56 @@ class StockHeaderRejection(unittest.TestCase):
             with self.subTest(label=label):
                 self.path.write_bytes(payload)
                 self.assertIsNone(stock_ipod._stock_wav_header_omission(self.path))
+
+    def test_extensible_pcm_and_float_only_prove_existing_rejection(self):
+        for width, tag in ((1, 1), (2, 1), (3, 1), (4, 1), (4, 3), (8, 3)):
+            with self.subTest(width=width, tag=tag):
+                write_waveex(self.path, width=width, format_tag=tag)
+                expected = stock_ipod._stock_media_omission(self.path)
+                self.assertTrue(expected)
+                self.assertEqual(stock_ipod._stock_wav_header_omission(self.path), expected)
+
+    def test_extensible_unknown_and_invalid_framing_fall_back(self):
+        write_waveex(self.path)
+        original = self.path.read_bytes()
+        for offset, value in (
+                (16, struct.pack('<I', 38)),
+                (36, struct.pack('<H', 20)),
+                (38, struct.pack('<H', 0)),
+                (38, struct.pack('<H', 25)),
+                (40, struct.pack('<I', 1)),
+                (44, struct.pack('<I', 99)),
+                (48, b'\x01'),
+                (28, struct.pack('<I', 0)),
+                (32, struct.pack('<H', 1))):
+            with self.subTest(offset=offset, value=value):
+                changed = bytearray(original)
+                changed[offset:offset + len(value)] = value
+                self.path.write_bytes(changed)
+                self.assertIsNone(stock_ipod._stock_wav_header_omission(self.path))
+        write_waveex(self.path, width=4, format_tag=3)
+        changed = bytearray(self.path.read_bytes())
+        struct.pack_into('<H', changed, 38, 24)
+        self.path.write_bytes(changed)
+        self.assertIsNone(stock_ipod._stock_wav_header_omission(self.path))
+
+    def test_large_extensible_header_never_reads_audio(self):
+        write_waveex(self.path, size=512 * 1024 * 1024)
+        reads = []
+        fdopen = os.fdopen
+        class ObservedReader:
+            def __init__(self, handle):self.handle = handle
+            def __enter__(self):return self
+            def __exit__(self, *args):return self.handle.__exit__(*args)
+            def __getattr__(self, name):return getattr(self.handle, name)
+            def read(self, count):
+                reads.append((self.handle.tell(), count))
+                return self.handle.read(count)
+        with mock.patch.object(stock_ipod.os, 'fdopen',
+                side_effect=lambda *a, **kw: ObservedReader(fdopen(*a, **kw))):
+            self.assertIn('PCM_24', stock_ipod._stock_wav_header_omission(self.path))
+        self.assertLessEqual(sum(count for _, count in reads), 60)
+        self.assertTrue(all(position + count <= 60 for position, count in reads))
 
     def test_extra_chunks_are_seeked_without_payload_reads_and_have_a_fixed_budget(self):
         write_wave(self.path)
@@ -180,6 +244,87 @@ class StockHeaderRejection(unittest.TestCase):
             with self.assertRaises(OperationCancelled):
                 stock_ipod._stock_wav_header_omission(self.path)
 
+    def test_complete_rf64_definite_rejections_match_full_policy_but_invalid_ds64_falls_back(self):
+        import soundfile as sf
+        for subtype in ('PCM_16','PCM_24','FLOAT','DOUBLE'):
+            with self.subTest(subtype=subtype):
+                sf.write(self.path,[[0.,0.]]*32,44100,format='RF64',subtype=subtype)
+                raw=self.path.read_bytes()
+                self.assertEqual(raw[:4],b'RF64')
+                self.assertEqual(stock_ipod._stock_wav_header_omission(self.path),
+                                 stock_ipod._stock_media_omission(self.path))
+                for offset,value in ((4,bytes(4)),(12,b'JUNK'),(16,struct.pack('<I',27)),
+                                     (20,struct.pack('<Q',len(raw)*2)),(28,struct.pack('<Q',len(raw)*2)),
+                                     (36,struct.pack('<Q',99)),(44,struct.pack('<I',1))):
+                    with self.subTest(offset=offset):
+                        changed=bytearray(raw);changed[offset:offset+len(value)]=value
+                        self.path.write_bytes(changed)
+                        self.assertIsNone(stock_ipod._stock_wav_header_omission(self.path))
+
+    def test_sparse_large_rf64_rejection_reads_only_bounded_metadata(self):
+        import soundfile as sf
+        sf.write(self.path,[[0.,0.]]*32,44100,format='RF64',subtype='FLOAT')
+        raw=self.path.read_bytes();start=raw.index(b'data')+8
+        data_size=(512*1024*1024)//8*8;size=start+data_size
+        with self.path.open('r+b') as handle:
+            handle.seek(20);handle.write(struct.pack('<QQQ',size-8,data_size,data_size//8));handle.truncate(size)
+        reads=[];fdopen=os.fdopen
+        class Observed:
+            def __init__(self,handle):self.handle=handle
+            def __enter__(self):return self
+            def __exit__(self,*args):return self.handle.__exit__(*args)
+            def __getattr__(self,name):return getattr(self.handle,name)
+            def read(self,count):
+                reads.append((self.handle.tell(),count));return self.handle.read(count)
+        with mock.patch.object(stock_ipod.os,'fdopen',side_effect=lambda *a,**kw:Observed(fdopen(*a,**kw))):
+            reason=stock_ipod._stock_wav_header_omission(self.path)
+        self.assertIn('FLOAT',reason)
+        self.assertLessEqual(sum(count for _,count in reads),128)
+        self.assertTrue(all(position+count<=start for position,count in reads))
+
+    def test_provider_readiness_retries_only_header_and_allows_blocking_hydration(self):
+        write_wave(self.path);opening=os.open;flags=[]
+        def open_source(path,mode,*args,**kwargs):
+            if path==self.path:
+                flags.append(mode)
+                if mode & os.O_NONBLOCK:raise OSError(81,'Generated provider not ready')
+            return opening(path,mode,*args,**kwargs)
+        with (mock.patch.object(stock_ipod.os,'open',side_effect=open_source),
+              mock.patch('soundbox.source_read_retry.is_cloud_storage_source',return_value=True),
+              mock.patch('soundbox.source_read_retry._wait') as waiting):
+            self.assertIn('PCM_24',stock_ipod._stock_wav_header_omission(self.path))
+        self.assertEqual(waiting.call_count,1);self.assertEqual(len(flags),2)
+        self.assertTrue(flags[0]&os.O_NONBLOCK);self.assertFalse(flags[1]&os.O_NONBLOCK)
+
+    def test_provider_wait_cancellation_propagates_without_remembering_rejection(self):
+        write_wave(self.path)
+        with (mock.patch.object(stock_ipod.os,'open',side_effect=OSError(81,'Generated provider not ready')),
+              mock.patch('soundbox.source_read_retry.is_cloud_storage_source',return_value=True),
+              mock.patch('soundbox.source_read_retry._wait',side_effect=OperationCancelled('Generated cancel'))):
+            with self.assertRaises(OperationCancelled):stock_ipod._stock_wav_header_omission(self.path)
+        self.assertNotIn(self.path,stock_ipod._WAV_OMISSIONS.rows)
+
+    def test_single_ctime_only_hydration_retries_header_and_continued_churn_is_unknown(self):
+        for repeated in (False,True):
+            with self.subTest(repeated=repeated):
+                write_wave(self.path);mode=self.path.stat().st_mode;fdopen=os.fdopen;changed=[]
+                selected=self.path
+                class Hydrates:
+                    def __init__(self,handle):self.handle=handle
+                    def __enter__(self):return self
+                    def __exit__(self,*args):return self.handle.__exit__(*args)
+                    def __getattr__(self,name):return getattr(self.handle,name)
+                    def read(self,count):
+                        result=self.handle.read(count)
+                        if self.handle.tell()==36 and (repeated or not changed):
+                            changed.append(True);selected.chmod(mode^0o100);selected.chmod(mode)
+                        return result
+                with mock.patch.object(stock_ipod.os,'fdopen',
+                        side_effect=lambda *a,**kw:Hydrates(fdopen(*a,**kw))) as opened:
+                    result=stock_ipod._stock_wav_header_omission(self.path)
+                self.assertEqual(opened.call_count,2)
+                self.assertEqual(result is None,repeated)
+
 
 class StockPlannerHeaderRejection(unittest.TestCase):
     def setUp(self):
@@ -189,11 +334,40 @@ class StockPlannerHeaderRejection(unittest.TestCase):
         self.key = read_stock_ipod_snapshot(self.f.ipod, volume_uuid='header-test').identity_key
         self.shadow = StockIpodShadowStore(self.f.base / 'shadow')
 
-    def plan(self):
+    def plan(self, **options):
         f = self.f
         return stock_ipod.plan_stock_ipod_sync(f.library, [f.playlist], f.ipod,
             model_number='MA446', filesystem='msdos', usb_family='iPod Video',
-            identity_key=self.key, shadow_store=self.shadow)
+            identity_key=self.key, shadow_store=self.shadow, **options)
+
+    def test_restart_reuses_unchanged_rejections_through_real_catalog_noop(self):
+        from soundbox.stock_plan_observations import NegativeSourceOmissions,STOCK_SOURCE_PROFILE
+        from soundbox.stock_sync_reuse import stock_selection_reusable
+        f=self.f;write_wave(f.new_source);cache=(f.base/'negative-observations').resolve()
+        f.library.source=f.sources/'synthetic.xml';f.library.source.write_text('<DJ_PLAYLISTS/>')
+        for track in f.library.tracks_by_id.values():track.location_uri=track.path.resolve().as_uri()
+        display={key:dict(id=key,title=track.name,artist=track.artist)
+                 for key,track in f.library.tracks_by_id.items()}
+        first=self.plan(omission_cache_root=cache,display_rows=display)
+        result=stock_ipod.commit_stock_ipod_sync(first)
+        snapshot=read_stock_ipod_snapshot(f.ipod,volume_uuid='header-test')
+        witness=result.catalog_witness
+        self.assertIsNotNone(witness,result.catalog_notice)
+        self.assertTrue(witness.bindings[0].has_omissions)
+        before=f._snapshot(f.ipod)
+        cache_after_restart=NegativeSourceOmissions(root=cache,profile=STOCK_SOURCE_PROFILE)
+        with (mock.patch.object(stock_ipod,'acquire_source',side_effect=AssertionError('Unchanged audio acquired')),
+              mock.patch.object(stock_ipod,'_stock_wav_header_omission',side_effect=AssertionError('Unchanged format reprobed'))):
+            self.assertTrue(stock_selection_reusable(f.library,[f.playlist],snapshot,witness,
+                self.shadow.load(self.key),cache_after_restart))
+            plan=stock_ipod.plan_stock_ipod_catalog_update(f.library,[f.playlist],f.ipod,
+                snapshot=snapshot,model_number='MA446',filesystem='msdos',usb_family='iPod Video',
+                incremental=True,update_metadata=True,catalog_witness=witness,omission_cache_root=cache,
+                display_rows=display)
+        self.assertFalse(plan.requires_commit)
+        self.assertEqual(plan.copies,());self.assertEqual(plan.rewrites,())
+        stock_ipod.verify_stock_ipod_catalog_noop(plan)
+        self.assertEqual(f._snapshot(f.ipod),before)
 
     def test_actual_export_and_repeat_sync_do_not_acquire_omitted_audio(self):
         f = self.f; write_wave(f.new_source)
@@ -239,22 +413,67 @@ class StockPlannerHeaderRejection(unittest.TestCase):
         self.assertEqual(len(plan.copies), 1)
         self.assertEqual(plan.omissions, ())
 
-    def test_actual_unknown_wave_extension_still_gets_existing_acquisition_and_policy(self):
+    def test_exhausted_header_provider_retries_keep_full_acquisition_for_supported_source(self):
+        f=self.f;f.playlist.keys[:]=['new'];source=f.new_source.resolve();opening=os.open
+        def header_only_failure(path,*args,**kwargs):
+            if path==source:raise OSError(81,'Generated nonblocking provider failure')
+            return opening(path,*args,**kwargs)
+        with (mock.patch.object(stock_ipod.os,'open',side_effect=header_only_failure),
+              mock.patch('soundbox.source_read_retry.is_cloud_storage_source',return_value=True),
+              mock.patch('soundbox.source_read_retry._wait') as waiting,
+              mock.patch.object(stock_ipod,'acquire_source',wraps=stock_ipod.acquire_source) as acquired):
+            plan=self.plan()
+        self.assertEqual(waiting.call_count,2);self.assertEqual(acquired.call_count,1)
+        self.assertEqual(plan.omissions,());self.assertEqual(len(plan.copies),1)
+
+    def test_actual_extensible_pcm16_keeps_existing_policy_without_acquisition(self):
         import numpy as np
         import soundfile as sf
         f = self.f; f.playlist.keys[:] = ['new']
         sf.write(f.new_source, np.zeros((441, 2)), 44_100, format='WAVEX', subtype='PCM_16')
         original = f.new_source.read_bytes()
         self.assertEqual(struct.unpack_from('<H', original, 20)[0], 65534)
-        self.assertIsNone(stock_ipod._stock_wav_header_omission(f.new_source.resolve()))
         reason = stock_ipod._stock_media_omission(f.new_source)
         self.assertTrue(reason)
-        with mock.patch.object(stock_ipod, 'acquire_source', wraps=stock_ipod.acquire_source) as capture:
+        self.assertEqual(stock_ipod._stock_wav_header_omission(f.new_source.resolve()), reason)
+        with mock.patch.object(stock_ipod, 'acquire_source',
+                               side_effect=AssertionError('Rejected WAVEX was acquired')):
             plan = self.plan()
-        self.assertGreater(capture.call_count, 0)
         self.assertEqual([row.reason for row in plan.omissions], [reason])
         self.assertEqual(plan.copies, ())
         self.assertEqual(f.new_source.read_bytes(), original)
+
+    def test_actual_unknown_extensible_guid_acquires_before_existing_omission(self):
+        f = self.f; f.playlist.keys[:] = ['new']
+        write_waveex(f.new_source, format_tag=99)
+        original = f.new_source.read_bytes()
+        self.assertIsNone(stock_ipod._stock_wav_header_omission(f.new_source.resolve()))
+        with mock.patch.object(stock_ipod, 'acquire_source', wraps=stock_ipod.acquire_source) as capture:
+            plan = self.plan()
+        self.assertEqual(capture.call_count, 1)
+        self.assertEqual([row.track_id for row in plan.omissions], ['new'])
+        self.assertEqual(plan.copies, ())
+        self.assertEqual(f.new_source.read_bytes(), original)
+
+    def test_large_extensible_omission_rechecks_changed_supported_container(self):
+        f = self.f
+        f.playlist.keys[:] = ['new']
+        write_waveex(f.new_source, size=512 * 1024 * 1024)
+        before = f._snapshot(f.ipod)
+        with mock.patch.object(stock_ipod, 'acquire_source',
+                               side_effect=AssertionError('Large rejected WAVEX was acquired')):
+            for _ in range(2):
+                omitted = self.plan()
+                self.assertEqual(len(omitted.omissions), 1)
+                self.assertEqual(omitted.copies, ())
+        self.assertEqual(f._snapshot(f.ipod), before)
+        write_wave(f.new_source, width=2)
+        with mock.patch.object(stock_ipod, 'acquire_source', wraps=stock_ipod.acquire_source) as capture:
+            admitted = self.plan()
+        self.assertEqual(capture.call_count, 1)
+        self.assertEqual(admitted.omissions, ())
+        self.assertEqual(len(admitted.copies), 1)
+        stock_ipod.commit_stock_ipod_sync(admitted)
 
     def test_incremental_added_unsupported_wav_is_omitted_without_acquisition(self):
         case = baseline.ActualExportPlaylistBaseline()

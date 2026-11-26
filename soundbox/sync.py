@@ -671,17 +671,31 @@ def _safe_copy(
     else:
         staging = session._staged_output(dst)
     with staging as output:
-        size = src.stat().st_size
+        canonical = src.resolve(strict=True)
+        before = canonical.lstat()
+        if not stat_mod.S_ISREG(before.st_mode):
+            raise OSError(f'Source payload is not a regular file: {src}')
+        source_epoch = _copy_epoch(before)
+        size = before.st_size
         phase_progress("Verifying payload", 0, size, dst.name)
-        source_hash = _sha256(src)
-        if expected_sha256 and source_hash != expected_sha256:
-            raise OSError(f"Source payload changed before copy: {src}")
+        # A captured expected digest is proved again by the independently read
+        # copied bytes below. Prehashing the same source adds a redundant pass.
+        # Uncontracted callers still establish their original fresh digest.
+        source_hash = expected_sha256 or _sha256(src)
         space = os.fstatvfs(output.fileno())
         if space.f_bavail * space.f_frsize < size:
             raise OSError(f"Insufficient device space for {dst.name}")
         phase_progress("Copying to device", 0, size, dst.name)
-        with src.open('rb') as source:
+        with canonical.open('rb') as source:
+            if (_copy_epoch(os.fstat(source.fileno())) != source_epoch
+                    or _copy_epoch(canonical.lstat()) != source_epoch
+                    or src.resolve(strict=True) != canonical):
+                raise OSError(f'Source payload changed before copy: {src}')
             copy_stream(source, output)
+            if (_copy_epoch(os.fstat(source.fileno())) != source_epoch
+                    or _copy_epoch(canonical.lstat()) != source_epoch
+                    or src.resolve(strict=True) != canonical):
+                raise OSError(f'Source payload changed during copy: {src}')
         output.flush()
         record_metric("device_bytes_written", size)
         phase_progress("Verifying device copy", size, size, dst.name)
@@ -691,13 +705,14 @@ def _safe_copy(
             checkpoint()
             copied_hash.update(chunk)
         if os.fstat(output.fileno()).st_size != size or copied_hash.hexdigest() != source_hash:
-            raise OSError(f"Temporary copy failed verification: {dst}")
+            message = ('Source payload changed or temporary copy failed verification'
+                       if expected_sha256 else 'Temporary copy failed verification')
+            raise OSError(f'{message}: {dst}')
         if revalidate is not None:
             revalidate()
         try:
-            info = src.stat()
-            os.fchmod(output.fileno(), stat_mod.S_IMODE(info.st_mode))
-            os.utime(output.fileno(), ns=(info.st_atime_ns, info.st_mtime_ns))
+            os.fchmod(output.fileno(), stat_mod.S_IMODE(before.st_mode))
+            os.utime(output.fileno(), ns=(before.st_atime_ns, before.st_mtime_ns))
         except (OSError, RuntimeError):
             pass                             # FAT can't store full metadata
 
@@ -923,12 +938,13 @@ def _artwork_source(track_id, art_cache, rockbox_art_cache):
     return image, identity
 
 
-def _artwork_current(rows, parent, source, variants):
+def _artwork_current(rows, parent, source, variants, track_id):
     image, identity = source
     return all(
         (row := rows.get(str(parent / filename), {})).get("kind") == "artwork"
         and row.get("source") == str(image)
         and row.get("source_identity") == identity
+        and row.get('track_id') == track_id and bool(row.get('source_sha256'))
         for _side, filename in variants)
 
 
@@ -948,7 +964,7 @@ def _export_artwork(
         return
     image, identity = source
     variants = _artwork_variants(rockbox_art_cache, exact_sides)
-    if reuse_inventory and _artwork_current(rows, parent, source, variants):
+    if reuse_inventory and _artwork_current(rows, parent, source, variants, planned.track_id):
         _validate_artwork_choice(validate_artwork, planned.track_id)
         for _side, filename in variants:
             row = rows[str(parent / filename)]
@@ -980,6 +996,8 @@ def _export_artwork(
             "kind": "artwork",
             "owned": bool(previous.get("owned", True)) if previous else not present,
             "source": str(image), "source_identity": identity,
+            "track_id": planned.track_id,
+            "source_sha256": prepared.source_sha256 if prepared else digest,
             "size": size, "sha256": digest,
             "playlists": sorted(set(previous.get("playlists") or ()) | memberships),
         }
@@ -1649,7 +1667,7 @@ def resync(
             changed_media_paths.add(path)
         source = _artwork_source(planned.track_id, art_cache, rockbox_art_cache)
         if source is not None and not _artwork_current(
-                prior_files, Path(path).parent, source, art_variants):
+                prior_files, Path(path).parent, source, art_variants, planned.track_id):
             changed_art_paths.add(path)
     for index, playlist in enumerate(wanted):
         key = manifest.playlist_key(playlist)

@@ -303,6 +303,8 @@ def plan_incremental(library, playlists, session, previous, *, all_playlists=(),
                      standalone=(),baseline_manifest=None):
     started = time.monotonic()
     catalog = _catalog(library,playlists,previous,all_playlists,additive,standalone)
+    overwritten_playlists=tuple(p['title'] for p in previous['view']['playlists']
+        if not p['folder'] and int(p['id']) in catalog['touched_nodes'])
     tracks = catalog['tracks']
     if native is None:native = read_library(session.target,session.mount_identity[0],should_cancel=should_cancel)
     if native is None or any(digest(raw)!=previous['files'][path]['sha256']
@@ -497,6 +499,7 @@ def plan_incremental(library, playlists, session, previous, *, all_playlists=(),
             source_contracts={placements[tid][0].lstrip('/'):contract for tid,contract in contracts.items() if tid not in reuse},catalog_baseline=previous,
             allowed_asset_changes={str(PurePosixPath(path.lstrip('/'))/('ANLZ0000.'+ext)) for _audio,path in reuse.values() for ext in ('DAT','EXT','2EX')},
             expected_manifest=baseline_manifest,removed_files=removed)
+        plan.overwritten_playlists=overwritten_playlists
         # An unchanged song/playlist catalog never rewrites native databases.
         old_nodes = [(p['id'],p['parent'],p['title'],p['folder'],p['entries']) for p in previous['view']['playlists']]
         new_nodes = [(p['id'],p['parent'],p['title'],p['folder'],p['entries']) for p in view['playlists']]
@@ -512,7 +515,8 @@ def plan_incremental(library, playlists, session, previous, *, all_playlists=(),
             old_manifest = plan.old_manifest
             plan.close()
             noop=CdjPlan(session.target,session.mount_identity,session.volume_uuid,root,noop_manifest,(),
-                old_manifest,False,len(view['track_rows']),len(catalog['selection']),None,recovery_root)
+                old_manifest,False,len(view['track_rows']),len(catalog['selection']),None,recovery_root,
+                session.target_role,session.ipod_control_identity,overwritten_playlists)
             if noop.requires_commit:noop.manifest=dict(noop_manifest,generation=uuid.uuid4().hex)
             return noop
         from .cdj_export import remember_standalone

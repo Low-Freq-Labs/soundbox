@@ -105,6 +105,37 @@ class IpodExportCaptureTests(unittest.TestCase):
                 self.assertEqual(self.w._state_repository.path.read_bytes(),before)
                 self.assertTrue(capture.require_current(self.w,'/generated/ipod'))
 
+    def test_selected_manual_cover_settles_before_any_export_capture(self):
+        pending={'one'};choice=['fallback'];observed=[]
+        self.w._art_requests=SimpleNamespace(manual_pending=lambda tid=None:bool(pending) if tid is None else tid in pending)
+        def selection(ids):
+            observed.append(choice[0]);return (choice[0],tuple(ids))
+        self.w.art_cache=SimpleNamespace(selection_token=selection,
+            selection_current=lambda token:token[0]==choice[0],
+            split_selection=lambda token:{tid:(token[0],(tid,)) for tid in token[1]})
+        self.request();self.app.processEvents()
+        self.ready.assert_not_called();self.failed.assert_not_called();self.assertEqual(observed,[])
+        choice[0]='manual';pending.clear()
+        self.until(lambda:self.ready.called or self.failed.called)
+        self.failed.assert_not_called()
+        self.assertEqual(self.ready.call_args.args[0].artwork[0],'manual')
+        self.assertEqual(observed,['manual'])
+
+    def test_unrelated_manual_art_does_not_delay_selected_capture(self):
+        self.w._art_requests=SimpleNamespace(manual_pending=lambda tid=None:tid is None or tid=='other')
+        self.request();self.until(lambda:self.ready.called or self.failed.called)
+        self.failed.assert_not_called();self.ready.assert_called_once()
+
+    def test_cancel_selected_manual_wait_keeps_the_manual_save_and_starts_no_export(self):
+        pending={'one'}
+        self.w._art_requests=SimpleNamespace(manual_pending=lambda tid=None:bool(pending) if tid is None else tid in pending)
+        before=self.w._state_repository.path.read_bytes()
+        self.request();self.assertTrue(cancel_source_syncs(self.w));self.assertEqual(pending,{'one'})
+        pending.clear();QTest.qWait(150);self.app.processEvents()
+        self.ready.assert_not_called();self.failed.assert_not_called()
+        self.assertIsNone(self.w._source_sync_waiting)
+        self.assertEqual(self.w._state_repository.path.read_bytes(),before)
+
     def legacy_wait(self):
         w=self.w
         w.metadata_controller=SimpleNamespace(pending=[{'error':''}],queue_error=lambda:'',migration_pending=False)

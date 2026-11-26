@@ -9,7 +9,7 @@ from unittest import mock
 
 from PySide6.QtCore import QCoreApplication, QEvent
 from PySide6.QtWidgets import QApplication, QFrame
-from PySide6.QtTest import QTest
+from PySide6.QtTest import QSignalSpy, QTest
 
 from desktop.analysis import AnalysisMixin
 from desktop.native_analysis import NativeAnalysisController, KEY
@@ -249,12 +249,19 @@ class AnalysisRetryScheduling(unittest.TestCase):
         w._analysis_queue = [(w.lib, current, {}, job['id'])]
         w._analysis_source_busy.return_value = False
         w._analysis_prerequisite_ready = mock.Mock(return_value=False)
+        retry = QSignalSpy(w._analysis_retry_timer.timeout)
         with mock.patch.object(analysis_jobs, 'matches', return_value=True):
-            QTest.qWait(600)
+            # Observe the owned timeout itself: a busy event loop can dispatch
+            # its 500 ms timer after a fixed 600 ms wall-clock wait has ended.
+            self.assertTrue(retry.wait(2000), 'The owned analysis retry did not fire')
+        self.assertEqual(retry.count(), 1)
         w._analysis_prerequisite_ready.assert_called_once_with(current, job)
         queued = list(w._analysis_queue)
         w._shutting_down = True
-        QTest.qWait(600)
+        closing_retry = QSignalSpy(w._analysis_retry_timer.timeout)
+        self.assertTrue(closing_retry.wait(2000), 'The closing analysis retry did not retire')
+        self.assertEqual(closing_retry.count(), 1)
+        w._analysis_prerequisite_ready.assert_called_once_with(current, job)
         self.assertEqual(w._analysis_queue, queued)
         self.assertEqual(w.settings[analysis_jobs.KEY], [job])
         self.assertFalse(w._analysis_retry_timer.isActive())

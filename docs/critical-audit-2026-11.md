@@ -10,6 +10,142 @@ path does not imply that its original full capture or private prototype still ex
 Keep uncertain leads distinct from confirmed findings. Focused releases need not
 wait for unrelated audits to finish; only validated changes join an update.
 
+## Omitted membership after a successful no-write Sync — November24 late evening
+
+Confirmed actual follow-up: DUBSTEP gained Turtle Club (237720321); its current
+negative observation is stereo PCM24/48kHz WAV, outside the stock export profile.
+The full selected planner correctly found no native mutation, but the accepted
+no-op saved only its catalog witness. The Mac shadow retained old full source
+membership, so the next advisory comparison reported one playlist change forever.
+This is distinct from the earlier629 omitted-artwork scope error.
+A second route case matters on upgrade: the earlier no-op already renewed its
+witness, so inventory reuse could bypass the still-old shadow. The catalog
+shortcut now also requires matching selected full-source shadow fields. Generated
+two-stage completion tests and the actual DUBSTEP saved-input guard cover this.
+
+Acceptance must freshly verify the pinned mount, native catalogs/playback and
+captured selected source epochs before conditionally replacing the exact old Mac
+shadow's source/art/playlist comparison rows. Planning alone must not acknowledge
+musical changes. Keep its device generation/commit time unchanged, preserve all
+unselected baselines and refuse a superseded cache entity. This creates no device
+write or media ownership. Later eligible additions, source/metadata/cover changes
+must remain pending. Current fix/validation/install status belongs in HANDOFF;
+actual read-only diagnosis is in `~/Library/Logs/Soundbox/noop-baseline-20261124/`.
+
+## Persistent post-Sync status — November24 evening
+
+Confirmed cause: source playlist manifests contain1546 linked source IDs, including
+629 songs omitted from stock export. Artwork drift used that entire source set;
+all629 omitted IDs with local images lacked exported art records and therefore
+looked permanently dirty. The real production BoundArtCache reader plus bounded
+current native catalogs reproduced exactly629 artwork changes. The earlier
+manual audit considered only917 exported witness rows and missed this scope.
+
+Artwork observation now intersects linked source IDs with actual shadow-source
+track IDs plus exact-source/device witness exported members. Existing external
+catalog observation keeps its own live-ID fence. Full source membership diff is
+unchanged, and previously unarted exported songs still require Sync for a new
+manual cover. Five real plan/commit regressions cover unsupported WAV/MP3/M4A art,
+omitted-cover edits, exported-cover edits, witness-only exports and full-source
+membership drift. The same read-only production replay changed629→0 with byte-
+identical native catalogs and no device write. Broader final validation/install
+status belongs in HANDOFF.
+
+The separate generated stale BoundArtCache revision bug and one-poll caption
+publication delay were also fixed in the interim9b package. They were not the
+cause of629. Another generated full Sync confirmed the lost-link notice could
+misdescribe an intentionally retired selected song; only pairs required by an
+unselected binding now produce that notice. No blanket flag clearing or source-
+format policy change was introduced. Diagnostic receipts are under
+`~/Library/Logs/Soundbox/post-sync-status-20261124/`.
+
+## Repeated omitted-source reads and artwork capacity — November24 evening
+
+Confirmed: omission-bearing playlist Sync always forced full capture, while
+bounded header misses and process-local negative facts allowed unchanged rejected
+sources to hydrate/read repeatedly. Installed log diagnosis isolated the large
+DAVERT source cost; the current cached binding exports one of 83 LIVE SETS tracks.
+Implemented exact epoch/profile persistent negatives, bounded RF64/provider-header
+retry and worker-only verified catalog no-op routing. Changed/unknown inputs and
+actual catalog mutations retain full capture. Strict witness+shadow native hashes,
+source/batch handoff fences, alias rejection and zero-open/no-target-write controls
+cover the fast path. Real source wait/byte telemetry now appears in the footer.
+
+Classic cached cover dimensions and generated pixel/native links are correct;
+no mounted device was available. New/growing per-file ithmb performance capacity
+is checked before mutation. Existing oversized no-growth/free-slot cases remain
+usable. Larger archives need future segmentation; no device firmware hang cause
+or physical throughput gain is claimed. See [evidence](performance-audit.md#rejected-source-sync-and-artwork-sizing--november24-evening).
+
+## Minimal transaction and cover follow-up — November24
+
+Confirmed generated regressions: repeated equal-audio sources could lose their
+original DBID correspondence and manufacture duplicate exports; selected manual
+art pending during capture could freeze the previous fallback; artwork-only
+changes could leave linked playlists falsely clean. Candidate pools retain exact
+source ownership, selected capture waits for its manual choice, and advisory
+status observes current cover choices without granting write authority. Actual
+MHIT/MHII links and every prepared pixel slice are checked in generated Sync.
+Turn Up's local manual JPEG/prepared pixels are intact. Its reported physical
+placeholder remains unobserved; no firmware-display root cause is asserted.
+
+Delete previously compacted surviving artwork. It now prunes the small metadata
+graph while preserving original pixel offsets/owners, with zero retained-pixel
+IO in a 134 MB generated commit and rollback failures. Duplicate native playlist
+IDs fail before ownership can collapse into an unsafe deletion plan.
+
+Completed stock/dual transactions retained catalog/art/media rollback payloads.
+Exact-owned payloads now retire after success or complete rollback, retaining
+compact receipts and bounded pending recovery. Interrupted/unproved ownership
+remains recoverable; no old archives are guessed safe or swept. Repeated private
+native archive hashing now reuses first full verification only within a locked
+operation and fresh complete local file/parent epochs. Source observations,
+authority, constrained SQL, durable publication and readback remain guarded.
+Completed later-generation dual rollback receipts also stop qualifying as
+interrupted exports: the recognized complete-retirement marker plus completed
+transaction state excludes them. A real generated rollback returns to clean
+drift and no-op planning; executing or unknown markers retain recovery attention.
+See [measurements and scope](performance-audit.md#minimal-native-and-ipod-transactions--november24-follow-up).
+
+A separate existing cost remains after failure late in a dual commit, once its
+inner stock save already published a Mac shadow: physical catalog rollback can
+leave that disposable shadow stale. A generated late-manifest failure reproduced
+clean drift followed by about 101 KB of artwork reconciliation on retry. This
+is separate from completed-receipt classification, and no shadow restoration
+rule was added without its own ownership proof. The private iPod IO audit receipt
+records the reproduction; this lead remains open for a later focused update.
+The older dual interrupted-generation lookup still enumerates recovery receipt
+names independently of the new bounded cleanup index. Its cost is unmeasured;
+retiring completed payloads does not constitute removing that legacy lookup.
+
+## All native save paths and rapid tag ordering — November24
+
+Parallel source/profile audits separated intention admission, native application,
+fresh readback and durable acknowledgement across all accepted writers. Generated
+profiles put repeated full-byte protection and pure plan/revision construction
+ahead of Python-level atomic flush cost. Common changes overlap independent fresh
+archive hashes, reuse only the immediate private capture's digest during copy
+comparison, and avoid repeated pure scalar-row/revision/clock transformations.
+Every fresh source/authority check, journal, constrained SQL, readback and durable
+publication remains. [Measured scope and remaining costs](performance-audit.md#all-rekordbox-writers--november24-profiling)
+include the much smaller complete large-song-move gain; no instant-save or
+physical/live-source benchmark is claimed. Package status belongs in HANDOFF.
+
+The tag controller previously blocked a second order gesture behind the first
+save. Exact source/category BEFORE→AFTER chains now form a bounded durable FIFO;
+controls stay under the pointer and older acknowledgements cannot replace the
+latest projected order. External catalog changes stop new capture before a
+broken chain can be staged. Held admission/ACK, repeated same-tag moves, multiple
+categories, restart, source/restore and failure/publication retry regressions
+cover this path. A real generated MainWindow drains four gestures without visible
+order jumps. Structural tag edits retain their separate queue barrier.
+
+Full-library readback remains fresh because a partial result lacks an exact
+whole-source BEFORE correspondence. Large playlist JSON replay and survivor SQL
+also remain measured leads. Removing those costs needs its own authority,
+mutation and recovery proof; cached source truth or unguarded batched SQL is not
+an accepted shortcut.
+
 ## Delivery checkpoints — reviewed November23
 
 The broader fixes below shipped in personal 174,
@@ -114,6 +250,44 @@ The new TIFF comparison fixture's own device-lifetime crash was separately fixed
 Independent source/lifetime review found no blocker. Full release and installed
 status belong in [HANDOFF](HANDOFF.md); [UI evidence](ui-polish-audit.md) records
 the measured costs and limits. No native waveform/source/device code changed.
+
+## My Tag drag admission — November24 source correction
+
+Dragging a My Tags label crossed the input threshold but never created a
+platform drag. `desktop.trees._start_chip_drag` accepted only plain text or a
+native-playlist MIME; the caller supplied tag-order MIME alone. Existing gesture
+tests replaced that helper, masking its early return. The helper now explicitly
+admits the tag-order type. A regression exercises the real label/threshold/helper
+path through platform QDrag construction and exact MIME delivery, then verifies
+the resulting order without assigning a tag. Source/catalog fencing and the
+separately accepted native order writer remain unchanged. Validation and installed
+status belong in [HANDOFF](HANDOFF.md); no real app/source input was automated.
+
+## Stock Sync read costs — November24 independent audit
+
+Read-only logs attribute 133.242 s of a 140.313 s stock plan to source preparation,
+with 49 acquisition attempts/2.214 GB read for a later 3-copy/909-reuse commit. The
+cloud-only inventory correction and its limits are in
+[performance evidence](performance-audit.md#stock-sync-source-hydration--november24).
+Independent review confirmed commit preflight still checks copies/rewrites with
+their expected bytes; retained metadata-only inventory does not reacquire audio.
+
+Sync prune still streams the expected owned media:
+one logged 22-file/530.6 MB pass took 35.514 s; the latest 2-file/44.4 MB pass took 2.965 s.
+Confirmed Delete's indexed-entity protocol has separate admission, so it does
+not automatically replace these Sync checks.
+
+A generated `soundfile.write` fixture using `format='WAVEX', subtype='PCM_24'`
+also reproduced a negative-probe gap: the bounded header returned `None`, while
+the full format check rejected PCM24 after acquisition. The source correction
+recognizes only complete 40-byte extensible PCM/float framing with its standard
+GUID and valid field relationships, proving the existing rejection without
+reading audio. Unknown or malformed extensions still acquire normally; WAVEX
+PCM16 remains outside the unchanged stock profile. A 512 MiB sparse fixture reads
+at most 60 header bytes and plans without acquisition; rewriting to supported
+ordinary WAV still reacquires. This generated proof does not identify the 13
+acquisition basenames absent from the current shadow, or establish that a
+particular live file uses WAVEX. No physical latency gain is claimed.
 
 ## Independent cleanliness review — November21 source follow-up
 

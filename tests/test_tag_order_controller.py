@@ -9,7 +9,7 @@ from unittest import mock
 from PySide6.QtWidgets import QApplication
 
 from desktop.tag_creation_controller import TagDefinitionController,QUEUE
-from soundbox import rekordbox_tag_order as order
+from soundbox import rekordbox_tag_order as order, rekordbox_tag_definitions as definitions
 from soundbox.library import LibraryTag,Track
 from tests import test_tag_creation_controller as fixtures
 
@@ -75,6 +75,13 @@ class NativeTagOrderController(unittest.TestCase):
         self.assertEqual(self.controller.native_order(self.tags),self.tags)
 
     def test_pending_create_or_delete_blocks_new_order_capture(self):
-        request=self.request();self.window.settings[QUEUE]=[dict(source=str(self.window.lib.source),library_id='library',request=request,error='')]
-        self.assertIn('Finish pending',self.controller.order_reason())
-        self.assertFalse(self.controller.enqueue_order(request));self.assertEqual(len(self.controller.pending),1)
+        tag=self.tags[0]
+        for request in (
+                definitions.request_for('library','1','1','New Tag'),
+                definitions.deletion_request_for('library','1','1',tag.tag_id,tag.source_uuid,tag.name)):
+            with self.subTest(action=request.get('action','create')):
+                self.window.settings[QUEUE]=[dict(source=str(self.window.lib.source),library_id='library',
+                    request=request,error='')]
+                self.assertIn('Finish pending',self.controller.order_reason())
+                self.assertFalse(self.controller.enqueue_order(self.request()))
+                self.assertEqual(len(self.controller.pending),1)

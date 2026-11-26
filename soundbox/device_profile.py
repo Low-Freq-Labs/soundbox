@@ -36,7 +36,7 @@ class DeviceProfile:
 
     @property
     def cdj_export(self) -> bool:
-        return self.kind=='generic_usb' and self.filesystem in FAT_FILESYSTEMS | {'exfat'}
+        return self.kind in {'generic_usb', 'ipod_usb'} and self.filesystem in FAT_FILESYSTEMS | {'exfat'}
 
     def to_dict(self) -> dict:
         return asdict(self)

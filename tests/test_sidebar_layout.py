@@ -7,7 +7,7 @@ from unittest import mock
 from PySide6.QtCore import QCoreApplication, QEvent, QRect, Qt, QTimer
 from PySide6.QtGui import QPainter, QPixmap
 from PySide6.QtWidgets import (QApplication, QMainWindow, QStackedWidget,
-                              QStyle, QStyleOptionViewItem, QTableView,
+                              QPushButton, QStyle, QStyleOptionViewItem, QTableView,
                               QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from desktop.app import MainWindow
@@ -222,8 +222,16 @@ class SidebarLayout(unittest.TestCase):
                 _device_coordinator=DeviceOperationCoordinator(), _stock_view_cache={},
                 _stock_catalog_witness_cache={}, _stock_view_failures={}, _dual_sync_queue={},
                 _stock_view_warming=set(), _stock_view_pending={}, _current_device_path='',
+                _current_device_role='', _pending_device_operation=None,
+                _exporting=False, _deleting=False, lib=None,
+                _EJECT_BLOCKING_WORKERS=MainWindow._EJECT_BLOCKING_WORKERS,
                 _finish_ipod_loading_status=mock.Mock()).items():
             setattr(w, name, value)
+        for name in ('_device_operation_owned', '_update_device_action_state'):
+            setattr(w, name, lambda *args, _name=name, **kwargs:
+                    getattr(MainWindow, _name)(w, *args, **kwargs))
+        w.device_sync_btn=QPushButton('Export',w)
+        w.eject_btn=QPushButton('Eject',w)
         profile = DeviceProfile('generic_usb', 'USB', 'exfat', False, False, True, False, False)
         row = [('SONNY', '/generated/USB', 2 * 10 ** 9, 0, profile)]
         with mock.patch('desktop.app.device_facts', return_value=DeviceFacts(capacity_bytes=10 ** 12)) as facts, \
@@ -234,6 +242,8 @@ class SidebarLayout(unittest.TestCase):
         self.assertEqual(item.text(0), 'SONNY · USB · 1.0 TB')
         self.assertIn('Capacity: 1.0 TB', item.toolTip(0))
         self.assertIn('2.0 GB free', item.toolTip(0))
+        self.assertFalse(w.device_sync_btn.isEnabled())
+        self.assertFalse(w.eject_btn.isEnabled())
         w.device_tree.setCurrentItem(item)
         with mock.patch('desktop.app.device_facts', return_value=DeviceFacts(capacity_bytes=2 * 10 ** 12)) as facts, \
                 mock.patch('desktop.app.device_fs', return_value='exfat'):
@@ -242,3 +252,5 @@ class SidebarLayout(unittest.TestCase):
         self.assertIs(w.device_tree.topLevelItem(0), item)
         self.assertIs(w.device_tree.currentItem(), item)
         self.assertEqual(item.text(0), 'SONNY · USB · 2.0 TB')
+        self.assertFalse(w.device_sync_btn.isEnabled())
+        self.assertFalse(w.eject_btn.isEnabled())

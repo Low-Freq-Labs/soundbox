@@ -127,6 +127,8 @@ class ArtCache:
     Store each fetched image once and retain misses and explicit user blocks.
     """
 
+    _observation_owner: ArtCache
+
     def __init__(self, root: Path):
         if Path(root).is_symlink():
             raise ValueError("Artwork root cannot be a symlink")
@@ -155,6 +157,36 @@ class ArtCache:
     def scope_owner(self):
         """Presentation session; compatible views share it, source ABA does not."""
         return self._scope_owner
+
+    def _observation_owner_current(self) -> bool:
+        owner = getattr(self, '_observation_owner', None)
+        return owner is None or (not owner._retired and owner._area is self._area
+            and owner._generation == self._generation == self._area.generation
+            and owner.scope_owner is self.scope_owner
+            and getattr(owner, '_bindings', None) is getattr(self, '_bindings', None))
+
+    @_art_read
+    def observation_view(self, library=None):
+        """Detach current complete read-only artwork without constructing state.
+
+        Another legitimate publisher can advance the shared art revision. The
+        original publisher and its old selection tokens stay untouched; this
+        worker view reloads only saved artwork metadata under the existing lock.
+        """
+        if (self._retired or self._generation != self._area.generation
+                or getattr(self, '_writing', False) or not self._observation_owner_current()):
+            raise StateChangedError('Artwork owner changed before observation')
+        current = copy.copy(self)
+        current.read_only = True
+        current._observation_owner = getattr(self, '_observation_owner', self)
+        if current._revision != self._area.art_revision:
+            current._reload_index()
+            current._defaults = current._load_defaults()
+            current._default_assignments = {tid: pid for tid, pid in current._defaults['assignments'].items()
+                                            if pid in current._defaults['photos']}
+            current._selection_exclusions = current.source_exclusions()
+            current._revision = self._area.art_revision
+        return current
 
     def _index_file(self) -> Path:
         return self.root / "index.json"
@@ -235,7 +267,8 @@ class ArtCache:
         """Check selected intent on any thread; never read, decode or hash images."""
         if (not isinstance(token, ArtworkSelection) or token._cache is not self or self._retired
                 or token._generation != self._generation or self._generation != self._area.generation
-                or self._revision != self._area.art_revision or getattr(self, '_writing', False)):
+                or self._revision != self._area.art_revision or getattr(self, '_writing', False)
+                or not self._observation_owner_current()):
             return False
         rows,edge=self._selection_rows((row[0] for row in token._rows), manual=token._manual)
         return ((self._selection_pool_current(token) if edge else

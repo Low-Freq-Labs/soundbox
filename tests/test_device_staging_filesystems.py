@@ -1,5 +1,7 @@
 """Real generated FAT32/exFAT images; never discover or modify physical disks."""
+import errno
 import hashlib
+import json
 import os
 from pathlib import Path
 import plistlib
@@ -128,6 +130,45 @@ class DeviceStagingFilesystems(unittest.TestCase):
                 self.assertEqual((target / 'copy').read_bytes(), first.read_bytes())
                 self.assertEqual((target / 'concat').read_bytes(), first.read_bytes() + second.read_bytes())
                 self.assertEqual(self.stages(target), {})
+
+    def test_known_catalog_copy_from_the_same_private_volume_keeps_fresh_source_fences(self):
+        for filesystem,target,_sources in self.targets():
+            with self.subTest(filesystem=filesystem):
+                session=DeviceSession(target,[],create=False)
+                source=target/'current-catalog';payload=b'generated catalog bytes'*4096
+                session.atomic_write(source,payload)
+                session.atomic_copy(source,target/'transaction/old-catalog',
+                                    expected_sha256=hashlib.sha256(payload).hexdigest())
+                self.assertEqual(source.read_bytes(),payload)
+                self.assertEqual((target/'transaction/old-catalog').read_bytes(),payload)
+                self.assertEqual(self.stages(target),{})
+
+    def test_completed_transaction_payload_retirement_on_private_filesystem_images(self):
+        from soundbox import transaction_outcome as outcome
+        for filesystem,target,_sources in self.targets():
+            with self.subTest(filesystem=filesystem):
+                session=DeviceSession(target,[],create=False)
+                directory=Path('.soundbox/stock-ipod-recovery/generated-completed-transaction')
+                evidence=outcome.begin_recovery(session,directory)
+                session.atomic_write(directory/'plan.json',b'{"transaction_state":"executing"}')
+                payloads=(directory/'catalog/iTunesDB.before',directory/'catalog/음악/音樂-é.before')
+                for payload in payloads:session.atomic_write(payload,b'generated previous catalog'*4096)
+                evidence=evidence.remember(session,payloads)
+                outcome.record_outcome(session,directory,'committed')
+                try:evidence.retire(session)
+                except OSError as error:
+                    # iPod writers admit FAT32 only. This exFAT image also
+                    # verifies unsupported exclusive claims fail closed.
+                    self.assertEqual(filesystem,'exfat')
+                    self.assertIn(error.errno,(errno.ENOTSUP,errno.EOPNOTSUPP))
+                    for payload in payloads:self.assertEqual((target/payload).read_bytes(),b'generated previous catalog'*4096)
+                    self.assertFalse(json.loads((target/directory/'plan.json').read_bytes())['payload_retirement']['complete'])
+                    self.assertEqual(self.stages(target),{})
+                    continue
+                self.assertFalse(any((target/payload).exists() for payload in payloads))
+                self.assertTrue(json.loads((target/directory/'plan.json').read_bytes())['payload_retirement']['complete'])
+                self.assertEqual(outcome.resume_completed_payload_retirement(session,'stock-ipod-recovery'),())
+                self.assertEqual(self.stages(target),{})
 
     def test_manifest_save_reopens_through_the_same_device_session(self):
         for filesystem, target, _sources in self.targets():

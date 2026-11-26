@@ -38,6 +38,9 @@ CLASSIC_55_PROFILE = "classic-rgb565-1055-1060-1061-55-stride56-v1"
 CLASSIC_FORMATS = {1055: (128, 128), 1060: (320, 320), 1061: (56, 56)}
 CLASSIC_55_FORMATS = {1055: (128, 128), 1060: (320, 320), 1061: (55, 55)}
 _PROFILES = {PROFILE: FORMATS, CLASSIC_PROFILE: CLASSIC_FORMATS, CLASSIC_55_PROFILE: CLASSIC_55_FORMATS}
+# libgpod's ithumb-writer.c rolls over at 256 decimal MB after reports of slow
+# device interfaces. This is a performance policy, not a hard firmware limit.
+ITHMB_PER_FILE_PERFORMANCE_BUDGET = 256_000_000
 
 
 def _profile(value: str) -> str:
@@ -49,6 +52,16 @@ def _profile(value: str) -> str:
 def _pixel_size(formats, format_id):
     width,height = formats[format_id]
     return (width + width % 2) * height * 2
+
+
+def _check_artwork_capacity(format_id: int, planned_size: int, before_size: int) -> None:
+    # Preserve existing oversized layouts and allow reuse without growth. Our
+    # single-file-per-format writer needs segmentation before growing past this.
+    if planned_size > before_size and planned_size > ITHMB_PER_FILE_PERFORMANCE_BUDGET:
+        raise StockArtworkError(
+            f'Artwork capacity: F{format_id}_1.ithmb would grow to {planned_size:,} bytes, '
+            f'above the {ITHMB_PER_FILE_PERFORMANCE_BUDGET:,}-byte per-file performance budget. '
+            'Additional artwork file segmentation is required; no cover was omitted.')
 
 
 def _database_profile(data: bytes) -> str:
@@ -993,6 +1006,26 @@ def render_stock_artwork(
     if not artwork_for_dbid:
         return None
 
+    selected = []
+    unique_keys = set()
+    for track in tracks:
+        dbid = int(getattr(track, "dbid", 0) or 0)
+        prepared = artwork_for_dbid.get(dbid)
+        if prepared is None:
+            continue
+        old_id = int(getattr(track, "mhii_link", 0) or 0)
+        old = existing_slots.get(old_id)
+        keep_old = old is not None and all(
+            prepared.payload(fid).sha256 == preserved(old_id).payload(fid).sha256
+            for fid in formats)
+        unique_keys.add(preserved(old_id).cache_key if keep_old else prepared.cache_key)
+        selected.append((track, dbid, prepared, old_id, old, keep_old))
+    # Exact effective-key deduplication precedes payload assembly, hashing and
+    # track-link mutation, including when native covers retain their own bytes.
+    for format_id in formats:
+        _check_artwork_capacity(format_id, _pixel_size(formats, format_id) * len(unique_keys),
+                                _files.get(format_id, (0, 0))[0])
+
     reserved_ids = {
         int(getattr(track, "mhii_link", 0) or 0)
         for track in tracks
@@ -1012,16 +1045,7 @@ def render_stock_artwork(
     final_references: dict[int, list[int]] = {}
     updated_images: set[int] = set()
 
-    for track in tracks:
-        dbid = int(getattr(track, "dbid", 0) or 0)
-        prepared = artwork_for_dbid.get(dbid)
-        if prepared is None:
-            continue
-        old_id = int(getattr(track, "mhii_link", 0) or 0)
-        old = existing_slots.get(old_id)
-        keep_old = old is not None and all(
-            prepared.payload(fid).sha256 == preserved(old_id).payload(fid).sha256
-            for fid in formats)
+    for track, dbid, prepared, old_id, old, keep_old in selected:
         cache_key = prepared.cache_key
         if keep_old:
             assert old is not None
@@ -1179,7 +1203,7 @@ def render_incremental_stock_artwork(
     for format_id, (width, height) in formats.items():
         slot_size = _pixel_size(formats, format_id)
         free[format_id] = _FreeArtworkSlots([
-            offset for offset in range(0, final_sizes[format_id], slot_size)
+            offset for offset in (range(0, final_sizes[format_id], slot_size) if prepared_by_dbid else ())
             if offset not in referenced[format_id]
         ])
 
@@ -1310,6 +1334,8 @@ def render_incremental_stock_artwork(
                             offset = available
                         else:
                             offset = final_sizes[format_id]
+                            _check_artwork_capacity(format_id, offset + payload.size,
+                                                    file_state[format_id][0])
                             final_sizes[format_id] += payload.size
                     offsets[format_id] = offset
                     if matched_offset is None:

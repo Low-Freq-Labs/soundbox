@@ -22,6 +22,7 @@ from . import theme
 
 PATH_ROLE = Qt.UserRole + 1     # rekordbox playlist display_path
 DEVPATH_ROLE = Qt.UserRole + 2  # device mount path
+DEVROLE_ROLE = Qt.UserRole + 84  # logical export role; DEVPATH_ROLE stays physical
 CUSTOM_ROLE = Qt.UserRole + 3   # custom (SoundBox) playlist name
 COLLECTION_ROLE = Qt.UserRole + 6  # the built-in "Collection" all-tracks view
 ARTISTS_ROLE = Qt.UserRole + 7     # the built-in "Artists" folder (expandable)
@@ -153,7 +154,8 @@ def _chip_pixmap(text: str) -> QPixmap:
 
 def _start_chip_drag(view, md, label: str, actions, *, default_action=Qt.IgnoreAction) -> None:
     """Begin a drag from `view` carrying `md`, using the chip pixmap as the ghost."""
-    if md is None or not (md.hasText() or md.hasFormat('application/x-soundbox-native-playlist')):
+    if md is None or not (md.hasText() or md.hasFormat('application/x-soundbox-native-playlist')
+                          or md.hasFormat('application/x-soundbox-tag-order-v1')):
         return
     drag = QDrag(view)
     drag.setMimeData(md)
@@ -1006,6 +1008,7 @@ class UnifiedPlaylistTree(SoundBoxTree):
 class DeviceTree(NoTypeAhead, QTreeWidget):
     """External devices — drop target (rb/cust/sbview). Dropping starts an export."""
     dropped = Signal(str, list)  # device_path, [(kind, value)]
+    dropped_role = Signal(str, list, str)  # physical mount, selected jobs, explicit role
 
     def __init__(self):
         super().__init__()
@@ -1078,7 +1081,9 @@ class DeviceTree(NoTypeAhead, QTreeWidget):
             if kind in (("cust","sbview") if typed else ("rb", "cust", "sbview")) and val:
                 items.append((kind, val))
         if dev and items:
-            self.dropped.emit(dev, items)
+            role=item.data(0,DEVROLE_ROLE) or ''
+            if role:self.dropped_role.emit(dev,items,role)
+            else:self.dropped.emit(dev, items)
             e.acceptProposedAction()
         else:
             e.ignore()

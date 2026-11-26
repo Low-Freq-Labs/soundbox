@@ -236,7 +236,7 @@ def _captured_sha(path: Path) -> str:
         return hashlib.file_digest(handle, 'sha256').hexdigest()
 
 
-def _standalone_capture(captured: Path, baseline: Path) -> bool:
+def _standalone_capture(captured: Path, baseline: Path, standalone_digest: list[str] | None = None) -> bool:
     """Verify and durably adopt one self-contained encrypted TEMP capture.
 
     Stable source DB/WAL copying and hot-journal refusal already happened. Any
@@ -271,39 +271,50 @@ def _standalone_capture(captured: Path, baseline: Path) -> bool:
     captured.unlink()
     _regular(baseline)
     sync_dir(baseline.parent)
+    if standalone_digest is not None:
+        standalone_digest.append(digest)
     return True
 
 
 @contextmanager
-def encrypted_backup(source: Path) -> Iterator[Path]:
+def encrypted_backup(source: Path, *, standalone_digest: list[str] | None = None) -> Iterator[Path]:
     """Verified encrypted DB/WAL snapshot only; no offline research inventory.
 
     Every SQLite connection remains on private copies. The caller still owns
     authority/closed-app checks, exact publication hashing and recovery binding.
-    OfflineWorkspace retains its full semantic proof separately.
+    OfflineWorkspace retains its full semantic proof separately. An optional
+    empty digest output receives the already verified standalone capture hash,
+    for immediate destination-copy comparison only. It is never proof of later
+    path contents. WAL folding leaves it empty and keeps ordinary fresh hashing.
     """
     source = Path(source).expanduser().absolute()
+    if standalone_digest:
+        raise WriteProofError('A backup digest output must belong to this fresh capture')
     _regular(source)
     if source.is_symlink():
         raise WriteProofError('Source database must not be a symlink')
-    with tempfile.TemporaryDirectory(prefix='soundbox-encrypted-backup-') as area:
-        root = Path(area).resolve()
-        captured, baseline = root / 'captured.db', root / 'baseline.db'
-        _copy_stable_snapshot(source.resolve(), captured)
-        captured.chmod(0o600)
-        wal = captured.with_name(captured.name + '-wal')
-        if wal.exists():
-            wal.chmod(0o600)
-        if _standalone_capture(captured, baseline):
+    try:
+        with tempfile.TemporaryDirectory(prefix='soundbox-encrypted-backup-') as area:
+            root = Path(area).resolve()
+            captured, baseline = root / 'captured.db', root / 'baseline.db'
+            _copy_stable_snapshot(source.resolve(), captured)
+            captured.chmod(0o600)
+            wal = captured.with_name(captured.name + '-wal')
+            if wal.exists():
+                wal.chmod(0o600)
+            if _standalone_capture(captured, baseline, standalone_digest):
+                yield baseline
+                return
+            _backup(captured, baseline)  # folds WAL, checks SQLite integrity and fsyncs
+            conn = _connect(baseline, readonly=True)
+            try:
+                _identity(conn)
+            finally:
+                conn.close()
             yield baseline
-            return
-        _backup(captured, baseline)  # folds WAL, checks SQLite integrity and fsyncs
-        conn = _connect(baseline, readonly=True)
-        try:
-            _identity(conn)
-        finally:
-            conn.close()
-        yield baseline
+    finally:
+        if standalone_digest is not None:
+            standalone_digest.clear()
 
 
 def _rows(conn, table: str) -> list[dict]:

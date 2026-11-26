@@ -149,7 +149,7 @@ class CdjDropIntent(unittest.TestCase):
         playlists=[object()]
         CdjDeviceMixin._begin_cdj_export(host,'/not-a-device',playlists,from_drop=True,drop_target=(7,'fixture'))
         pending[0]()
-        host._begin_cdj_export.assert_called_once_with('/not-a-device',playlists,settings=None,from_drop=True,drop_target=(7,'fixture'),standalone=())
+        host._begin_cdj_export.assert_called_once_with('/not-a-device',playlists,settings=None,from_drop=True,drop_target=(7,'fixture'),standalone=(),target_role='generic_usb')
 
     def test_standalone_song_and_target_binding_survive_both_deferrals(self):
         for source_busy in (False,True):
@@ -165,7 +165,7 @@ class CdjDropIntent(unittest.TestCase):
             host.tag_controller.owned=False
             pending[0]()
             host._begin_cdj_export.assert_called_once_with('/not-a-device',(),settings=None,
-                standalone=(track,),from_drop=True,drop_target=(8,'fixture'))
+                standalone=(track,),from_drop=True,drop_target=(8,'fixture'),target_role='generic_usb')
 
     def test_generic_playlist_drop_carries_its_own_authorization(self):
         from desktop.app import MainWindow
@@ -173,7 +173,7 @@ class CdjDropIntent(unittest.TestCase):
         host=SimpleNamespace(lib=object(),_resolve_jobs=lambda _:playlists,
             _device_profiles={'/not-a-device':SimpleNamespace(kind='generic_usb')},_begin_cdj_export=mock.Mock())
         MainWindow._on_device_drop(host,'/not-a-device',[('cust','Set')])
-        host._begin_cdj_export.assert_called_once_with('/not-a-device',playlists,from_drop=True)
+        host._begin_cdj_export.assert_called_once_with('/not-a-device',playlists,from_drop=True,target_role='generic_usb')
 
     def test_drop_authorization_survives_waiting_for_source_edits(self):
         pending=[]
@@ -186,7 +186,7 @@ class CdjDropIntent(unittest.TestCase):
             CdjDeviceMixin._begin_cdj_export(host,'/not-a-device',playlists,from_drop=True,drop_target=(7,'fixture'))
         host.tag_controller.owned=False
         pending[0]()
-        host._begin_cdj_export.assert_called_once_with('/not-a-device',playlists,settings=None,from_drop=True,drop_target=(7,'fixture'),standalone=())
+        host._begin_cdj_export.assert_called_once_with('/not-a-device',playlists,settings=None,from_drop=True,drop_target=(7,'fixture'),standalone=(),target_role='generic_usb')
 
     def test_pending_native_playlist_save_drains_before_export_and_rebinds_membership(self):
         from soundbox.library import Playlist
@@ -204,7 +204,7 @@ class CdjDropIntent(unittest.TestCase):
         controller.pending=[];lib.playlists=[new];pending[0]()
         expected=Playlist('After',[],['one'],'1000',export_key='cust:Original Set')
         host._begin_cdj_export.assert_called_once_with('/not-a-device',[expected],settings=None,
-            from_drop=True,drop_target=(7,'fixture'),standalone=())
+            from_drop=True,drop_target=(7,'fixture'),standalone=(),target_role='generic_usb')
         self.assertEqual(new.export_key,'')
 
     def test_durable_metadata_and_failed_tag_assignments_fence_export_without_an_active_worker(self):

@@ -3,7 +3,9 @@ from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timezone
 import json
+from hashlib import sha256
 import unittest
+from unittest import mock
 
 from soundbox import rekordbox_cues as cues
 from soundbox.rekordbox_write import ConflictError, WriteProofError
@@ -177,6 +179,135 @@ class CuePlanning(unittest.TestCase):
         changed.aggregate['UUID'] = 'replaced'
         self.assertNotEqual(state.revision, changed.revision)
         self.assertEqual(state.revision, replace(state, cues=tuple(reversed(state.cues))).revision)
+
+    def test_revision_retains_original_encoded_bytes_for_every_raw_cell(self):
+        from soundbox import rekordbox_write
+        base = with_existing([existing(0, 10000), existing(1, 20000, key='101')])
+        variants = [base, replace(base, cues=()), snapshot()]
+        binary = deepcopy(base)
+        binary.track['opaque_binary'] = b'\x00\xff'
+        binary.cues[0]['InPointSeekInfo'] = b'\x01\x80'
+        binary.aggregate['opaque_binary'] = b'\x00'
+        binary.track['opaque_object'] = {'nested': [None, 1.5, '日本語', {'a': False}]}
+        variants.extend([binary, replace(binary, cues=tuple(reversed(binary.cues)))])
+        for state in variants:
+            with self.subTest(binary=state is binary, cues=len(state.cues)):
+                before = deepcopy(state)
+                def cells(row):
+                    return ({key: {'blob': value.hex()} if isinstance(value, bytes) else value
+                             for key, value in row.items()} if row is not None else None)
+                expected = json.dumps({'track': cells(state.track),
+                    'cues': [cells(row) for row in sorted(state.cues, key=lambda row: row['ID'])],
+                    'aggregate': cells(state.aggregate)}, sort_keys=True, ensure_ascii=False,
+                    separators=(',', ':'), allow_nan=False).encode()
+                actual_json = rekordbox_write._json
+                with mock.patch.object(cues, '_REVISION_CACHE', cues._RevisionCache()), \
+                        mock.patch.object(rekordbox_write, '_json', wraps=actual_json) as encoded:
+                    self.assertEqual(state.revision, sha256(expected).hexdigest())
+                self.assertEqual(actual_json(encoded.call_args.args[0]), expected)
+                self.assertEqual(state, before)
+                # An unchanged owner is no permission to reuse stale hashes.
+                changed = deepcopy(state)
+                changed.track['Title'] = 'Later title'
+                self.assertNotEqual(changed.revision, sha256(expected).hexdigest())
+
+    def test_revision_reuses_only_complete_fresh_immutable_inputs(self):
+        state = with_existing([existing(0, 10000), existing(1, 20000, key='101')])
+        with mock.patch.object(cues, '_REVISION_CACHE', cues._RevisionCache()), \
+                mock.patch.object(cues, '_revision_digest', wraps=cues._revision_digest) as digest:
+            original = state.revision
+            copied = deepcopy(state)
+            self.assertEqual(copied.revision, original)
+            self.assertEqual(replace(copied, cues=tuple(reversed(copied.cues))).revision, original)
+            self.assertEqual(digest.call_count, 1)
+            for owner in ('track', 'cues', 'aggregate'):
+                changed = deepcopy(state)
+                row = changed.cues[0] if owner == 'cues' else getattr(changed, owner)
+                row['unknown native column'] = 'fresh value'
+                self.assertNotEqual(changed.revision, original)
+            self.assertEqual(digest.call_count, 4)
+            state.track['opaque'] = b'first'
+            binary = state.revision
+            state.track['opaque'] = b'second'
+            self.assertNotEqual(state.revision, binary)
+
+    def test_revision_cache_distinguishes_scalar_json_bytes_and_skips_mutable_values(self):
+        cache = cues._RevisionCache()
+        with mock.patch.object(cues, '_REVISION_CACHE', cache), \
+                mock.patch.object(cues, '_revision_digest', wraps=cues._revision_digest) as digest:
+            results = []
+            for value in (0, 0.0, -0.0, 1, 1.0, True):
+                state = replace(snapshot(), track={'opaque': value})
+                expected = sha256(json.dumps({'track': {'opaque': value}, 'cues': [],
+                    'aggregate': None}, sort_keys=True, separators=(',', ':'),
+                    allow_nan=False).encode()).hexdigest()
+                self.assertEqual(state.revision, expected)
+                self.assertEqual(state.revision, expected)
+                results.append(expected)
+            self.assertEqual(len(set(results)), 6)
+            self.assertEqual(len(cache._values), 5)
+            self.assertEqual(digest.call_count, 7)
+            state = replace(snapshot(), track={'opaque': {'nested': [1]}})
+            before = state.revision
+            state.track['opaque']['nested'].append(2)
+            self.assertNotEqual(state.revision, before)
+            self.assertEqual(len(cache._values), 5)
+
+    def test_revision_cache_has_entry_and_byte_limits_and_does_not_cache_failures(self):
+        cache = cues._RevisionCache(entries=2)
+        with mock.patch.object(cues, '_REVISION_CACHE', cache), \
+                mock.patch.object(cues, '_revision_digest', wraps=cues._revision_digest) as digest:
+            states = [replace(snapshot(), track={'ID': str(index)}) for index in range(3)]
+            expected = [state.revision for state in states]
+            self.assertEqual(len(cache._values), 2)
+            self.assertEqual(states[0].revision, expected[0])
+            self.assertEqual(digest.call_count, 4)
+            self.assertEqual(replace(snapshot(), track={'huge': b'x' * 200000}).revision,
+                             replace(snapshot(), track={'huge': b'x' * 200000}).revision)
+            self.assertEqual(len(cache._values), 2)
+            self.assertLessEqual(cache._bytes, cache.byte_limit)
+        cache = cues._RevisionCache(byte_limit=1)
+        with mock.patch.object(cues, '_REVISION_CACHE', cache):
+            snapshot().revision
+            self.assertFalse(cache._values)
+            for _ in range(2):
+                with self.assertRaises(WriteProofError):
+                    replace(snapshot(), track={'bad': float('nan')}).revision
+            self.assertFalse(cache._values)
+
+    def test_revision_cache_byte_budget_evicts_old_entries(self):
+        state = replace(snapshot(), track={'ID': 'one'})
+        cache = cues._RevisionCache()
+        with mock.patch.object(cues, '_REVISION_CACHE', cache):
+            state.revision
+        budget = cache._bytes
+        cache = cues._RevisionCache(byte_limit=budget)
+        with mock.patch.object(cues, '_REVISION_CACHE', cache):
+            state.revision
+            replace(state, track={'ID': 'two'}).revision
+            self.assertEqual(len(cache._values), 1)
+            self.assertLessEqual(cache._bytes, budget)
+
+    def test_revision_cache_miss_uses_frozen_cells_during_later_input_mutation(self):
+        state = snapshot()
+        expected = state.revision
+        original = cues._revision_digest
+        def mutate_after_capture(track, cue_rows, aggregate):
+            state.track['Title'] = 'Changed after capture'
+            return original(track, cue_rows, aggregate)
+        with mock.patch.object(cues, '_REVISION_CACHE', cues._RevisionCache()), \
+                mock.patch.object(cues, '_revision_digest', side_effect=mutate_after_capture):
+            self.assertEqual(state.revision, expected)
+            self.assertNotEqual(state.revision, expected)
+
+    def test_revision_preserves_rejection_of_invalid_json_and_missing_cue_identity(self):
+        variants = [replace(snapshot(), track={'unsupported': float('nan')}),
+                    replace(snapshot(), track={'unsupported': object()}),
+                    replace(snapshot(), cues=({'Kind': 1},))]
+        for state in variants:
+            with self.subTest(state=state):
+                with self.assertRaisesRegex(WriteProofError, 'Invalid cue snapshot'):
+                    state.revision
 
     def test_memory_duplicate_position_and_empty_delete_are_noops(self):
         state = with_existing([existing(0, 10000)])

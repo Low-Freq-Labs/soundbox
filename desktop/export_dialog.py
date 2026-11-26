@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QDialog, QDialogButtonBox,
     QHBoxLayout, QLabel, QMessageBox, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from soundbox.manifest import playlist_key
-from .devices import device_export_readiness, device_facts, human
+from .devices import device_export_readiness, device_facts, device_target_profile, human
 from . import theme
 
 
@@ -156,23 +156,15 @@ def verify_ipod_export_capture(capture,art_cache):
 def captured_ipod_noop_result(plan,store):
     """Read back a no-write generation before saving its optional association."""
     from soundbox.dual_ipod import DualIpodSyncPlan,commit_dual_ipod_sync
-    from soundbox.stock_ipod import StockIpodCommitResult,committed_stock_export_witness
-    from soundbox.sync import DeviceSession
+    from soundbox.stock_ipod import accept_stock_ipod_noop
     if isinstance(plan,DualIpodSyncPlan):
         result=commit_dual_ipod_sync(plan)
         stock_plan=plan.stock
         if stock_plan.catalog_witness is not None and result.stock.catalog_witness is None:
             raise ValueError(result.stock.catalog_warning or 'The iPod changed after its read-only comparison')
     else:
-        session=DeviceSession(plan.target,[],create=False)
-        witness,warning=committed_stock_export_witness(plan,session)
-        if plan.catalog_witness is not None and witness is None:
-            raise ValueError(warning or 'The iPod changed after its read-only comparison')
         stock_plan=plan
-        result=StockIpodCommitResult(plan.target/'.soundbox',0,0,plan.reused_track_count,0,
-            plan.playlist_names,plan.database_sha256_before,catalog_witness=witness,
-            catalog_warning='\n'.join(filter(None,(plan.catalog_warning,warning))),
-            catalog_notice=plan.catalog_notice)
+        result=accept_stock_ipod_noop(plan)
     return persist_ipod_export_witness(result,store,stock_plan.identity_key)
 
 
@@ -234,19 +226,21 @@ class ExportDialog(QDialog):
             item.setCheckState(0,Qt.Unchecked)
             item.setToolTip(0,playlist.display_path)
             self._playlists[key]=item
-        selectable = [target for target in devices if target.get('selectable', True)]
         for target in devices:
             path=target['path']
             reason=target.get('reason', '')
-            item=QTreeWidgetItem(self.devices,[target['name'] + (f' · {reason}' if reason else '')])
+            repeated=sum(row['path']==path for row in devices)>1
+            label=target['name']+(f" · {target['label']}" if repeated else '')
+            item=QTreeWidgetItem(self.devices,[label + (f' · {reason}' if reason else '')])
             available=target.get('selectable', True)
             item.setFlags((item.flags()|Qt.ItemIsUserCheckable) if available else
                           (item.flags() & ~Qt.ItemIsUserCheckable & ~Qt.ItemIsEnabled))
             item.setIcon(0,_device_icon(target.get('kind') in ('stock_ipod','dual_boot','rockbox')))
-            item.setCheckState(0,Qt.Checked if available and (len(selectable)==1 or path==preferred) else Qt.Unchecked)
+            item.setCheckState(0,Qt.Checked if available and len(devices)==1 else Qt.Unchecked)
             item.setToolTip(0,f"{target['label']} · {human(target['free'])} free\n{path}"
                             + (f'\n{reason}' if reason else ''))
-            self._targets[path]=(item,target)
+            key=(path,target['role']) if target.get('role') else path
+            self._targets[key]=(item,target)
         if not devices:
             QTreeWidgetItem(self.devices,['Connect a writable USB or iPod'])
             self.devices.setEnabled(False)
@@ -299,19 +293,25 @@ class ExportSelectionMixin:
         if self.lib is None or self._device_operation_owned('') or getattr(self,'_export_batch',None):return
         binding=(str(self.lib.source),str(self.lib.source_library_id))
         targets=[]
-        for path,profile in self._device_profiles.items():
+        for path,physical in self._device_profiles.items():
             if (getattr(self, '_usb_format_device', '')
                     and path in getattr(self, '_usb_format_volumes', (self._usb_format_device,))):continue
             facts=device_facts(path,cached_only=True)
             token=self._device_mount_tokens.get(path,0)
             cached=getattr(self,'_stock_view_cache',{}).get(path)
-            readiness=device_export_readiness(profile,facts,token,
-                stock_snapshot=cached[0] if cached is not None else None)
             row=self._usb_device_rows.get(path)
-            targets.append(dict(path=path,name=row[0] if row else Path(path).name,
-                label=profile.label,free=row[1] if row else facts.free_bytes,
-                token=token,uuid=facts.volume_uuid,kind=profile.kind,
-                selectable=readiness.selectable,reason=readiness.reason))
+            roles=['']
+            companion=device_target_profile(physical,'ipod_usb')
+            if companion is not None and companion.kind=='ipod_usb':roles.append('ipod_usb')
+            for role in roles:
+                profile=device_target_profile(physical,role)
+                readiness=device_export_readiness(profile,facts,token,
+                    stock_snapshot=cached[0] if cached is not None else None)
+                name=row[0] if row else Path(path).name
+                targets.append(dict(path=path,name=name,role=role,
+                    label=profile.label,free=row[1] if row else facts.free_bytes,
+                    token=token,uuid=facts.volume_uuid,kind=profile.kind,
+                    selectable=readiness.selectable,reason=readiness.reason))
         if not targets:
             self._flash_status('Connected devices are being formatted; wait for completion'
                 if self._device_profiles else 'Connect a USB or iPod to export')
@@ -390,11 +390,16 @@ class ExportSelectionMixin:
             playlists=[available[key] for key in batch['keys']]
             dev=target['path']
             self._validate_export_target(dev,device_facts(dev,cached_only=True))
-            if target['kind']=='generic_usb':
-                self._begin_cdj_export(dev,playlists,from_drop=True,drop_target=(target['token'],target['uuid']))
+            if target['kind'] in {'generic_usb','ipod_usb'}:
+                options=dict(from_drop=True,drop_target=(target['token'],target['uuid']))
+                if target.get('role'):options['target_role']=target['role']
+                self._begin_cdj_export(dev,playlists,**options)
             elif target['kind']=='stock_ipod':
+                from .stock_catalog_sync import stock_export_selection
+                expanded,stock_scope=stock_export_selection(self,dev,playlists)
+                playlists=list(expanded)
                 catalog_selections=()
-                if getattr(self,'_stock_view_cache',{}).get(dev):
+                if (stock_scope is None or not stock_scope.removed_keys) and getattr(self,'_stock_view_cache',{}).get(dev):
                     from .stock_catalog_sync import source_sync_selection
                     catalog_selections=source_sync_selection(self,dev,playlists)
                 if catalog_selections:
@@ -402,7 +407,9 @@ class ExportSelectionMixin:
                     request_sync(self,catalog_selections,device=dev,confirmed=True,
                                  source_playlists=playlists)
                 else:
-                    self._begin_stock_ipod_sync(dev,playlists)
+                    self._begin_stock_ipod_sync(dev,playlists,
+                        **({'_stock_export_scope':stock_scope,'reconcile':bool(stock_scope.removed_keys)}
+                           if stock_scope is not None else {}))
             elif target['kind']=='dual_boot':
                 self._begin_dual_ipod_sync(dev,playlists)
             else:
@@ -411,7 +418,7 @@ class ExportSelectionMixin:
             source_wait = any(command.get('batch') is batch and command.get('batch_target') is target
                               for command in (getattr(self, '_source_sync_waiting', None) or ()))
             batch['started']=bool(self._device_operation_owned('') or self._cdj_waiting or source_wait)
-            if not batch['started']:batch['error']='Export did not start or was cancelled'
+            if not batch['started'] and not batch.get('error'):batch['error']='Export did not start or was cancelled'
         except Exception as exc:
             batch['error']=str(exc)
             if self.lib is None or (str(self.lib.source),str(self.lib.source_library_id))!=batch['binding']:
@@ -424,7 +431,7 @@ class ExportSelectionMixin:
         batch=getattr(self,'_export_batch',None)
         target=batch['active'] if batch else None
         if target and target['path']==dev:
-            profile=self._device_profiles.get(dev)
+            profile=device_target_profile(self._device_profiles.get(dev),target.get('role',''))
             if ((getattr(self, '_usb_format_device', '') and
                     dev in getattr(self, '_usb_format_volumes', (self._usb_format_device,)))
                     or not profile or profile.kind!=target['kind'] or not facts.writable

@@ -40,7 +40,7 @@ def save_order(window, order, binding):
         reason=controller.order_reason()
         try:
             if reason:raise ValueError(reason)
-            request=request_for(lib.source_library_id,lib.source_tags,ids)
+            request=request_for(lib.source_library_id,controller.native_order(lib.source_tags),ids)
             if not controller.enqueue_order(request):
                 raise ValueError('The native tag order could not be admitted; retry after pending changes finish')
         except (OSError,ValueError,RuntimeError) as exc:

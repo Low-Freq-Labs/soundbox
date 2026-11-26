@@ -465,6 +465,9 @@ class QtStateCommits(unittest.TestCase):
 
     def test_actual_shutdown_drains_commit_before_final_dirty_preferences_flush(self):
         w = self.window; w._state_committer = self.committer
+        from desktop.usb_setup import UsbSetupController
+        w.usb_setup_controller = UsbSetupController(w)
+        w.usb_setup_controller.timer.start(10000)
         w._artists_refresh = SimpleNamespace(stop=mock.Mock())
         w._stock_view_pending = {}; w._dual_sync_queue = []
         w._device_coordinator = SimpleNamespace(cancel=mock.Mock())
@@ -479,6 +482,8 @@ class QtStateCommits(unittest.TestCase):
             QTimer.singleShot(1, release.set)
             MainWindow.shutdown(w)
         self.assertTrue(w._shutting_down)
+        self.assertTrue(w.usb_setup_controller.closing)
+        self.assertFalse(w.usb_setup_controller.timer.isActive())
         self.assertFalse(self.committer.pending); self.assertFalse(self.committer.deferred_save)
         self.assertFalse(w._state_publication); self.assertFalse(w.tag_controller.state_commit_owned)
         durable = read_state(w._state_repository.path)

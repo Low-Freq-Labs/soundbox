@@ -268,6 +268,7 @@ def device_drift(
     title_overrides: dict | None = None,
     display_rows: Mapping[str, Mapping] | None = None,
     captured_manifest: tuple[dict, bytes] | None = None,
+    art_cache=None,
 ):
     """How far a device has drifted from the current library since last sync
     (renamed/moved/changed/removed playlists). Read-only. None if no manifest.
@@ -289,6 +290,7 @@ def device_drift(
             title_overrides=title_overrides,
             display_rows=display_rows,
             captured_manifest=captured_manifest,
+            art_cache=art_cache,
         )
     m = captured_manifest[0] if captured_manifest is not None else manifest_mod.load(target_path)
     if not m.get("playlists"):
@@ -297,6 +299,10 @@ def device_drift(
     from .playlist_retirement import legacy_flat_playlists
     wanted = manifest_mod.managed_current_playlists(m, lib, extra)
     affected = {key for key, *_ in drift.renamed + drift.moved + drift.changed + drift.removed}
+    from .artwork_observation import changed_playlists
+    for key, name in changed_playlists(m, lib, wanted, art_cache):
+        if key not in affected:
+            drift.changed.append((key, name)); affected.add(key)
     for playlist in wanted:
         key = manifest_mod.playlist_key(playlist)
         if key not in affected and key in legacy_flat_playlists(m, [playlist]):

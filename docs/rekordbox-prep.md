@@ -7,7 +7,7 @@ SoundBox view and creates no native organization jobs.
 
 Native-reference sections retain their dated protocol observations. Full
 diagnostic payloads at old evidence paths may have been retired; current
-[handoff retention](HANDOFF.md#retention-and-unfinished-work) governs what remains.
+[handoff retention](HANDOFF.md#protected-retention) governs what remains.
 Required offline fixtures and unfinished transaction recovery stay separate.
 
 Current regular playlists preserve authored occurrence order; only Collection and
@@ -391,7 +391,15 @@ of song selection. Checkbox labels escape Qt mnemonic markers only after eliding
 the literal name, so names such as `R&B` retain their ampersands. Native names,
 tag identities, drag labels, tooltips and accessibility names remain literal.
 Rename and Delete belong to the exact tag's right-click menu;
-there is no deletion footer. Dragging tags saves their accepted native order.
+there is no deletion footer. Drag a tag label above or below another tag in the
+same category to save its accepted native order, including when no songs are
+selected. Repeated drags of the same or different tags apply to the latest
+visible order while earlier writes finish. Exact per-category before/after
+identities and operation clocks form an ordered intention queue; each admitted
+request becomes durable before native dispatch. Older acknowledgements preserve
+the newest projected order and existing controls. Structural definition changes,
+failed intentions and changed source/restore ownership retain their guards and
+explicit retry paths. Checkbox clicks retain their assignment behavior.
 The plain modeless tool panel
 avoids native-menu helpers covering its header. Explicit row geometry avoids
 checkbox/label overlap; tooltip/status text explains unavailable actions. A pending
@@ -568,7 +576,14 @@ text-focus boundaries remain. New Command-number defaults yield to preexisting
 explicit custom shortcuts. Preview remains usable without write authority.
 
 Three raw snapshot queries capture source revisions and native cue identities
-outside normalized display dictionaries. The cue milestone used instant-paint
+outside normalized display dictionaries. Revision encoding can reuse an identical
+pure digest only after capturing every current raw track, cue and aggregate cell.
+The process-local LRU retains at most 8,192 entries/96 MiB of conservatively
+accounted inputs, with a 128 KiB per-entry limit. Exact builtin SQLite scalars are
+keyed completely; finite floats use IEEE bytes to distinguish signed zero and
+integers. Nested/unusual values and oversized inputs remain uncached. Fresh SQL,
+authority, counter, journal, baseline and recovery checks always run independently.
+The cue milestone used instant-paint
 schema7 and read older4–6 caches. Current `libcache` uses schema13 and reads
 schemas4–13; every cached view remains unverified for editing until fresh source
 load. These fields

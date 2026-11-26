@@ -123,6 +123,7 @@
       ],
       "recovery": [
         "test_encrypted_backup",
+        "test_native_evidence_hashes",
         "test_native_cipher",
         "test_native_snapshot",
         "test_locator_store",
@@ -209,6 +210,7 @@
         "test_tag_deletion",
         "test_tag_drag",
         "test_tag_order_controller",
+        "test_tag_order_queue",
         "test_tag_order_preferences",
         "test_tag_popup",
         "test_tag_rename_controller",
@@ -477,22 +479,29 @@
         "test_artreview",
         "test_artwork_completion",
         "test_artwork_identity",
+        "test_artwork_observation_view",
         "test_artwork_requests",
         "test_catalog_thumbnails",
         "test_image_decode",
         "test_ipod_artwork_ui",
+        "test_ipod_manual_artwork",
         "test_review_cover_preparation",
         "test_stock_artwork",
+        "test_stock_artwork_capacity",
         "test_stock_artwork_classic",
         "test_stock_artwork_shared",
         "test_stock_artwork_slots",
         "test_stock_artwork_source_identity",
+        "test_stock_omitted_artwork_status",
+        "test_stock_noop_acceptance_guards",
+        "test_stock_shadow_noop_routing",
         "test_usb_artwork"
       ],
       "recovery": [
         "test_artwork_batch",
         "test_artwork_bulk_mutation",
-        "test_state_commit"
+        "test_state_commit",
+        "test_stock_delete_artwork"
       ]
     },
     "ipod": {
@@ -505,6 +514,7 @@
         "test_ipod_album_branding"
       ],
       "integration": [
+        "test_artwork_observation_view",
         "test_classic_device_facts",
         "test_classic_identity_publication",
         "test_cli_space_reporting",
@@ -546,6 +556,7 @@
         "test_ipod_export_entries",
         "test_ipod_failure_presenters",
         "test_ipod_first_export",
+        "test_ipod_manual_artwork",
         "test_ipod_usb_identity",
         "test_manifest",
         "test_mount_watch",
@@ -558,11 +569,15 @@
         "test_shared_identity",
         "test_source_acquisition",
         "test_stock_artwork",
+        "test_stock_artwork_capacity",
         "test_stock_artwork_classic",
         "test_stock_artwork_shared",
         "test_stock_artwork_slots",
         "test_stock_artwork_source_identity",
+        "test_stock_audio_reuse",
         "test_stock_catalog_sync_ui",
+        "test_stock_export_sync_batch",
+        "test_stock_delete_identity",
         "test_stock_delete_recovery_status",
         "test_stock_first_export_actions",
         "test_stock_header_admission",
@@ -575,6 +590,9 @@
         "test_stock_ipod_shadow",
         "test_stock_ipod_signing",
         "test_stock_native_capture",
+        "test_stock_omitted_artwork_status",
+        "test_stock_noop_acceptance_guards",
+        "test_stock_shadow_noop_routing",
         "test_stock_playback_view",
         "test_stock_playlist_order",
         "test_stock_playlist_order_ui",
@@ -582,10 +600,21 @@
         "test_stock_shared_catalog_integration",
         "test_stock_sync_header",
         "test_stock_sync_observer_ui",
+        "test_stock_sync_reuse",
         "test_stock_sync_status_ui",
         "test_sync",
         "test_target_source_guards",
-        "test_verified_copy"
+        "test_verified_copy",
+        "test_ipod_usb_role",
+        "test_ipod_usb_target_ui",
+        "test_usb_target_choices",
+        "test_cdj_delete_ui",
+        "test_cdj_initialize_ui",
+        "test_usb_setup_discovery",
+        "test_usb_setup_ui",
+        "test_usb_playlist_layout",
+        "test_eject_navigation",
+        "test_cdj_progress"
       ],
       "recovery": [
         "test_device_copy_cancel",
@@ -596,10 +625,17 @@
         "test_save_shutdown",
         "test_state_commit",
         "test_stock_delete_entities",
+        "test_stock_delete_artwork",
         "test_stock_delete_filesystems",
         "test_stock_delete_lifecycle",
         "test_stock_delete_shadow",
-        "test_stock_source_retention"
+        "test_stock_source_retention",
+        "test_transaction_outcome",
+        "test_cdj_ipod_usb",
+        "test_cdj_playlist_delete",
+        "test_cdj_setup",
+        "test_cdj_unicode_paths",
+        "test_cdj_guard_metadata"
       ]
     },
     "usb": {
@@ -661,7 +697,17 @@
         "test_sync",
         "test_usb_artwork",
         "test_usb_device_view",
-        "test_verified_copy"
+        "test_verified_copy",
+        "test_ipod_usb_role",
+        "test_ipod_usb_target_ui",
+        "test_usb_target_choices",
+        "test_cdj_delete_ui",
+        "test_cdj_initialize_ui",
+        "test_usb_setup_discovery",
+        "test_usb_setup_ui",
+        "test_usb_playlist_layout",
+        "test_eject_navigation",
+        "test_cdj_progress"
       ],
       "recovery": [
         "test_cdj_cancellation_lifecycle",
@@ -672,7 +718,12 @@
         "test_export_cancel_io",
         "test_save_shutdown",
         "test_state_commit",
-        "test_usb_format_lifecycle"
+        "test_usb_format_lifecycle",
+        "test_cdj_ipod_usb",
+        "test_cdj_playlist_delete",
+        "test_cdj_setup",
+        "test_cdj_unicode_paths",
+        "test_cdj_guard_metadata"
       ]
     },
     "state": {

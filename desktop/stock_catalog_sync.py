@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 from typing import Any
 
@@ -19,6 +19,11 @@ from soundbox.stock_ipod_playlist_binding import PlaylistBinding,normalize_playl
 from soundbox.stock_ipod_catalog_state import StockCatalogWitness
 from .devices import device_facts, device_fs
 from .workers import OneShotTask
+
+
+# A cold/changed eligibility observation hands the same request to full capture
+# only after the read-only worker has joined and released device ownership.
+_FULL_STOCK_CAPTURE = object()
 
 
 def _playlists(host, *, names=(), keys=()):
@@ -124,6 +129,114 @@ def needs_sync(host, device):
         pending=bool(cached and getattr(cached[0],'sync_state','') in
                      {'local_changes','reconcile_required'})
     return pending and has_sync_source(host,device)
+
+
+@dataclass(frozen=True)
+class StockExportScope:
+    """Exact prior associations for the stock Export's additional managed work."""
+    source:tuple[str,str,str]
+    device_key:str
+    database_sha256:str
+    artwork_sha256:str
+    bindings:tuple[PlaylistBinding,...]
+    witness:bytes
+    removed_keys:tuple[str,...]=()
+
+    def require_current(self,host,device):
+        cached=getattr(host,'_stock_view_cache',{}).get(device)
+        witness=_witness(host,device)
+        if (host.lib is None or cached is None or not isinstance(witness,StockCatalogWitness)
+                or (str(host.lib.source),host.lib.source_kind,host.lib.source_library_id)!=self.source
+                or (cached[0].identity_key,cached[0].database_sha256,cached[0].artwork_database_sha256 or '')
+                    !=(self.device_key,self.database_sha256,self.artwork_sha256)
+                or witness.encode()!=self.witness):
+            raise ValueError('The managed iPod playlist links changed; start Export again')
+        available={playlist_key(row):row for row in _playlists(host,keys=self.removed_keys)}
+        active={str(row.get('ID','')) for row in host.lib.source_playlist_catalog.get('nodes',())
+                if row.get('rb_local_deleted',0)==0}
+        if any(binding.key in available or binding.native_id and binding.native_id in active
+               for binding in self.bindings if binding.key in self.removed_keys):
+            raise ValueError('A removed source playlist was replaced; start Export again')
+
+    def require_shadow(self,shadow):
+        if (shadow is None or shadow.identity_key!=self.device_key
+                or shadow.database_sha256!=self.database_sha256
+                or shadow.artwork_database_sha256!=self.artwork_sha256
+                or set(shadow.playlists)!={row.key for row in self.bindings}):
+            raise ValueError('The managed iPod baseline changed; refresh before exporting and syncing')
+        for binding in self.bindings:
+            row=shadow.playlists[binding.key]
+            if (str(row.get('pid') or ''),str(row.get('device_name') or row.get('name') or ''))!=(binding.native_id,binding.name):
+                raise ValueError('The managed iPod playlist baseline is unavailable')
+
+    def require_plan(self,plan):
+        if (plan.database_sha256_before!=self.database_sha256 or plan.identity_key!=self.device_key
+                or self.removed_keys and not plan.shadow_fast_path):
+            raise ValueError('The iPod changed while its combined Export and Sync was being prepared')
+
+
+def stock_export_selection(host,device,requested):
+    """Add only exact linked stock lists; clean contracts remain reusable.
+
+    Exact linked lists are included even before the asynchronous drift badge
+    catches an edit. This is not a name-based adoption of unrelated native
+    playlists. Device publication
+    still proves its complete fresh baseline independently.
+    """
+    profile=getattr(host,'_device_profiles',{}).get(device)
+    cached=getattr(host,'_stock_view_cache',{}).get(device)
+    selected=tuple(requested or ())
+    if host.lib is None:return selected,None
+    if profile is None or profile.kind!='stock_ipod' or not selected or cached is None:return selected,None
+    drift=getattr(host,'_drift_cache',{}).get(device)
+    pending=(drift>0 if type(drift)is int else
+             getattr(cached[0],'sync_state','') in {'local_changes','reconcile_required'})
+    witness=_witness(host,device);snapshot=cached[0]
+    source=(str(host.lib.source),host.lib.source_kind,host.lib.source_library_id)
+    if (not isinstance(witness,StockCatalogWitness) or witness.source!=source
+            or witness.device_key!=snapshot.identity_key
+            or witness.database_sha256!=snapshot.database_sha256
+            or witness.artwork_database_sha256!=(snapshot.artwork_database_sha256 or '')):
+        if pending:raise ValueError('Pending managed Sync needs current iPod playlist links; refresh before exporting')
+        return selected,None
+    payload=witness.encode()
+    if not witness.bindings:return selected,None
+    targets=defaultdict(list)
+    names=Counter(row.title for row in snapshot.playlists if row.kind=='Playlist')
+    for row in snapshot.playlists:
+        if row.kind=='Playlist':targets[row.playlist_id].append(row)
+    owners=Counter(row.device_playlist_id for row in witness.bindings)
+    keys={row.key for row in witness.bindings}|{playlist_key(row) for row in selected}
+    available={playlist_key(row):row for row in _playlists(host,keys=keys)}
+    nodes=defaultdict(list)
+    for row in host.lib.source_playlist_catalog.get('nodes',()):nodes[str(row.get('ID',''))].append(row)
+    extra=[];removed=[]
+    for binding in witness.bindings:
+        matches=targets[binding.device_playlist_id]
+        if (owners[binding.device_playlist_id]!=1 or len(matches)!=1
+                or matches[0].title!=binding.name
+                or tuple(entry.dbid for entry in matches[0].entries)!=tuple(dbid for _local,dbid in binding.members)):
+            raise ValueError('A managed iPod playlist changed; refresh before exporting')
+        current=available.get(binding.key)
+        if current is None:
+            if names[binding.name]!=1:
+                raise ValueError('A removed managed playlist shares its name with another iPod playlist')
+            old=nodes.get(binding.native_id,()) if binding.native_id else ()
+            if any(row.get('rb_local_deleted',0)==0 or row.get('UUID')!=binding.uuid for row in old):
+                raise ValueError('A managed source playlist was replaced or is unavailable')
+            removed.append(binding.key)
+            continue
+        identity=catalog_source_playlist(host.lib,current)
+        if (identity.identity_error or (identity.key,identity.native_id,identity.uuid)
+                !=(binding.key,binding.native_id,binding.uuid)):
+            raise ValueError('A managed source playlist identity changed; start Export again')
+        extra.append(current)
+    # Existing device order remains stable; explicitly new selections follow it.
+    union={playlist_key(row):row for row in extra}
+    union.update((playlist_key(row),row) for row in selected)
+    scope=StockExportScope(source,snapshot.identity_key,snapshot.database_sha256,
+        snapshot.artwork_database_sha256 or '',witness.bindings,payload,tuple(removed))
+    return tuple(union.values()),scope
 
 
 def _comparison(host, selected, snapshot, kind, witness):
@@ -284,7 +397,8 @@ def _end_deferred_catalog(host, request, message, *, cancelled=False):
         return False
     active = host._device_coordinator.active
     pending = getattr(host, '_pending_device_operation', None)
-    other_operation = active is not None and active.phase != 'discovering'
+    other_operation = ((active is not None and active.phase != 'discovering')
+                       or bool(getattr(host,'_source_sync_waiting',None)))
     formatting = bool(getattr(host, '_usb_format_device', ''))
     if (not other_operation
             and (pending is None or getattr(pending, '_catalog_request', None) is request)):
@@ -338,13 +452,13 @@ class CatalogRequest:
     batch_target:Any=None
     repository:Any=None
 
-    def current(self, host):
+    def current(self, host, *, check_artwork=True):
         profile=host._device_profiles.get(self.device)
         cached=host._stock_view_cache.get(self.device)
         try:
             return bool(host.lib is not None and profile is not None and profile.kind==self.kind
                 and (self.batch is None or _batch_owned(host,self) and not self.batch.get('cancelled',False))
-                and host.art_cache.selection_current(self.artwork)
+                and (not check_artwork or host.art_cache.selection_current(self.artwork))
                 and cached is not None and self.mount==_mount(host,self.device)
                 and (cached[0].identity_key,cached[0].database_sha256,cached[0].artwork_database_sha256,
                      cached[0].stock_format,cached[0].usb_family,
@@ -372,16 +486,6 @@ def request_sync(host, selected, *, device=None, confirmed=False, source_playlis
         selections=tuple(row[0] for row in associations);sources=tuple(row[1] for row in associations)
         keys=tuple(playlist_key(row) for row in sources)
         witness=_witness(host,device)
-        if (profile.kind=='stock_ipod' and isinstance(witness,StockCatalogWitness)
-                and witness.device_key==cached[0].identity_key
-                and witness.source==(str(host.lib.source),host.lib.source_kind,host.lib.source_library_id)
-                and any(binding.key in keys and binding.has_omissions
-                        for binding in witness.bindings)):
-            # A clean advisory omission baseline does not certify codec bytes.
-            # Explicit Sync must reevaluate full firmware eligibility through
-            # the same durable capture as a new stock export.
-            host._request_ipod_export_capture('stock',device,list(sources),reconcile=True)
-            return
         display=_display(host,sources)
         labels=catalog_match_labels(host.lib,list(sources),host.settings.get(alias_intents.ORIGINS,{}))
         batch=getattr(host,'_export_batch',None)
@@ -390,10 +494,23 @@ def request_sync(host, selected, *, device=None, confirmed=False, source_playlis
         request=CatalogRequest(device,selections,keys,_source(host,keys),_mount(host,device),profile.kind,cached[0],
             capture_export(host.lib,sources,titles=host.titles,artists=host.overrides,
                            playlist_identities=True),
-            json.dumps(display,allow_nan=False).encode(),json.dumps(labels,allow_nan=False).encode(),_witness(host,device),
+            json.dumps(display,allow_nan=False).encode(),json.dumps(labels,allow_nan=False).encode(),witness,
             host.art_cache.selection_token(display),batch,batch_target,_repository_token(host))
     except (ValueError,TypeError,KeyError) as exc:
         host._flash_status(str(exc),15);return
+    from .export_wait import defer_selected_artwork
+    art_owner=getattr(host.art_cache,'scope_owner',host.art_cache)
+    def ready_artwork():
+        # Metadata/membership remain the original detached generation. Only the
+        # selected manual choice accepted before this request was still saving.
+        fresh=replace(request,artwork=host.art_cache.selection_token(json.loads(request.display)))
+        _begin(host,fresh,confirmed)
+    if defer_selected_artwork(host,device,display,
+            current=lambda:(getattr(host.art_cache,'scope_owner',host.art_cache) is art_owner
+                            and request.current(host,check_artwork=False)),
+            ready=ready_artwork,
+            failed=lambda error:_end_deferred_catalog(host,request,str(error)),
+            batch=request.batch,batch_target=request.batch_target):return
     _begin(host,request,confirmed)
 
 
@@ -432,6 +549,10 @@ def _prepare(host, request):
         return
     store=host.stock_catalog_witness_store
     stock_art_cache=host.stock_art_cache;art_cache=host.art_cache
+    omission_cache_root=host._data_file.parent/'stock_source_observations'
+    check_omissions=(request.kind=='stock_ipod' and isinstance(request.witness,StockCatalogWitness)
+                     and any(row.key in request.keys and row.has_omissions for row in request.witness.bindings))
+    shadow_store=host.stock_ipod_shadow_store if check_omissions else None
     media_cache=host.rockbox_media_cache if request.kind=='dual_boot' else None
     filesystem=device_fs(request.device)
     host._validate_export_target(request.device,device_facts(request.device,cached_only=True))
@@ -452,6 +573,17 @@ def _prepare(host, request):
     def plan(cancelled):
         current_artwork()
         inputs=request.captured.materialize()
+        if check_omissions:
+            from soundbox.stock_plan_observations import NegativeSourceOmissions,STOCK_SOURCE_PROFILE
+            from soundbox.stock_sync_reuse import stock_selection_reusable,stock_shadow_selection_current
+            omissions=NegativeSourceOmissions(root=omission_cache_root,profile=STOCK_SOURCE_PROFILE)
+            shadow=shadow_store.load(request.snapshot.identity_key) if shadow_store is not None else None
+            reusable=stock_selection_reusable(inputs.library,list(inputs.playlists),request.snapshot,
+                request.witness,shadow,omissions)
+            omissions.flush()
+            if cancelled():raise OperationCancelled('Playlist Sync cancelled before source eligibility capture')
+            if not reusable or not stock_shadow_selection_current(inputs.library,list(inputs.playlists),shadow):
+                return _FULL_STOCK_CAPTURE
         result:Any
         options=dict(snapshot=request.snapshot,model_number=request.snapshot.model or '',filesystem=filesystem,
             art_cache=art_cache,stock_art_cache=stock_art_cache,update_metadata=True,
@@ -467,13 +599,18 @@ def _prepare(host, request):
             stock=result.stock
         else:
             from soundbox.stock_ipod import plan_stock_ipod_catalog_update
-            result=plan_stock_ipod_catalog_update(inputs.library,list(inputs.playlists),request.device,incremental=True,**options)
+            result=plan_stock_ipod_catalog_update(inputs.library,list(inputs.playlists),request.device,
+                incremental=True,omission_cache_root=omission_cache_root,**options)
             stock=result
         current_artwork()
         actual={str(row.device_playlist_id) for row in stock.catalog_recognition if row.recognized}
         if actual!={row[0] for row in request.selections}:
             raise RuntimeError('The recognized iPod playlists changed; select them again')
         if cancelled():raise OperationCancelled('Playlist Sync cancelled before device commit')
+        if check_omissions and result.requires_commit:
+            # Only a genuine no-op skips full Sync. Changes retain its owned
+            # media/pruning rules and renew the complete committed shadow.
+            return _FULL_STOCK_CAPTURE
         if not result.requires_commit:
             from soundbox.stock_ipod import verify_stock_ipod_catalog_noop
             verify_stock_ipod_catalog_noop(stock)
@@ -481,8 +618,10 @@ def _prepare(host, request):
             if cancelled():raise OperationCancelled('Playlist Sync cancelled before saving its comparison')
             save_witness(stock)
         return result
-    _start(host,request,plan,'_stock_plan_worker','plan-catalog',
-        lambda result:_planned(host,request,result,save_witness,warnings),'Preparing playlist Sync')
+    _start(host,request,plan,'_stock_plan_worker',
+        'plan-catalog-probe' if check_omissions else 'plan-catalog',
+        lambda result:_planned(host,request,result,save_witness,warnings),
+        'Checking playlist changes' if check_omissions else 'Preparing playlist Sync')
 
 
 def _start(host, request, operation, attribute, intent, complete, label):
@@ -544,6 +683,21 @@ def _failed(host, request, error, *, committed=False):
 
 
 def _planned(host, request, result, save_witness, warnings):
+    if result is _FULL_STOCK_CAPTURE:
+        if (not request.current(host) or getattr(host,'_export_batch',None) is not request.batch):
+            _end_deferred_catalog(host,request,'The library, selected playlists or iPod changed before Sync')
+            return
+        try:
+            # A later musical edit belongs to a later request, even though
+            # compatible native identities can survive ordinary readback.
+            if _source(host,request.keys)!=request.source:
+                raise RuntimeError('The selected songs changed before source capture. Start Sync again.')
+            selected=_selected(host,request.keys)
+            if selected is None:raise RuntimeError('The selected playlists changed before source capture')
+            host._exporting=False;host._stop_pulse(force=True)
+            host._request_ipod_export_capture('stock',request.device,list(selected),reconcile=True)
+        except Exception as error:_failed(host,request,error)
+        return
     host._exporting=False;host._stop_pulse(force=True)
     if isinstance(result,Exception):_failed(host,request,result);return
     if not request.current(host):_failed(host,request,'The library or connected iPod changed. Select the playlists again.');return

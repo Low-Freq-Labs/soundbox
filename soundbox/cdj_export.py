@@ -12,9 +12,18 @@ from . import cdj_source, manifest
 from .library import Track
 from .cdj_transaction import CdjPlan, CdjSession, load_manifest, read_manifest, make_plan
 from .cdj_usb import (CATALOG_RENDER_POLICY, DATABASE_FILES, DISPLAY_FIELDS, digest, default_display, patch_display,
-                      read_library, read_profiles, run_renderer)
+                      read_library, read_profiles, run_renderer, setup_readiness,CdjSetupReadiness)
 from .source_acquisition import SourceContract, acquire_source
 from .operation_control import OperationCancelled
+
+def plan_playlist_delete(target,playlist_ids,*,token,volume_uuid,target_role='generic_usb',
+                         sources=(),expected_catalog_files=None,recovery_root=None,
+                         should_cancel=lambda:False):
+    """Device-only deletion shares CDJ admission, without source capture."""
+    from .cdj_delete import plan_playlist_delete as prepare
+    return prepare(target,playlist_ids,token=token,volume_uuid=volume_uuid,target_role=target_role,
+        sources=sources,expected_catalog_files=expected_catalog_files,recovery_root=recovery_root,
+        should_cancel=should_cancel)
 
 
 def _stable_id(key):
@@ -73,11 +82,11 @@ def _playlist_dto(library, jobs, tracks, previous):
 def plan_export(library, playlists, target, *, token, volume_uuid, all_playlists=(),
                 titles=None, artists=None, art_cache=None, should_cancel=lambda:False,
                 on_progress=lambda *_:None, recovery_root=None, additive=False, global_profile=None,
-                standalone=()):
+                standalone=(), target_role='generic_usb'):
     # Source containment is checked before any local preparation or device write.
     from .export_snapshot import source_paths
     selected_sources = list(source_paths(library, standalone))
-    session = CdjSession(target, selected_sources, token=token, volume_uuid=volume_uuid)
+    session = CdjSession(target, selected_sources, token=token, volume_uuid=volume_uuid,target_role=target_role)
     from .cdj_transaction import recover
     recover(session,recovery_root,retain_new=True)
     previous,baseline_manifest = read_manifest(session)
@@ -227,7 +236,8 @@ def plan_export(library, playlists, target, *, token, volume_uuid, all_playlists
                     raise ValueError('Native USB database changed outside SoundBox')
             return CdjPlan(session.target, session.mount_identity, session.volume_uuid, root,
                 previous, (), baseline_manifest, False,
-                len(tracks), len(jobs), workspace, recovery_root)
+                len(tracks), len(jobs), workspace, recovery_root,
+                session.target_role,session.ipod_control_identity)
         path = root/'request.json'
         path.write_text(json.dumps(request))
         result = run_renderer('render', root, path, root/'candidate', should_cancel=should_cancel)
@@ -281,8 +291,9 @@ def remember_standalone(current, previous, library, tracks):
         current['standalone'] = list(entries.values())
 
 
-def plan_settings(target, changes, *, token, volume_uuid, sources=(), should_cancel=lambda:False, recovery_root=None):
-    session = CdjSession(target, sources, token=token, volume_uuid=volume_uuid)
+def plan_settings(target, changes, *, token, volume_uuid, sources=(), should_cancel=lambda:False, recovery_root=None,
+                  target_role='generic_usb'):
+    session = CdjSession(target, sources, token=token, volume_uuid=volume_uuid,target_role=target_role)
     from .cdj_transaction import recover
     recover(session,recovery_root,retain_new=True)
     native = read_library(target, token,should_cancel=should_cancel)
@@ -339,23 +350,43 @@ def plan_settings(target, changes, *, token, volume_uuid, sources=(), should_can
         raise
 
 
-def plan_initialize(target, *, token, volume_uuid, sources=(), profile=None, name=None, recovery_root=None, should_cancel=lambda:False):
-    """Explicit freshly formatted USB initialization; no source-library scan."""
+def plan_initialize(target, *, token, volume_uuid, sources=(), profile=None, name=None, recovery_root=None, should_cancel=lambda:False,
+                    target_role='generic_usb',expected_setup=None):
+    """Explicit empty CDJ setup; preserve existing player files and unrelated data."""
     from . import my_settings
-    session=CdjSession(target,sources,token=token,volume_uuid=volume_uuid)
-    if read_library(target,token,should_cancel=should_cancel) is not None:raise ValueError('The USB already has a native library')
+    if should_cancel():raise OperationCancelled('CDJ setup cancelled')
+    session=CdjSession(target,sources,token=token,volume_uuid=volume_uuid,target_role=target_role)
+    readiness=setup_readiness(session.target,token=token,volume_uuid=volume_uuid,target_role=target_role)
+    if readiness.state!='missing':raise ValueError(readiness.reason or 'The USB already has CDJ catalog metadata')
+    if expected_setup is not None and (not isinstance(expected_setup,CdjSetupReadiness) or expected_setup!=readiness):
+        raise ValueError('The USB changed after the setup question; select it again')
     _previous,baseline_manifest=read_manifest(session)
+    existing={'PIONEER/'+filename:raw for filename,raw in read_profiles(target,token)}
     workspace=tempfile.TemporaryDirectory(prefix='soundbox-cdj-initialize-')
     try:
         root=Path(workspace.name).resolve();request=root/'initialize.json'
         request.write_text(json.dumps({'name':name or Path(target).name}))
         view=run_renderer('initialize',root,request,root/'candidate',should_cancel=should_cancel)
-        folder=root/'candidate/PIONEER'
-        for filename,raw in my_settings.new_files(profile or {}).items():(folder/filename).write_bytes(raw)
-        (folder/'DEVSETTING.DAT').write_bytes(default_display())
-        return make_plan(session,root/'candidate',selection=[],db_id=0,view=view,workspace=workspace,
+        defaults={**my_settings.new_files(profile or {}),'DEVSETTING.DAT':default_display()}
+        files={'PIONEER/'+filename:raw for filename,raw in defaults.items()};files.update(existing)
+        for path,raw in files.items():(root/'candidate'/path).write_bytes(raw)
+        hashes={path:digest(raw) for path,raw in existing.items()}
+        fresh=setup_readiness(session.target,token=token,volume_uuid=volume_uuid,target_role=target_role)
+        if fresh!=readiness:
+            raise ValueError('USB catalogs, layout or settings changed during setup preparation')
+        plan=make_plan(session,root/'candidate',selection=[],db_id=0,view=view,workspace=workspace,
                          recovery_root=recovery_root,settings_only=True,expected_manifest=baseline_manifest,
-                         should_cancel=should_cancel)
+                         allowed_profile_changes=hashes.keys(),expected_profile_hashes=hashes,should_cancel=should_cancel)
+        # A file can appear after the last observation but before make_plan's
+        # per-file read. Setup may create catalogs, never adopt or replace one.
+        new_catalogs={change.path for change in plan.changes if change.path in DATABASE_FILES
+                      and change.old_sha256 is None and change.new_sha256 is not None}
+        if new_catalogs!=set(DATABASE_FILES):
+            raise ValueError('A CDJ catalog appeared during setup preparation; existing files were preserved')
+        # Existing profiles produce no Change row: this setup-only precondition
+        # still refuses a late edit rather than publishing a stale inventory.
+        plan.setup_profile_hashes=tuple(sorted(hashes.items()))
+        return plan
     except Exception:
         workspace.cleanup();raise
 
@@ -382,8 +413,9 @@ def _selection_hint(library, playlists, track_rows, *, titles=None, artists=None
     return digest(json.dumps(rows,sort_keys=True,separators=(',', ':')).encode())
 
 
-def status_hint(library, target, *, token, volume_uuid, all_playlists=(), titles=None, artists=None):
-    session = CdjSession(target, [], token=token, volume_uuid=volume_uuid)
+def status_hint(library, target, *, token, volume_uuid, all_playlists=(), titles=None, artists=None,
+                target_role='generic_usb'):
+    session = CdjSession(target, [], token=token, volume_uuid=volume_uuid,target_role=target_role)
     previous = load_manifest(session)
     if not previous or not previous.get('library_managed', True):
         return None
@@ -397,10 +429,10 @@ def status_hint(library, target, *, token, volume_uuid, all_playlists=(), titles
     return int(previous.get('selection_hint') != selection_hint(library,list(jobs.values()),titles=titles,artists=artists))
 
 
-def verify(target, *, token, volume_uuid, deep=False, should_cancel=lambda:False):
+def verify(target, *, token, volume_uuid, deep=False, should_cancel=lambda:False,target_role='generic_usb'):
     from .cdj_transaction import _hash_file
     from .cdj_usb import PROFILE_FILES
-    session = CdjSession(target, [], token=token, volume_uuid=volume_uuid)
+    session = CdjSession(target, [], token=token, volume_uuid=volume_uuid,target_role=target_role)
     previous = load_manifest(session)
     native = read_library(target, token)
     result: dict = dict(playlists=0,entries=0,missing=[],managed_issues=[],advisories=[])

@@ -33,7 +33,7 @@ class IpodExportEntries(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def generated(self):
-        owner = plan_host()
+        owner = plan_host(self)
         track = Track('one', 'Original title', 'Original artist', 'file:///generated/one.wav')
         playlist = Playlist('Selected', [], keys=['one'], pid='selected')
         owner.lib = Library({'one': track}, [playlist], '/generated/master.db',
@@ -97,6 +97,8 @@ class IpodExportEntries(unittest.TestCase):
                 self.assertEqual(plan.call_args.kwargs['display_rows']['one']['title'],'Captured title')
                 self.assertEqual(plan.call_args.kwargs['display_rows']['one']['artist'],'Captured artist')
                 self.assertEqual(plan.call_args.kwargs['display_rows']['one']['genre'],'Captured genre')
+                self.assertEqual(plan.call_args.kwargs['omission_cache_root'],
+                                 owner._data_file.parent/'stock_source_observations')
                 self.assertEqual(capture.verify_worker.call_count,2)
 
     def test_dual_device_delete_and_order_use_checkpoint_instead_of_cdj_global_wait(self):
@@ -222,14 +224,14 @@ class IpodExportEntries(unittest.TestCase):
                 module='soundbox.stock_ipod' if kind=='stock' else 'soundbox.dual_ipod'
                 with mock.patch('desktop.app.device_facts',return_value=DeviceFacts()), \
                      mock.patch(module+f'.plan_{kind}_ipod_sync',return_value=stock if kind=='stock' else dual), \
-                     mock.patch('soundbox.stock_ipod.committed_stock_export_witness',return_value=(verified,'')) as readback, \
+                     mock.patch('soundbox.stock_ipod.accept_stock_ipod_noop',return_value=stock_result) as readback, \
                      mock.patch('soundbox.dual_ipod.commit_dual_ipod_sync',return_value=dual_result) as dual_noop:
                     getattr(owner,f'_begin_{kind}_ipod_sync')(dev,[playlist],_export_capture=capture)
                     worker=getattr(owner,f'_{kind}_plan_worker');self.addCleanup(worker.deleteLater)
                     readback.assert_not_called();dual_noop.assert_not_called()
                     owner.stock_catalog_witness_store.save.assert_not_called()
                     worker.run()
-                    if kind=='stock':readback.assert_called_once()
+                    if kind=='stock':readback.assert_called_once_with(stock)
                     else:dual_noop.assert_called_once()
                 owner.stock_catalog_witness_store.save.assert_called_once_with(verified)
                 result=worker.result
