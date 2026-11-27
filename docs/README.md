@@ -1,6 +1,6 @@
 # Documentation
 
-- [Handoff](HANDOFF.md): current source/install identity, validation and unfinished work.
+- [Handoff](HANDOFF.md): current source/install state; [next session](NEXT_SESSION.md): small autonomous work sections.
 - [Getting started](getting-started.md): prerequisites, source launch and build commands.
 - [Architecture](ARCHITECTURE.md) · [Player](PLAYER.md) · [Devices](DEVICES.md)
 - [Runtime contracts](runtime-contracts.md): detailed source/state/lifecycle safety rules.

@@ -2,8 +2,8 @@
 
 ## Current delivery — November27 device workflow and Qt ownership
 
-**The update is installed and runtime-verified; human appearance acceptance,
-completed-payload cleanup and validated commit/push are the final wrap-up steps.**
+**Delivery is complete: installed, runtime-verified, accepted and cleaned up.
+Implementation commit `f1dd845` is pushed. Source-only background work is next.**
 Sonny explicitly requested complete wrap-up. The installed personal182 binary
 truthfully records Git86351c3/dirty=true from its build, runtime fingerprint
 734894383c4c2876174ccdcf9751b713f59cfb05a25332fa1e4b89f9de38e90a,
@@ -36,9 +36,11 @@ tracks/86 playlists with native CoreAudio/Metal, zero preparation and zero extra
 artwork fetches. Passive readback proves all canonical curation/settings,
 11540 protected files, OS preference bytes and provider metadata exact; no derived
 cache exception or restoration was needed. `runtime-verification.json` records
-actual process identity. The single previous98dc app and fresh capture remain
-only until human acceptance and scoped retirement. Earlier uninstalled candidate
-captures/checks are already retired with compact supersession receipts.
+actual process identity. Sonny accepted the appearance: “Looks normal.” The
+single previous98dc app,
+full capture and package/check scratch are retired:1,508,306,256 logical bytes.
+Earlier uninstalled candidate captures/checks are also retired. `completion.json`
+retains compact identity/result receipts; no app rollback/full capture remains.
 
 All ten scaled physical TEST-2 phases are complete, including configured FAT32
 export/folder-delete and exFAT folder delete/no-op/cancel/fresh-session recovery.
@@ -46,17 +48,31 @@ Shared171 songs, native rows/order, source bytes/epochs and sentinels stay exact
 Final USB is clean FAT32, UUID56A35A7A-51CF-3470-893A-0AC2678302D7, zero songs/
 playlists, all44 saved global player values exact and no journal. No physical
 write is pending. Compact matrix: `rc-test2-perf-20261127/campaign-result.json`.
-The2.7GB generated fixture and24MB completed recovery payloads await scoped
-retirement; required repository offline fixtures stay protected. The slower
-cleanup experiment was withdrawn; no deletion throughput improvement ships.
+The generated fixtures and completed recovery payloads are retired:2,958,125,894
+logical bytes. `completion-retirement.json` retains compact source/completion
+proofs. The local control’s filesystem device number changed across the reboot;
+all other hashes/inodes/sizes/times were proved exact before retirement. Required
+repository offline fixtures stay protected. These are logical byte totals, not
+measured physical disk reclamation. The slower cleanup experiment was withdrawn;
+no deletion throughput improvement ships.
 
-Finish: collect human appearance acceptance, retire the single previous app/full
-capture/completed scratch and generated physical fixtures, update completion
-receipts, then commit/push the validated tree under Sonny's wrap-up instruction.
-No further tests are needed unless inputs change or a concrete concern appears.
-Broader CDJ ownership P1s, deletion throughput and unperformed RC hardware/clean-
-recipient coverage remain explicitly open. No new real-app input/termination or
-source/device experiment is authorized by a test/build result.
+## Next context: unattended source-only work
+
+Read [NEXT_SESSION](NEXT_SESSION.md) for the small ordered work sections and
+update it after each bounded result. Sonny will be away for at least six hours.
+Work independently on source/tests/docs using generated TEMP and existing offline
+fixtures. Do not interrupt him for routine local choices.
+
+**Signing and installation are the very last step, after Sonny returns for
+Keychain.** No Keychain prompts, real-app controls, actual source/device writes,
+rekordbox upgrades or new live authority activation while he is away. Continue
+other independent source/offscreen work if graphics or native acceptance needs
+him; record holds honestly. No private runtime loaders or diagnostic retry loops.
+
+Priorities: CDJ late-file preservation, deletion performance, remaining feature/
+persistence coverage and recipient readiness. The broader RC matrix is not
+certified merely because this delivery's6095-case gate passes. Current installed
+734894… remains the accepted baseline while new work stays source-only.
 
 Earlier delivery-stage evidence follows; the current checkpoint above owns the
 installed identity and next actions. Protected retention rules remain below.

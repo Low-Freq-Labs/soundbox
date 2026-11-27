@@ -9,6 +9,8 @@ General-user readiness means the installer and runtime work without Sonny's
 username, paths, Keychain, saved curation, credentials or accepted authorities.
 
 Read [HANDOFF](HANDOFF.md) first for the actual source/build/install checkpoint.
+The [next-session queue](NEXT_SESSION.md) breaks autonomous source-only work into
+small sections; signing and installation wait until Sonny returns for Keychain.
 Use this checklist alongside the [native feature inventory](shared-library-audit-2026-11.md),
 [critical findings](critical-audit-2026-11.md), [runtime contracts](runtime-contracts.md)
 and [test workflow](test-release-gate.md). Existing unresolved findings are work,

@@ -1,14 +1,17 @@
 # Personal beta RC execution — November26,2026
 
-Execution has begun after completing the pending personal180 local delivery.
+Execution began after personal180 delivery. Current November27 workflow and
+ownership fixes are committed/pushed as `f1dd845`; installed personal182 has
+runtime fingerprint734894… and Sonny's “Looks normal” acceptance. The complete
+6095-case gate, native graphics/render, signed package and exact live-state
+preservation pass. Temporary app/state/package payloads and completed generated
+USB-test payloads are retired. The TEST-2 campaign is complete.
+
 This is a dated result ledger for [the checklist](rc-beta-checklist.md), not an
-RC approval or permission to run a native/device experiment. Subsequent RC fixes
-are uncommitted source changes, with fixture validation recorded below. Build182
-is installed with passive preservation proof and Sonny's visual
-acceptance; completed delivery payloads are retired. It is currently closed for
-the separately authorized [TEST-2 campaign](usb-physical-results-2026-11-26.md).
-No native authority or
-installed native version changed.
+RC approval or permission for a native/device experiment. No native authority or
+installed rekordbox version changed. [Next-session work](NEXT_SESSION.md) is
+source-only while Sonny is away; signing/install is held until his return for
+Keychain. Historical lane results below do not replace later acceptance.
 
 ## Lane A baseline
 
@@ -85,7 +88,7 @@ The built installer was not published or tested through actual macOS Installer.
 | RC-D15 | P2; device sidebar navigation | Qt right-click selection highlights an inactive iPod/USB beside Collection while the browser stays on Collection; normal device keyboard selection can likewise move without the page. | Installed8b58 with runtime preservation and cleanup complete.82 focused offscreen/3 actual-gesture Cocoa checks and independent review pass; specific manual right-click acceptance is unclaimed. Prior6003 full gate belongs to c7fe only. |
 | RC-D16 | P2; CDJ footer motion | Per-file byte counters reset rapidly during an actual export. | Installed98dc with bounded averaged measured speed and stable footer geometry. Sonny says the export looks much better. Follow-up phase order and truthful song progress are source-only below. |
 | RC-D17 | P2; device navigation latency | Sonny reports a hitch entering a device from Collection compared with ordinary playlists; requests iPod coverage too. | Installed98dc prepares hidden USB preference tabs only when demanded, before reveal; generated Cocoa Overview504→90ms synchronous. Stock complete-value reuse and detached subtree attachment retain all rows while removing repeated button scans; rich fixture first build5.38s→524ms and actual cached clicks19–26ms.37 final stock cases, affected caller/navigation coverage,77 combined Cocoa cases and independent reviews pass; package/isolated/normal runtime preservation pass. Manual feel check is pending. |
-| RC-D18 | P2; device workflow follow-up | First-entry tab persistence, source drag navigation, manual USB saves, first-tab preparation, guessed export percentages, internal cleanup counts, ancestor folder export and missing folder-delete checkboxes. | Installed/runtime-verified734894…: quiet durable settings admission/readback/ACK, session-only tabs, bounded complete preparation, selected destination-root projection, song-only progress and explicit subtree deletion. Complete6095-case gate, inspected render, package/isolated readiness and exact live-state preservation pass. Actual512-song FAT32/exFAT workflows preserve171 shared songs and generated source/audio hashes. Current manual appearance/feel acceptance is recorded separately. |
+| RC-D18 | P2; device workflow follow-up | First-entry tab persistence, source drag navigation, manual USB saves, first-tab preparation, guessed export percentages, internal cleanup counts, ancestor folder export and missing folder-delete checkboxes. | Installed/runtime-verified734894…: quiet durable settings admission/readback/ACK, session-only tabs, bounded complete preparation, selected destination-root projection, song-only progress and explicit subtree deletion. Complete6095-case gate, inspected render, package/isolated readiness and exact live-state preservation pass. Actual512-song FAT32/exFAT workflows preserve171 shared songs and generated source/audio hashes. Sonny accepts the window/library/appearance; unperformed manual feel/hardware checks remain separate. |
 | RC-D19 | P2; deletion throughput | Latest actual delete spends25.957s planning and164.033s executing. | Open. A matched2728-asset physical experiment regresses31.38→47.12s commit and8.89→17.97s cleanup, so its runtime/test changes are withdrawn exactly. Mixed FAT32/exFAT dense-directory results do not justify a speculative threshold. Original hashes/fsync and transaction b048889… remain; no backend speedup claimed. |
 | RC-D20 | Qt binding ownership / native lifecycle | Five bare gates fail during Qt teardown. A temporary QObject also invalidates its borrowed application-thread wrapper under6.11.1. | The documented PYSIDE-3463 defect has a failing6.11.1/passing6.11.3 regression; all four Qt packages are pinned to6.11.3. The final complete6095-case zero-skip gate and18 affected Cocoa checks pass; the package is installed with exact runtime preservation. Separate runner/model/USB payload lifecycle fixes remain. Both decoder experiments are withdrawn. Earlier native failures are not all asserted to share one cause. |
 
