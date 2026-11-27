@@ -14,6 +14,25 @@ fixtures and recovery needed by unfinished operations.
   device keyboard navigation remains independent. Test the integrated MainWindow,
   since a standalone device-page check cannot detect those external connections.
 
+## Qt consumer lifetimes
+
+- Keep the four Qt dependency pins together. PySide6.11.1 incorrectly assigns
+  ownership of a QObject.thread() return value, allowing a temporary object to
+  invalidate the borrowed application-thread wrapper.6.11.3 includes the
+  [upstream ownership fix](https://github.com/pyside/pyside-setup/commit/75f647a9dca089ed284429c0cace08b8d98b0742).
+  The isolated release-gate regression checks that the thread survives normal
+  temporary-object deletion; do not remove that oracle when updating Qt.
+- Parent browser models to their owning views. A Python reference on MainWindow
+  can outlive the C++ window and leave an unparented model alive after its view
+  retires. Check ordinary DeferredDelete with retained Python references and
+  main-thread destruction, rather than relying on cyclic garbage collection.
+- Transfer a USB settings worker's result only after joined delivery, then clear
+  its retained payload. An exception traceback can retain the stopped QThread
+  wrapper. Keep the original exception intact for its consumer; a failed durable
+  ACK needs its error text, while successful publication needs the verified
+  snapshot. Do not strip traceback/cause data or clear other workers' results
+  before their existing consumers have read them.
+
 ## Source-bound artwork ownership
 
 - `artwork.py` owns canonical publication/default photos; `artwork_identity.py`
@@ -168,6 +187,11 @@ fixtures and recovery needed by unfinished operations.
   files use one exclusive publication plus an actual same-descriptor readback;
   an epoch-only receipt cannot catch same-size FAT corruption. Existing rewrites
   and generic USB publication do not borrow that new-file-only path.
+- CDJ copy callbacks reset bytes per file. Accumulate only new measured copy
+  deltas for average speed, not source reads or publication-count acknowledgements.
+  Keep the meter scoped to the worker, coalesce presentation across file
+  boundaries, and preserve immediate phase/cancel/finished ownership. Exact bytes
+  remain available without a rapidly resetting footer counter.
 
 ## Ordered metadata state commits — November17
 
@@ -1482,6 +1506,19 @@ test, after unchanged source-identity and native/manual provenance guards.
   progress bar, cache iPod/Rockbox drift in `_drift_cache`. Generic USBs have no
   drift computation or badge. Any new device op must be threaded.
 - **USB tabs are cached presentation, not a volume browser or write authority.**
+  Hidden preference editors must not be constructed by snapshot publication or
+  global-profile synchronization. Stable stack slots retain tab indices; both
+  explicit and saved-tab navigation hydrate the demanded editor before reveal.
+  Keep the last valid preference payload across a same-device notice, and reset
+  equal-baseline drafts when changing devices. Cached properties accessed via
+  `getattr`/`hasattr` still construct widgets; internal refresh uses existing
+  instances only.
+  Stock cached-view reuse compares the complete immutable snapshot and detached
+  composite inputs, never database hashes alone. Every in-place status/history
+  patch must update that completed presentation value or invalidate it. Loading,
+  errors and pending order cannot reuse it. Reuse skips model rebuilding and
+  positional-seat restoration only; identity/witness/readiness ownership still
+  runs in the controller.
   For Rockbox/file playlists, read M3U/M3U8 text only below `/Playlists` using pinned no-follow descriptors in
   DeviceScanWorker. That reader never resolves/opens referenced media or `/PIONEER`.
   Generic USB native metadata/settings use the separate `cdj_*` contract; ordinary
@@ -1737,6 +1774,17 @@ their accepted selected export/recovery contract is below and in the CDJ guide.
   tests run in the offscreen phase on arm64 macOS. `./check.sh` also runs the
   required Cocoa phase and verifies complete, nonduplicated test inventories.
   Any skip or expected failure fails the gate; see [the release guide](test-release-gate.md).
+- Cocoa test processes ignore AppKit restoration through their own original
+  process arguments before Qt starts. Keep this in the test runner: a previous
+  fixture crash must not block the next gate with a restoration modal. Never
+  change global defaults or remove the user's saved application state to fix it.
+- Keep coverage as detached test IDs, not extra lists retaining every TestCase
+  through the whole run. After a case's cleanup, flush Qt DeferredDelete before
+  releasing that case's Python window/model wrappers. This preserves Qt teardown
+  order and releases parentless fixture models; never substitute forced GC or
+  silently omit cases to suppress a native lifecycle failure. See
+  [Qt's deferred-deletion guidance](https://doc.qt.io/qt-6.11/qobject.html#deleteLater)
+  for runners that do not continuously execute Qt's event loop.
 - Integrate tiny clipped pieces using local midpoint moments. Subtraction of
   global squared/cubed endpoints can corrupt color centroids by cancellation,
   producing different BLUE color when an identical segment is reversed.

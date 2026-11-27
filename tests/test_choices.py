@@ -3,9 +3,9 @@ import unittest
 from unittest import mock
 
 from PySide6.QtCore import QCoreApplication, QEvent, QRect, Qt
-from PySide6.QtGui import QColor, QImage, QPainter
+from PySide6.QtGui import QAccessible, QColor, QImage, QPainter
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QStyle, QStyleOptionViewItem, QWidget
+from PySide6.QtWidgets import QApplication, QComboBox, QListView, QStyle, QStyleOptionViewItem, QWidget
 from shiboken6 import delete, isValid
 
 from desktop import theme
@@ -53,9 +53,28 @@ class Choices(unittest.TestCase):
     def test_combo_popup_checks_current_value_on_right_and_keeps_keyboard_selection(self):
         combo = ComboBox()
         combo.addItems(['White', 'Custom'])
-        combo.resize(200, 28); combo.show(); combo.showPopup()
+        combo.setAccessibleName('Waveform color')
+        combo.resize(200, 28); combo.show()
         self.app.processEvents()
+        self.assertFalse(combo._popup_ready)
+        self.assertFalse(any(view.property('soundboxThemePainted')
+                             for view in combo.findChildren(QListView)))
+        accessible=QAccessible.queryAccessibleInterface(combo)
+        self.assertEqual(accessible.role(),QAccessible.ComboBox)
+        reference=QComboBox();reference.addItems(['White','Custom'])
+        reference.setAccessibleName('Waveform color')
+        expected=QAccessible.queryAccessibleInterface(reference)
+        self.assertEqual(accessible.text(QAccessible.Name),expected.text(QAccessible.Name))
+        reference.deleteLater()
+        # The actual keyboard popup path must finish native-popup suppression,
+        # view and delegate construction before its first paint.
+        QTest.keyClick(combo, Qt.Key_Down, Qt.AltModifier)
+        self.app.processEvents()
+        self.assertTrue(combo._popup_ready)
+        for hint in (QStyle.SH_ComboBox_UseNativePopup,QStyle.SH_ComboBox_Popup):
+            self.assertEqual(combo.style().styleHint(hint,None,combo),0)
         view = combo.view()
+        self.assertTrue(view.isVisible())
         image = view.viewport().grab().toImage()
         ratio = image.devicePixelRatio()
         rect = view.visualRect(combo.model().index(0, 0))
@@ -70,6 +89,12 @@ class Choices(unittest.TestCase):
         QTest.keyClick(view, Qt.Key_Down)
         QTest.keyClick(view, Qt.Key_Return)
         self.assertEqual(combo.currentText(), 'Custom')
+        self.assertIn('ShowMenu',accessible.actionInterface().actionNames())
+        accessible.actionInterface().doAction('ShowMenu')
+        self.app.processEvents()
+        self.assertIs(combo.view(),view)
+        self.assertTrue(view.isVisible())
+        QTest.keyClick(view,Qt.Key_Escape)
         combo.close(); combo.deleteLater()
 
     def test_nested_menu_reserves_right_gutter_without_clipping_long_label(self):

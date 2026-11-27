@@ -1,7 +1,8 @@
 # SoundBox full personal beta RC checklist
 
-Requested November26,2026. This is the execution plan for the next context,
-not a claim that the shakedown below has run. Keep the complete personal build:
+Requested November26,2026. Execution began after personal180 delivery; see the
+[dated results](rc-beta-results-2026-11-26.md). Unchecked work remains unproved.
+Keep the complete personal build:
 artwork discovery, account connections, artist tools, playback, prep and every
 device function Sonny uses. The first recipient is one private beta tester.
 General-user readiness means the installer and runtime work without Sonny's
@@ -30,9 +31,9 @@ regressions and the relevant integration/recovery checks; the final frozen RC ge
 the complete bare gate once. Do not broaden fixture permissions to make tests pass.
 
 - [ ] RC-001 Inventory every visible action, context menu, shortcut, Settings control and background service in the personal build; map each to one owner and checklist section.
-- [ ] RC-002 Record source commit/fingerprint, app executable/signature/profile/build, installer hash, OS/chip and exact rekordbox version for every acceptance run.
+- [x] RC-002 Record source commit/fingerprint, app executable/signature/profile/build, installer hash, OS/chip and exact rekordbox version for every acceptance run. November26 lane A baseline: [identity and limits](rc-beta-results-2026-11-26.md#lane-a-baseline); repeat for later runs.
 - [ ] RC-003 Record initial track, playlist, folder, tag, cue, grid and artwork counts plus source-bound musical identities; compare identities/content, not counts alone.
-- [ ] RC-004 Preserve current effective curation before refreshing native data; never restore an older whole-library snapshot over newer edits.
+- [x] RC-004 Preserve current effective curation before refreshing native data; never restore an older whole-library snapshot over newer edits. November26 personal180 delivery: [fresh capture, paired plan and preservation](rc-beta-results-2026-11-26.md#completed-local-delivery-with-rc-boundaries); later runs retain this obligation.
 - [ ] RC-005 Build a defect ledger with reproduction, severity, affected versions, test gap, fix commit and fresh retest; close findings with evidence rather than moving them out of scope.
 - [ ] RC-006 Separate existing implemented functions, existing functions with persistence gaps, and entirely new product ideas; finish the first two before the private beta.
 - [ ] RC-007 Agree performance budgets from repeatable baseline measurements before optimization; keep correctness and complete first-frame readiness as independent gates.
@@ -272,7 +273,7 @@ of ownership, not interchangeable successful track matches.
 - [ ] USB-020 Perform physical player checks on actual target firmware: playlist order, artwork, cue/loop/grid/key, waveforms, search/sort, settings and playback near beginning/end.
 - [ ] USB-021 Validate CDJ-3000X/OneLibrary separately from legacy player support; latest desktop rekordbox compatibility does not certify the generated USB library.
 - [ ] USB-022 Verify generic-USB initialization/export/delete never touches stock iTunesDB, iPod_Control or the other logical role's selection/state.
-- [ ] USB-023 Test the offered confirmed Reformat USB flow on a dedicated expendable generic target: exact selected identity/partition/filesystem confirmation, cancellation/failure, subsequent Configure/export; never run it against stock/dual by label alone.
+- [ ] USB-023 Confirm whether a dedicated Reformat USB entry is actually exposed; the initial static inventory finds only an unexposed maintenance backend. If offered, test on a dedicated expendable generic target with exact identity/partition/filesystem confirmation, cancellation/failure and subsequent Configure/export; never run it against stock/dual by label alone. This row does not request a new UI entry.
 
 ## Stock iPod, Rockbox and dual
 
@@ -301,7 +302,7 @@ of ownership, not interchangeable successful track matches.
 - [ ] UI-004 Selection/load prepares the correct artwork/waveforms/audio together; no early incomplete first frame or older track pop-in.
 - [ ] UI-005 Load/Info/context actions operate on the visible active view and current source, including filtered Artists and USB rows.
 - [ ] UI-006 Late USB load cannot replace a newer Collection load; late decoder/manifest/errors cannot alter a newer track or Play/Pause/Stop/seek/cue intent.
-- [ ] UI-007 Test all1/2/4-player layouts, enabled audio devices, device loss, Bluetooth/sample-rate changes and app activation/deactivation where offered.
+- [ ] UI-007 Test every enabled player layout (current UI:1 Player), enabled audio devices, device loss, Bluetooth/sample-rate changes and app activation/deactivation. Verify disabled layout choices remain unavailable; unoffered multi-deck layouts are a separate product decision.
 - [ ] UI-008 Play/Pause/Stop, seeking/scrub, first-beat positioning, loops, previous/next and EOF/autoplay work with duplicate occurrences and source changes.
 - [ ] UI-009 Verify very short remaining tails, exact EOF and sub-start-threshold clips end once rather than waiting silently; include immediate seek/retry controls.
 - [ ] UI-010 Hot/Memory/Session CUE momentary holds release on key-up, modal entry, source change, deactivation and shortcut recorder; no stuck playback/cue.

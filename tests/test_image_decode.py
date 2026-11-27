@@ -3,12 +3,13 @@ import io
 import os
 from pathlib import Path
 import subprocess
-import sys
 import tempfile
 import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
+
+from scripts.check_tests import qt_test_python_command
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -124,7 +125,7 @@ class ImageDecode(unittest.TestCase):
 
     def test_both_workers_avoid_plugin_lock_gil_cycle_with_gui_decode_and_heartbeat(self):
         completed = subprocess.run(
-            [sys.executable, "-c", "from tests.test_image_decode import _probe; _probe()"],
+            qt_test_python_command("from tests.test_image_decode import _probe; _probe()"),
             capture_output=True, text=True, timeout=15)
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
 

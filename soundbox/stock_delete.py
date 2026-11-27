@@ -92,11 +92,14 @@ def _exclusive_move(parent: int, name: str, target_parent: int, target_name: str
         raise OSError(code, os.strerror(code), name)
 
 
-def retire(session: DeviceSession, item: IndexedFile, claim: Path) -> None:
+def retire(session: DeviceSession, item: IndexedFile, claim: Path, *,
+           before_unlink: Callable[[], None] | None = None) -> None:
     """Claim without replacement, prove the original open entity, then unlink.
 
     A foreign leaf arriving after validation is restored without replacement or
     retained at its recorded claim. It is never disposed as our original file.
+    An optional caller admission check runs again after the claim; failure
+    restores the leaf rather than converting earlier ownership into authority.
     """
     with session.parent_fd(item.relative_path) as (parent, name):
         parent_info = os.fstat(parent)
@@ -117,6 +120,11 @@ def retire(session: DeviceSession, item: IndexedFile, claim: Path) -> None:
                             or moved.st_mtime_ns != info.st_mtime_ns
                             or moved.st_mode != info.st_mode):
                         raise IndexedDeleteError(f'Indexed file was replaced during cleanup: {item.relative_path}')
+                    if before_unlink is not None:
+                        before_unlink()
+                        if (not _owned(holding, claim_name, handle)
+                                or _epoch(os.fstat(handle)) != _epoch(moved)):
+                            raise IndexedDeleteError(f'Claimed file changed during cleanup admission: {item.relative_path}')
                     with session.parent_fd(item.relative_path) as (current, _):
                         current_info = os.fstat(current)
                         if (current_info.st_dev, current_info.st_ino) != item.parent_identity:

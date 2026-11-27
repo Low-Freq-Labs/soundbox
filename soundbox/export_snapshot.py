@@ -15,6 +15,7 @@ from pathlib import Path
 
 from .library import Library, Playlist, Track
 from .metadata import ArtistRegistry
+from . import metadata_context
 
 
 def _removal_memberships(values, selected=None) -> dict[str, list[str]]:
@@ -183,6 +184,14 @@ def capture_export(library: Library, playlists=(), *, standalone=(), extra=(),
         native_ids = {str(playlist.pid) for playlist in (*playlists, *extra) if playlist.pid}
         retained_ids = {str(playlist.pid) for playlist in native if playlist.pid} - native_ids if complete else set()
         catalog = _identity_headers(library, native_ids, retained_ids, complete=complete)
+    captured_titles={key:value for key,value in (titles or {}).items() if key in ids}
+    captured_artists={key:value for key,value in (artists or {}).items() if key in ids}
+    for key in ids:
+        track=library.tracks_by_id.get(key)
+        if track is None:continue
+        manual_title,manual_artist=metadata_context.values(library,track)
+        if manual_title is not None and key not in captured_titles:captured_titles[key]=manual_title
+        if manual_artist is not None and key not in captured_artists:captured_artists[key]=manual_artist
     data = dict(
         tracks=[track_row(track) for track in captured.values()],
         selected=[playlist_row(playlist) for playlist in playlists],
@@ -203,8 +212,8 @@ def capture_export(library: Library, playlists=(), *, standalone=(), extra=(),
                        cleanup_enabled=registry.cleanup_enabled, aliases=registry._explicit_aliases,
                        components=registry._components, independent=list(registry._independent))
                   if isinstance(registry, ArtistRegistry) else None),
-        titles={key: value for key, value in (titles or {}).items() if key in ids},
-        artists={key: value for key, value in (artists or {}).items() if key in ids},
+        titles=captured_titles,
+        artists=captured_artists,
         display_rows=frozen_display,
         info_overrides={key: value for key, value in getattr(library, 'info_overrides', {}).items() if key in ids},
         media_facts={key: value for key, value in getattr(library, 'media_facts', {}).items() if key in ids},

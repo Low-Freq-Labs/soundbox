@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from copy import deepcopy
 import json
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
@@ -528,6 +529,7 @@ class StockIpodPages(QWidget):
         self.music_table.verticalHeader().setVisible(False)
         self.music_table.verticalHeader().setDefaultSectionSize(24)
         music_header = self.music_table.horizontalHeader()
+        music_header.setDefaultAlignment(Qt.AlignCenter)
         music_header.setStretchLastSection(False)
         music_header.setSectionResizeMode(QHeaderView.Interactive)
         music_header.setSectionResizeMode(0, QHeaderView.Stretch)
@@ -557,6 +559,8 @@ class StockIpodPages(QWidget):
         self._snapshot_scope = None
         self._committed_playlist_order: tuple[str, ...] = ()
         self._has_snapshot = False
+        self._presented_snapshot: StockIpodSnapshot | None = None
+        self._presented_composite: CompositeDeviceData | None = None
         self._playlist_sync_available = False
         self._playlist_actions_available = True
         self._primary_action = 'Export'
@@ -591,6 +595,7 @@ class StockIpodPages(QWidget):
         tree.setAlternatingRowColors(True)
         tree.setUniformRowHeights(True)
         tree.setSelectionMode(QAbstractItemView.NoSelection)
+        tree.header().setDefaultAlignment(Qt.AlignCenter)
         tree.header().setFixedHeight(26)
         tree.header().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         tree.header().setSectionResizeMode(1, QHeaderView.Stretch)
@@ -618,6 +623,10 @@ class StockIpodPages(QWidget):
             "Last Sync":committed_at or "Never",
         }
         self._update_detail_values('SoundBox', values)
+        if self._presented_snapshot is not None:
+            self._presented_snapshot = replace(self._presented_snapshot,
+                sync_state=state, sync_detail=detail,
+                sync_local_changes=changes, sync_committed_at=committed_at)
 
     def _update_detail_values(self, title, values):
         tree=self.detail_trees[title]
@@ -636,6 +645,11 @@ class StockIpodPages(QWidget):
         self._set_storage_tooltips(snapshot)
         self.set_sync_status(snapshot.sync_state, snapshot.sync_detail,
                              snapshot.sync_local_changes, snapshot.sync_committed_at)
+        from soundbox.stock_ipod_info import playback_refresh_compatible
+        previous = self._presented_snapshot
+        self._presented_snapshot = (snapshot if previous is not None
+            and self._presented_composite is None
+            and playback_refresh_compatible(previous, snapshot) else None)
         return True
 
     def _set_storage_tooltips(self, snapshot: StockIpodSnapshot):
@@ -648,6 +662,7 @@ class StockIpodPages(QWidget):
                 item.setToolTip(1, f'{exact[item.text(0)]:,} bytes')
 
     def set_loading(self, *, preserve_page: bool = False):
+        self._presented_snapshot = None
         current_page = self.stack.currentIndex()
         if preserve_page and self._has_snapshot:
             # A refresh is not a new truth yet. Keep the complete last verified
@@ -675,6 +690,7 @@ class StockIpodPages(QWidget):
         self.set_page(current_page if preserve_page else 0)
 
     def set_error(self, message: str, *, preserve_snapshot: bool = False):
+        self._presented_snapshot = None
         if preserve_snapshot and self._has_snapshot:
             self.restore_playlist_order()
             return
@@ -700,15 +716,38 @@ class StockIpodPages(QWidget):
             self,
             snapshot: StockIpodSnapshot,
             composite: CompositeDeviceData | None = None,
-    ):
+    ) -> bool:
+        """Return True for exact complete presentation reuse, False after rebuilding.
+
+        This is a GUI value comparison, never device freshness or write authority.
+        Composite manifests are mutable, so retain a detached completed value.
+        """
+        from soundbox.device_readiness import stock_write_readiness
+
+        readiness = stock_write_readiness(writable=snapshot.writable,
+            filesystem=snapshot.filesystem, stock_format=snapshot.stock_format,
+            firewire_guid=snapshot.firewire_guid or snapshot.usb_serial)
+        if (self._has_snapshot and self._pending_playlist_order is None
+                and self._presented_snapshot == snapshot
+                and self._presented_composite == composite):
+            # Reapply readiness before controller profile gating, which can
+            # disable actions independently of an otherwise identical catalog.
+            self._playlist_delete_available = readiness.ready
+            self._playlist_sync_available = readiness.ready
+            self._playlist_order_available = readiness.ready
+            self._playlist_write_reason = readiness.reason
+            self.delete_playlist_button.setToolTip(readiness.reason)
+            self._update_delete_playlist_button()
+            self._update_playlist_drag_state()
+            self._sync_playlist_button()
+            return True
+        self._presented_snapshot = None
         scope = str(snapshot.target), snapshot.identity_key
         self._order_refresh_seat = (self._capture_playlist_order_seat()
             if self._pending_playlist_order is not None and self._snapshot_scope == scope else None)
         self._snapshot_scope = scope
         self._has_snapshot = True
         self._sync_revision += 1
-        from soundbox.device_readiness import stock_write_readiness
-
         self._clear_details()
         model_label = snapshot.model or "Not reported"
         if snapshot.identity_conflict:
@@ -736,9 +775,6 @@ class StockIpodPages(QWidget):
         song_rows = _composite_song_rows(snapshot, composite)
         playlist_rows = _composite_playlist_rows(
             snapshot, composite, song_rows)
-        readiness = stock_write_readiness(writable=snapshot.writable,
-            filesystem=snapshot.filesystem, stock_format=snapshot.stock_format,
-            firewire_guid=snapshot.firewire_guid or snapshot.usb_serial)
         capability = "Sync ready" if readiness.ready else readiness.reason
         self._set_detail_rows("Identity", (
             ("Name", snapshot.volume_name),
@@ -818,9 +854,11 @@ class StockIpodPages(QWidget):
                         for row in snapshot.playlists}
         regular_ids = {str(row.playlist_id) for row in _regular_user_playlists(snapshot)}
         self.playlist_tree.clear()
+        parents = []
         for playlist in playlist_rows:
+            # Populate detached subtrees so each child role/flag update does
+            # not rescan the attached catalog through itemChanged handlers.
             parent = QTreeWidgetItem(
-                self.playlist_tree,
                 [playlist.title, str(len(playlist.entries)),
                  playlist.availability],
             )
@@ -850,6 +888,8 @@ class StockIpodPages(QWidget):
                 )
                 child.setFlags(child.flags() & ~Qt.ItemIsDragEnabled & ~Qt.ItemIsDropEnabled)
                 child.setData(0, Qt.UserRole + 4, (entry.dbid, entry.location))
+            parents.append(parent)
+        self.playlist_tree.addTopLevelItems(parents)
         self._playlist_order_available = readiness.ready
         self._pending_playlist_order = None
         self._pending_playlist_order_token = None
@@ -858,6 +898,9 @@ class StockIpodPages(QWidget):
         self._update_playlist_drag_state()
         self._sync_playlist_button()
         self._apply_playlist_order_seat()
+        self._presented_composite = deepcopy(composite)
+        self._presented_snapshot = snapshot
+        return False
 
     def _playlist_action_ready(self):
         return bool(self._has_snapshot and self._playlist_sync_available
@@ -953,7 +996,7 @@ class StockIpodPages(QWidget):
             item = self.playlist_tree.topLevelItem(index)
             flags = item.flags() & ~Qt.ItemIsDragEnabled & ~Qt.ItemIsDropEnabled
             if ready and item.data(0, _ORDER_KEY):flags |= Qt.ItemIsDragEnabled | Qt.ItemIsDropEnabled
-            item.setFlags(flags)
+            if flags != item.flags():item.setFlags(flags)
 
     def _set_playlist_order(self, order):
         tree = self.playlist_tree

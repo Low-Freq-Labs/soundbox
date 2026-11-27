@@ -36,6 +36,8 @@ FORMAT = 'soundbox-native-playlists-v1'
 PAYLOADS = ('before.db','after.db','before.xml','after.xml')
 MAX_BATCH_COMMANDS = 64
 MAX_TREE_DELETE_COMMANDS = 256
+ORDINARY_FOLDER_DELETE_PROFILE = 'ordinary-folder-confirmation-v1'
+_FOLDER_DELETE_FIELDS = frozenset(('delete_scope_profile','delete_descendants','delete_scope_revision'))
 _CANONICAL_UUID = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
 
 SMART_CREATE_PROFILE = 'rekordbox-6.8.7.0303-mytag-smart-create-v1'
@@ -69,26 +71,71 @@ def command_requests(request):
     return request['requests'] if request.get('operation') in ('batch','delete_tree') else [request]
 
 
-def tree_bindings(current, identity):
-    """Exact bounded active subtree, children before their containing folder."""
+def tree_bindings(current, identity, *, command_limit=MAX_TREE_DELETE_COMMANDS):
+    """Exact active subtree; only composed leaf commands impose a command cap."""
     active = [row for row in current['nodes'] if row['rb_local_deleted'] == 0]
     by_id = {row['ID']: row for row in active}
     if len(by_id) != len(active) or identity not in by_id or by_id[identity]['Attribute'] != 1:
         raise WriteProofError('Expected one exact active folder for tree deletion')
     result = []
     seen: set[str] = set()
-    def visit(selected):
-        if selected in seen or len(seen) >= MAX_TREE_DELETE_COMMANDS:
+    children_by_parent: dict[str,list[dict]] = {}
+    for node in active:children_by_parent.setdefault(node['ParentID'],[]).append(node)
+    pending=[(identity,False)]
+    while pending:
+        selected,exiting=pending.pop();node=by_id[selected]
+        if exiting:
+            result.append(dict(id=node['ID'],uuid=node['UUID'],parent=node['ParentID'],attribute=node['Attribute']))
+            continue
+        if selected in seen or command_limit is not None and len(seen) >= command_limit:
             raise WriteProofError('Playlist deletion tree is cyclic or exceeds its bounded scope')
-        seen.add(selected); node = by_id[selected]
+        seen.add(selected)
         if node['Attribute'] not in (0,1,4):
             raise WriteProofError('Playlist deletion tree contains unverified native node types')
-        children = planner._siblings(active, selected)
+        children=sorted(children_by_parent.get(selected,()),key=lambda child:child['Seq'])
+        if [child['Seq'] for child in children]!=list(range(1,len(children)+1)):
+            raise ValueError('Native sibling order is ambiguous')
         if children and node['Attribute'] != 1:
             raise WriteProofError('A playlist unexpectedly contains descendant playlists')
-        for child in children:visit(child['ID'])
-        result.append(dict(id=node['ID'], uuid=node['UUID'], parent=node['ParentID'], attribute=node['Attribute']))
-    visit(identity)
+        pending.append((selected,True))
+        pending.extend((child['ID'],False) for child in reversed(children))
+    return result
+
+
+def _ordinary_delete_scope(current, identity):
+    bindings = tree_bindings(current, identity,command_limit=None)
+    if any(binding['attribute'] not in (0,1) for binding in bindings):
+        raise WriteProofError('Ordinary folder deletion cannot admit intelligent playlists')
+    identities = {binding['id'] for binding in bindings}
+    # Bind the confirmed presentation, including exact membership occurrences.
+    # Native clocks/status fields are writer-owned and differ after a causal ACK;
+    # they must not prevent an unchanged queued confirmation from being renewed.
+    nodes = [{key:row[key] for key in ('ID','UUID','ParentID','Attribute','Name','Seq')}
+             for row in current['nodes'] if row['ID'] in identities and row['rb_local_deleted']==0]
+    members = [{key:row[key] for key in ('ID','UUID','PlaylistID','ContentID','TrackNo')}
+               for row in current['members'] if row['PlaylistID'] in identities and row['rb_local_deleted']==0]
+    return bindings, planner.revision(nodes,members)
+
+
+def require_ordinary_delete_scope(request, current):
+    """Optional confirmation guard; legacy ordinary requests retain their format."""
+    if 'delete_scope_profile' not in request:return
+    bindings, revision = _ordinary_delete_scope(current,request['playlist_id'])
+    if bindings != request['delete_descendants'] or revision != request['delete_scope_revision']:
+        raise ConflictError('The confirmed folder, descendants or songs changed; choose the deletion again')
+
+
+def renew_ordinary_delete_request(request, current, *, operation_id=None):
+    """Advance clocks/baseline without expanding the ordinary multi-row delete."""
+    validate_request(request)
+    if request.get('delete_scope_profile') != ORDINARY_FOLDER_DELETE_PROFILE:
+        raise WriteProofError('Ordinary folder deletion renewal requires its captured confirmation')
+    require_ordinary_delete_scope(request,current)
+    stamp,clock=_timestamps()
+    result={**deepcopy(request),'revision':current['revision'],'timestamp':stamp,
+            'survivor_timestamp':stamp,'xml_timestamp':clock}
+    if operation_id is not None:result['operation_id']=operation_id
+    validate_request(result)
     return result
 
 
@@ -99,7 +146,8 @@ def tree_delete_for(current, identity):
     requests = []
     for binding in bindings:
         operation = 'delete_smart' if binding['attribute'] == 4 else 'delete'
-        requests.append(request_for(projected, operation, identity=binding['id'], parent=binding['parent']))
+        requests.append(request_for(projected, operation, identity=binding['id'], parent=binding['parent'],
+                                    capture_folder_scope=False))
         target = next(row for row in projected['nodes'] if row['ID'] == binding['id'])
         projected['nodes'] = [row for row in projected['nodes'] if row['ID'] != target['ID']]
         projected['members'] = [row for row in projected['members'] if row['PlaylistID'] != target['ID']]
@@ -425,13 +473,17 @@ def _tree_deleted_parents(request, final):
 
 
 def _require_tree_references(conn, request, *, deleted):
-    if request.get('operation') != 'delete_tree':return
+    ordinary = 'delete_scope_profile' in request
+    if request.get('operation') != 'delete_tree' and not ordinary:return
     current = catalog(conn)
     if not deleted:
+        if ordinary:
+            require_ordinary_delete_scope(request,current)
+            return
         if tree_bindings(current,request['playlist_id']) != request['descendants']:
             raise ConflictError('Playlist deletion gained or replaced a descendant; captured scope preserved')
         return
-    identities={binding['id'] for binding in request['descendants']}
+    identities={binding['id'] for binding in request['delete_descendants' if ordinary else 'descendants']}
     if (any(row['rb_local_deleted']==0 and (row['ID'] in identities or row['ParentID'] in identities)
             for row in current['nodes'])
             or any(row['rb_local_deleted']==0 and row['PlaylistID'] in identities for row in current['members'])):
@@ -1116,6 +1168,8 @@ class PlaylistStore:
                 validate_request(renewed);return renewed
             if request['operation'] == 'delete_tree':
                 return renew_tree_delete_request(request,current,operation_id=uuid4().hex)
+            if 'delete_scope_profile' in request:
+                return renew_ordinary_delete_request(request,current,operation_id=uuid4().hex)
             if request['operation'] == 'delete_smart':
                 return renew_smart_delete_request(request, current, operation_id=uuid4().hex)
             if request['operation'] in CREATE_SMART_OPERATIONS:
@@ -1149,7 +1203,7 @@ class PlaylistStore:
         """A receipt supplies idempotence, never fresh reference authority."""
         commands = [command for command in command_requests(request)
                     if command['operation'] in (*CREATE_SMART_OPERATIONS, *MOVE_OPERATIONS, 'delete_smart')]
-        if not commands and request.get('operation') != 'delete_tree':
+        if not commands and request.get('operation') != 'delete_tree' and 'delete_scope_profile' not in request:
             return
         after_targets = _affected(changes)[1]
         from .rekordbox_db import _copy_stable_snapshot
@@ -1755,6 +1809,7 @@ def _single_plan(conn, request, before_xml, *, current=None,counter=None):
             changes=planner.reorder(nodes,counter,identity=target_id,anchor_id=request['anchor_id'],
                 after=request['after'],timestamp=request['timestamp'],sibling_timestamp=request['survivor_timestamp'])['changes']
         elif op=='delete':
+            require_ordinary_delete_scope(request,current)
             changes=planner.delete(nodes,members,counter,identity=target_id,timestamp=request['timestamp'],member_timestamp=request['survivor_timestamp'],sibling_timestamp=request['survivor_timestamp'])['changes']
         elif op in ('append','remove'):
             target_members=[r for r in members if r['PlaylistID']==target_id]
@@ -2283,7 +2338,8 @@ def _validate_smart_clocks(request):
 
 
 def request_for(catalog, operation, *, identity=None, name='', parent='root', folder=False,
-                tracks=(), allow_duplicate=False,anchor_id=None,after=False,tags=(),match='any',memberships=None):
+                tracks=(), allow_duplicate=False,anchor_id=None,after=False,tags=(),match='any',memberships=None,
+                capture_folder_scope=True):
     if operation == 'delete_tree':
         if tracks or tags or memberships is not None or folder or allow_duplicate or match != 'any':
             raise WriteProofError('Tree deletion does not admit membership or creation options')
@@ -2300,6 +2356,10 @@ def request_for(catalog, operation, *, identity=None, name='', parent='root', fo
         xml_timestamp=clock,allow_duplicate=bool(allow_duplicate),
         tracks=[dict(track_id=getattr(t,'native_id',t.track_id),uuid=t.source_uuid,id=str(uuid4()),membership_uuid=str(uuid4()))
                 for t in tracks])
+    if operation=='delete' and target is not None and target['Attribute']==1 and capture_folder_scope:
+        bindings,revision=_ordinary_delete_scope(catalog,identity)
+        request.update(delete_scope_profile=ORDINARY_FOLDER_DELETE_PROFILE,
+                       delete_descendants=bindings,delete_scope_revision=revision)
     if operation in CREATE_ORDINARY_OPERATIONS:
         parents=[node for node in nodes if node['ID']==parent and node['rb_local_deleted']==0]
         if parent!='root' and (len(parents)!=1 or parents[0]['Attribute']!=1):
@@ -2450,6 +2510,7 @@ def validate_request(request):
         return
     fields={'operation_id','operation','playlist_id','playlist_uuid','revision','name','parent','tracks',
             'timestamp','survivor_timestamp','xml_timestamp','folder','allow_duplicate'}
+    if isinstance(request,dict) and _FOLDER_DELETE_FIELDS.intersection(request):fields|=_FOLDER_DELETE_FIELDS
     if isinstance(request,dict) and request.get('operation') in CREATE_ORDINARY_OPERATIONS and 'parent_uuid' in request:
         fields|={'parent_uuid'}
     if isinstance(request,dict) and request.get('operation') in ('reorder','reorder_smart'):fields|={'anchor_id','anchor_uuid','after'}
@@ -2469,6 +2530,36 @@ def validate_request(request):
         fields|={'parent_uuid','smart_rule','smart_delete_profile','smart_delete_clocks'}
     if not isinstance(request,dict) or set(request)!=fields:
         raise WriteProofError('Unknown native playlist intent format')
+    if 'delete_scope_profile' in request:
+        bindings=request['delete_descendants'];revision=request['delete_scope_revision']
+        if (request['operation']!='delete' or request['delete_scope_profile']!=ORDINARY_FOLDER_DELETE_PROFILE
+                or not isinstance(bindings,list) or not bindings
+                or type(revision) is not str or len(revision)!=64
+                or any(char not in '0123456789abcdef' for char in revision)):
+            raise WriteProofError('Invalid ordinary folder confirmation')
+        positions={};by_id={}
+        for index,binding in enumerate(bindings):
+            if (not isinstance(binding,dict) or set(binding)!={'id','uuid','parent','attribute'}
+                    or type(binding['attribute']) is not int or binding['attribute'] not in (0,1)
+                    or not _canonical_uuid(binding['uuid'])):
+                raise WriteProofError('Invalid ordinary folder descendant identity')
+            for key in ('id','parent'):
+                value=binding[key]
+                if key=='parent' and value=='root':continue
+                if (type(value) is not str or not value.isascii() or not value.isdecimal()
+                        or not 0<int(value)<2**32 or str(int(value))!=value):
+                    raise WriteProofError('Invalid ordinary folder descendant identity')
+            if binding['id'] in by_id:raise WriteProofError('Repeated ordinary folder descendant')
+            by_id[binding['id']]=binding;positions[binding['id']]=index
+        root=bindings[-1]
+        if (root['id']!=request['playlist_id'] or root['uuid']!=request['playlist_uuid']
+                or root['attribute']!=1 or root['parent'] in by_id):
+            raise WriteProofError('Ordinary folder confirmation changed its selected root')
+        for binding in bindings[:-1]:
+            parent=binding['parent']
+            if (parent not in by_id or by_id[parent]['attribute']!=1
+                    or positions[parent]<=positions[binding['id']]):
+                raise WriteProofError('Ordinary folder confirmation has invalid descendant topology')
     for key,length in (('operation_id',32),('revision',64)):
         value=request[key]
         if type(value) is not str or len(value)!=length or any(c not in '0123456789abcdef' for c in value):

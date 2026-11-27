@@ -814,23 +814,10 @@ def plan(
             if display is None:
                 display = frozen_pair(display_rows, track.track_id)
             if display is None:
-                override = (title_overrides or {}).get(track.track_id)
-                artist = metadata.effective_artist(
-                    track.track_id, override or track.name, track.artist,
-                    artist_overrides, derive_artists,
-                    cast("metadata.ArtistRegistry | None", lib.artist_registry),
-                    stem=src.stem, cleanup=lib.metadata_cleanup_enabled,
-                )
-                # The on-device filename is ALWAYS the SoundBox Track Title —
-                # override, else the tidied rekordbox name — NEVER the on-disk
-                # filename (disk names are often junk the user's curation has
-                # already cleaned in the app; source files are never renamed).
-                # sanitize/length-cap happens in device_music_path; a same-name
-                # collision downstream gets a short source-hash suffix.
-                title = metadata.effective_title(
-                    track.track_id, track.name, artist, title_overrides,
-                    getattr(lib, "title_junk", None), cleanup=lib.metadata_cleanup_enabled,
-                    source_artist=track.artist, registry=lib.artist_registry)
+                from .engine import effective_pair
+                title,artist=effective_pair(track,artist_overrides,title_overrides,derive_artists,
+                    library=lib,stem=src.stem,registry=cast(
+                        metadata.ArtistRegistry | metadata.FrozenArtistRegistry | None,lib.artist_registry))
                 display = (title, artist)
                 display_by_track[track.track_id] = display
             previous_display = display_by_source.get(src_key)
@@ -1092,6 +1079,9 @@ def run(
         expected_payload=expected_manifest_payload, expected_absent=expected_manifest_absent)
         if expected_manifest_payload is not None or expected_manifest_absent else
         manifest.load(target, session=session) if session is not None else manifest._empty())
+    from .export_selection import retain_projection
+    selected = [retain_projection(playlist,previous_manifest.get('playlists',{}).get(
+                    manifest.playlist_key(playlist),{})) for playlist in selected]
     files, entries_by_pl = plan(lib, selected, target, derive_artists=derive_artists,
                                 artist_overrides=artist_overrides,
                                 title_overrides=title_overrides,
@@ -1395,9 +1385,9 @@ def run(
             text = pl_mod.render_m3u8(entries)
         out_paths: list[Path] = []
         if layout in ("tree", "both"):
-            out_paths.append(pl_mod.tree_playlist_path(playlists_root, plist.folder_path, plist.name))
+            out_paths.append(pl_mod.tree_playlist_path(playlists_root, plist.destination_folder_path, plist.name))
         if layout in ("flat", "both"):
-            out_paths.append(pl_mod.flat_playlist_path(playlists_root, [] if concise_playlists else plist.folder_path, plist.name))
+            out_paths.append(pl_mod.flat_playlist_path(playlists_root, [] if concise_playlists else plist.destination_folder_path, plist.name))
 
         resolved_paths: list[Path] = []
         playlist_identity = manifest.playlist_key(plist)

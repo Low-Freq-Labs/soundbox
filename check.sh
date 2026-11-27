@@ -39,7 +39,7 @@ QT_QPA_PLATFORM=offscreen ./.venv/bin/python scripts/check_tests.py \
   --phase offscreen --report build/check/offscreen.json
 if [ "$render" = 1 ]; then
   echo "== offscreen render =="
-  PYTHONPATH=. ./.venv/bin/python -m desktop._shot /tmp/soundbox-check.png
+  QT_QPA_PLATFORM=offscreen PYTHONPATH=. ./.venv/bin/python -m desktop._shot /tmp/soundbox-check.png
 fi
 echo "== native Cocoa drawable/playback gate =="
 QT_QPA_PLATFORM=cocoa ./.venv/bin/python scripts/check_tests.py \

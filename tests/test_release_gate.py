@@ -5,6 +5,121 @@ from scripts.verify_test_reports import verify
 from scripts.check_tests import partition
 
 
+class QtThreadOwnership(unittest.TestCase):
+    def test_temporary_qobject_does_not_retire_its_borrowed_application_thread(self):
+        import os
+        import subprocess
+        from scripts.check_tests import qt_test_python_command
+        code='''from PySide6.QtCore import QCoreApplication,QEvent,QObject,QThread,QStandardPaths
+from shiboken6 import isValid
+QStandardPaths.setTestModeEnabled(True)
+app=QCoreApplication([])
+owner=QObject()
+thread=owner.thread()
+owner.deleteLater()
+QCoreApplication.sendPostedEvents(None,QEvent.DeferredDelete)
+assert not isValid(owner)
+assert isValid(thread), 'Temporary QObject retired its borrowed application thread'
+assert thread is QThread.currentThread()
+'''
+        completed=subprocess.run(qt_test_python_command(code,platform='offscreen'),
+            env={**os.environ,'QT_QPA_PLATFORM':'offscreen'},capture_output=True,text=True,timeout=15)
+        self.assertEqual(completed.returncode,0,completed.stdout+completed.stderr)
+
+
+class CocoaTestLaunchPolicy(unittest.TestCase):
+    def test_owned_cocoa_probe_keeps_os_flags_and_exact_payload_arguments(self):
+        import json
+        import subprocess
+        import sys
+        from unittest import mock
+        from scripts import check_tests
+        code='import json,sys; print(json.dumps(sys.argv)); print("executed-once")'
+        arguments=('generated path with spaces','--ordinary-user-option','YES')
+        with mock.patch.object(sys,'platform','darwin'):
+            command=check_tests.qt_test_python_command(code,*arguments,platform='cocoa')
+        self.assertEqual(tuple(command[-6:]),check_tests._COCOA_TEST_ARGUMENTS)
+        completed=subprocess.run(command,capture_output=True,text=True,check=True,timeout=10)
+        self.assertEqual(completed.stdout.splitlines(),[json.dumps(['-c',*arguments]),'executed-once'])
+
+    def test_owned_offscreen_probe_stays_unwrapped_even_on_macos(self):
+        import sys
+        from unittest import mock
+        from scripts import check_tests
+        for platform in ('offscreen','minimal'):
+            with self.subTest(platform=platform),mock.patch.object(sys,'platform','darwin'):
+                self.assertEqual(check_tests.qt_test_python_command('payload','argument',platform=platform),
+                                 [sys.executable,'-c','payload','argument'])
+        with mock.patch.object(sys,'platform','linux'):
+            self.assertEqual(check_tests.qt_test_python_command('payload','argument',platform='cocoa'),
+                             [sys.executable,'-c','payload','argument'])
+
+    def test_native_launch_reexecutes_current_python_with_exact_original_cli(self):
+        from pathlib import Path
+        import sys
+        from unittest import mock
+        from scripts import check_tests
+        for arguments in (['--phase','native','--report','/generated/private report.json'],
+                          ['--focus','test_chosen.Check','--cocoa'],
+                          ['--phase=native','--report','/generated/report.json']):
+            with self.subTest(arguments=arguments):
+                argv=['check_tests.py',*arguments]
+                with mock.patch.object(sys,'platform','darwin'),mock.patch.object(sys,'argv',argv), \
+                        mock.patch.object(check_tests.os,'execv') as execute:
+                    check_tests._bootstrap_cocoa_test_process()
+                execute.assert_called_once_with(sys.executable,[sys.executable,
+                    str(Path(check_tests.__file__).resolve()),*arguments,*check_tests._COCOA_TEST_ARGUMENTS])
+                self.assertEqual(argv,['check_tests.py',*arguments])
+
+    def test_prepared_native_process_strips_only_internal_suffix_and_runs_once(self):
+        import sys
+        from unittest import mock
+        from scripts import check_tests
+        original=['check_tests.py','--focus','test_chosen.Check','--cocoa','--workers','1']
+        argv=[*original,*check_tests._COCOA_TEST_ARGUMENTS]
+        with mock.patch.object(sys,'platform','darwin'),mock.patch.object(sys,'argv',argv), \
+                mock.patch.object(check_tests.os,'execv') as execute:
+            check_tests._bootstrap_cocoa_test_process()
+            self.assertEqual(sys.argv,original)
+        execute.assert_not_called()
+
+    def test_offscreen_planning_and_other_platforms_never_reexec(self):
+        import sys
+        from unittest import mock
+        from scripts import check_tests
+        commands=(('darwin',['--phase','offscreen','--report','/generated/report.json']),
+                  ('darwin',['--focus','test_chosen.Check']),
+                  ('darwin',['--suite','player','--cocoa']),
+                  ('darwin',['--focus','test_chosen.Check','--cocoa','--plan']),
+                  ('darwin',['--list-suites']),('darwin',['--help','--cocoa']),
+                  ('linux',['--focus','test_chosen.Check','--cocoa']))
+        for platform,arguments in commands:
+            with self.subTest(platform=platform,arguments=arguments):
+                argv=['check_tests.py',*arguments]
+                with mock.patch.object(sys,'platform',platform),mock.patch.object(sys,'argv',argv), \
+                        mock.patch.object(check_tests.os,'execv') as execute:
+                    check_tests._bootstrap_cocoa_test_process()
+                execute.assert_not_called();self.assertEqual(argv,['check_tests.py',*arguments])
+
+    def test_unknown_user_arguments_survive_bootstrap_and_remain_parser_errors(self):
+        from contextlib import redirect_stderr
+        import io
+        import sys
+        from unittest import mock
+        from scripts import check_tests
+        unknown=['--focus','test_chosen.Check','--cocoa','--unrecognized-user-option']
+        argv=['check_tests.py',*unknown,*check_tests._COCOA_TEST_ARGUMENTS]
+        error=io.StringIO()
+        with mock.patch.object(sys,'platform','darwin'),mock.patch.object(sys,'argv',argv), \
+                mock.patch.object(check_tests.os,'execv') as execute:
+            check_tests._bootstrap_cocoa_test_process()
+            self.assertEqual(sys.argv,['check_tests.py',*unknown])
+            with redirect_stderr(error),self.assertRaises(SystemExit) as failure:check_tests.main()
+        self.assertEqual(failure.exception.code,2)
+        self.assertIn('--unrecognized-user-option',error.getvalue())
+        execute.assert_not_called()
+
+
 class ParallelRunner(unittest.TestCase):
     def test_real_workers_overlap_with_private_qt_state_and_a_failure_cannot_reuse_green_reports(self):
         import json
@@ -196,6 +311,40 @@ class Check(unittest.TestCase):
         self.assertEqual(len(report['selected']),len(set(report['selected'])))
         self.assertEqual((self.root/'module-starts').read_text(),'start\n')
         self.assertIn('not a full release result',result.stdout)
+
+    def test_qt_cleanup_precedes_case_release_and_does_not_retain_parentless_models(self):
+        import json
+        self.chosen.write_text('''import unittest,weakref
+from PySide6.QtGui import QStandardItemModel
+from PySide6.QtWidgets import QApplication,QTableView,QWidget
+APP=QApplication.instance() or QApplication([])
+events=[]
+refs={}
+class AOwner(unittest.TestCase):
+    def test_owned_window(self):
+        self.window=QWidget()
+        self.model=QStandardItemModel()
+        self.view=QTableView(self.window)
+        self.view.setModel(self.model)
+        self.window.destroyed.connect(lambda *_:events.append('window_cpp_destroyed'))
+        self.model.destroyed.connect(lambda *_:events.append('model_cpp_destroyed'))
+        refs['case']=weakref.ref(self)
+        refs['model']=weakref.ref(self.model)
+        weakref.finalize(self,events.append,'case_released')
+        self.addCleanup(self.window.deleteLater)
+class BNext(unittest.TestCase):
+    def test_previous_owner_has_retired(self):
+        self.assertIsNone(refs['case'](),'Prior test case remains strongly referenced')
+        self.assertIsNone(refs['model'](),'Prior parentless Qt model remains alive')
+        self.assertEqual(events,['window_cpp_destroyed','case_released','model_cpp_destroyed'])
+''')
+        completed=self.run_check('test_chosen')
+        self.assertEqual(completed.returncode,0,completed.stdout+completed.stderr)
+        report=json.loads(self.report.read_text())
+        self.assertEqual(report['ran'],2)
+        self.assertEqual(report['skipped'],0)
+        self.assertEqual(report['selected'],['test_chosen.AOwner.test_owned_window',
+                                             'test_chosen.BNext.test_previous_owner_has_retired'])
 
     def test_failure_skip_expected_failure_and_bad_selector_cannot_reuse_green(self):
         import json

@@ -84,6 +84,18 @@ class IpodExportCaptureTests(unittest.TestCase):
         return request_ipod_export(self.w,kind,'/generated/ipod',
             [self.w.lib.playlists[0]] if selected=='default' else selected,ready=self.ready,failed=self.failed)
 
+    def test_selected_folder_projection_survives_durable_source_reresolution(self):
+        original=self.w.lib.playlists[0]
+        original.folder_path=['SETS','HAMDI']
+        selected=replace(original,export_folder_path=['HAMDI'])
+        self.request(selected=[selected])
+        self.until(lambda:self.ready.called or self.failed.called)
+        self.failed.assert_not_called()
+        capture=self.ready.call_args.args[0]
+        self.assertEqual(capture.selected_playlists[0].destination_folder_path,['HAMDI'])
+        self.assertEqual(capture.materialize().playlists[0].folder_path,['SETS','HAMDI'])
+        self.assertIsNone(original.export_folder_path)
+
     def test_paused_and_running_bulk_backlog_both_export_before_it_drains(self):
         for paused in (True,False):
             with self.subTest(paused=paused):

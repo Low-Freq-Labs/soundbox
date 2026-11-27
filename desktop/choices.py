@@ -136,6 +136,13 @@ class ComboBox(BaseComboBox):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self._popup_ready = False
+
+    def _ensure_popup(self):
+        if self._popup_ready:
+            return
+        # Fields paint themselves. Build Qt's custom popup only when it is
+        # requested, before Qt can expose it; large forms need no idle views.
         app = QApplication.instance()
         if not hasattr(app, '_choice_popup_style'):
             # This proxy owns its own platform style, never QApplication's style.
@@ -146,8 +153,14 @@ class ComboBox(BaseComboBox):
         view.setProperty('soundboxThemePainted', True)
         self.setView(view)
         self.setItemDelegate(_ChoiceDelegate(self))
+        self._popup_ready = True
+
+    def itemDelegate(self):
+        self._ensure_popup()
+        return super().itemDelegate()
 
     def showPopup(self):
+        self._ensure_popup()
         if self.popup_matches_field:
             # A forced narrow popup must shrink its view too. Otherwise the
             # content-width minimum leaves the right-hand check offscreen.

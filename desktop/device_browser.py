@@ -12,8 +12,8 @@ import logging
 import os
 from pathlib import Path
 
-from PySide6.QtCore import QProcess
-from PySide6.QtWidgets import QInputDialog, QMessageBox
+from PySide6.QtCore import QProcess, Qt, QTimer
+from PySide6.QtWidgets import QFileSystemModel, QInputDialog, QMessageBox
 from .choices import Menu as QMenu, exec_transient_menu
 
 from soundbox.paths import sanitize_component, top_level_paths
@@ -25,6 +25,16 @@ from .devices import (
 from .workers import DeleteWorker, OneShotTask
 
 LOG = logging.getLogger("soundbox")
+
+
+class DeviceFileModel(QFileSystemModel):
+    """Center header labels without changing file rows or browser authority."""
+
+    def headerData(self, section, orientation, role=Qt.DisplayRole):
+        # QFileSystemModel's explicit left alignment overrides header defaults.
+        if orientation == Qt.Horizontal and role == Qt.TextAlignmentRole:
+            return int(Qt.AlignCenter)
+        return super().headerData(section, orientation, role)
 
 
 def _browser_entry_name(raw: str) -> str:
@@ -47,7 +57,7 @@ class DeviceBrowserMixin:
     # the full guard fail-closed in case the user explicitly starts a new read
     # or operation before ejecting.
     _EJECT_BLOCKING_WORKERS = (
-        "export_worker", "_resync_worker", "_delete_worker", "_cdj_worker",
+        "export_worker", "_resync_worker", "_delete_worker", "_cdj_worker", "_usb_settings_worker",
         "_stock_plan_worker", "_stock_commit_worker",
         "_dual_plan_worker", "_dual_commit_worker",
         "_stock_delete_plan_worker", "_stock_delete_commit_worker",
@@ -148,6 +158,22 @@ class DeviceBrowserMixin:
 
     def _eject(self, dev: str):
         if getattr(self, '_shutting_down', False):return
+        pages=vars(self).get('usb_device_pages')
+        if pages is not None:pages.flush_auto_settings()
+        settings=vars(self).get('usb_settings_controller')
+        if settings is not None and settings.busy:
+            identity=self._device_coordinator.mounts.get(dev)
+            owner=object();self._usb_settings_eject_wait=owner
+            def resume():
+                if (getattr(self,'_usb_settings_eject_wait',None) is not owner
+                        or getattr(self,'_shutting_down',False)):return
+                if self._device_coordinator.mounts.get(dev)!=identity:
+                    self._usb_settings_eject_wait=None;return
+                if settings.busy:
+                    QTimer.singleShot(50,self,resume);return
+                self._usb_settings_eject_wait=None;self._eject(dev)
+            QTimer.singleShot(50,self,resume)
+            return
         if getattr(self,'_export_batch',None):return
         if self._device_coordinator.eject_pending:return
         if (getattr(self, '_usb_format_device', '') and

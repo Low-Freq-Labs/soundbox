@@ -4,6 +4,7 @@ import unittest
 from unittest import mock
 
 from desktop.cdj import CdjDeviceMixin
+from soundbox.cdj_transaction import Change
 
 
 class CdjDropIntent(unittest.TestCase):
@@ -94,8 +95,11 @@ class CdjDropIntent(unittest.TestCase):
 
     def test_format_source_separation_includes_external_analysis_locations(self):
         from pathlib import Path
-        track=SimpleNamespace(path=Path('/synthetic/music/song.wav'),source_analysis_path='/synthetic/analysis/ANLZ0000.DAT')
-        host=SimpleNamespace(lib=SimpleNamespace(source='/synthetic/library/master.db',tracks_by_id={'17':track}),
+        from soundbox.library import Library,Track
+        track=Track('17','Fixture','Fixture','file:///synthetic/music/song.wav',
+            source_analysis_path='/synthetic/analysis/ANLZ0000.DAT',source_native_path='/synthetic/native/song.wav')
+        host=SimpleNamespace(_shutting_down=False,
+            lib=Library({'17':track},[],'/synthetic/library/master.db',source_kind='rekordbox-db',source_library_id='42'),
             _defer_device_operation_until_scan_finishes=lambda _callback:False,_device_operation_owned=lambda *_:False,
             _device_profiles={'/not-a-device':SimpleNamespace(kind='generic_usb')},_device_mount_tokens={'/not-a-device':91},
             _release_eject_ready=mock.Mock(),_start_pulse=mock.Mock(),_finish_device_result_worker=mock.Mock(),
@@ -104,13 +108,14 @@ class CdjDropIntent(unittest.TestCase):
              mock.patch('soundbox.usb_format.capture') as capture:
             CdjDeviceMixin._reformat_usb(host,'/not-a-device')
             host._usb_format_worker.operation(lambda:False,lambda *_:None)
-        self.assertEqual(capture.call_args.kwargs['sources'],[
-            Path('/synthetic/library/master.db'),track.path,Path(track.source_analysis_path)])
+        self.assertEqual(capture.call_args.kwargs['sources'],sorted([
+            Path('/synthetic/library/master.db'),track.path,Path(track.source_analysis_path),
+            Path(track.source_native_path)]))
 
     def host(self):
         started = []
         host = SimpleNamespace(_shutting_down=False,_cdj_plan=None,_cdj_worker=None,
-            _set_device_progress=mock.Mock(),_start_pulse=mock.Mock(),_finish_cdj=mock.Mock(),
+            _set_device_progress=mock.Mock(),progress=mock.Mock(),_start_pulse=mock.Mock(),_finish_cdj=mock.Mock(),
             _start_device_worker=lambda w,dev,intent:started.append((w,dev,intent)))
         def finished(attr,worker,callback):
             self.assertIs(getattr(host,attr),worker)
@@ -121,7 +126,7 @@ class CdjDropIntent(unittest.TestCase):
 
     def test_drop_publishes_without_a_second_dialog_and_keeps_plan_until_finished(self):
         host,started=self.host()
-        plan=SimpleNamespace(changes=[object()],close=mock.Mock(),replaces_native_library=True)
+        plan=SimpleNamespace(changes=[Change('Contents/song.wav',None,'1'*64,100)],close=mock.Mock(),replaces_native_library=True)
         with mock.patch('desktop.cdj.QMessageBox',side_effect=AssertionError('Unexpected approval')), \
              mock.patch('soundbox.cdj_transaction.commit',return_value={'generation':'new'}) as commit:
             CdjDeviceMixin._review_cdj_plan(host,'/not-a-device',plan,from_drop=True)
@@ -136,7 +141,7 @@ class CdjDropIntent(unittest.TestCase):
 
     def test_cancelled_drop_closes_preparation_without_publishing(self):
         host,started=self.host()
-        plan=SimpleNamespace(changes=[object()],close=mock.Mock())
+        plan=SimpleNamespace(changes=[Change('Contents/song.wav',None,'1'*64,100)],close=mock.Mock())
         with mock.patch('soundbox.cdj_transaction.commit') as commit:
             CdjDeviceMixin._review_cdj_plan(host,'/not-a-device',plan,cancelled=True,from_drop=True)
         self.assertEqual(started,[]);commit.assert_not_called();plan.close.assert_called_once()
@@ -176,12 +181,13 @@ class CdjDropIntent(unittest.TestCase):
         host._begin_cdj_export.assert_called_once_with('/not-a-device',playlists,from_drop=True,target_role='generic_usb')
 
     def test_drop_authorization_survives_waiting_for_source_edits(self):
+        from soundbox.library import Playlist
         pending=[]
         host=SimpleNamespace(_shutting_down=False,lib=object(),_begin_cdj_export=mock.Mock(),
             _defer_device_operation_until_scan_finishes=lambda _,**_options:False,
             _device_operation_owned=lambda *_:False,tag_controller=SimpleNamespace(owned=True),
             _start_pulse=mock.Mock(),cancel_btn=mock.Mock())
-        playlists=[object()]
+        playlists=[Playlist('Requested playlist',[],[])]
         with mock.patch('desktop.cdj.QTimer.singleShot',side_effect=lambda _ms,callback:pending.append(callback)):
             CdjDeviceMixin._begin_cdj_export(host,'/not-a-device',playlists,from_drop=True,drop_target=(7,'fixture'))
         host.tag_controller.owned=False
@@ -278,7 +284,7 @@ class CdjDropIntent(unittest.TestCase):
 
     def test_settings_and_update_actions_publish_without_a_second_review(self):
         host,started=self.host()
-        plan=SimpleNamespace(changes=[SimpleNamespace(new_sha256='hash',size=1,path='catalog')],close=mock.Mock())
+        plan=SimpleNamespace(changes=[Change('PIONEER/export.pdb','0'*64,'1'*64,1)],close=mock.Mock())
         with mock.patch('desktop.cdj.QMessageBox') as dialog:
             CdjDeviceMixin._review_cdj_plan(host,'/not-a-device',plan)
             dialog.assert_not_called()

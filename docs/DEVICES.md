@@ -17,6 +17,22 @@ settings remain. No formatting, source-library capture or idle comparison belong
 to this offer. The iPod's USB entry uses the same flow with its own role guard.
 USB/iPod Playlists pages share the checkbox/tree/count/type/action layout while
 keeping their actual catalogs independent. USB actions never become Sync.
+Device sidebar highlighting follows the visible browser page. Right-click opens
+the clicked iPod/USB role’s menu without selecting it; keyboard navigation and
+explicit Browse update the page and selection together. Context targets remain
+independent of selection, including an iPod’s separate USB entry.
+The first USB/iPod visit after launch opens Overview. Later visits may retain
+the current tab within that session; hierarchy, selection and scroll remain saved.
+After explicit USB entry, hidden My Settings prepares in bounded event turns;
+other preference editors prepare on demand. Every tab has complete current
+settings before it appears. Unopened editors retain captured preferences through a notice;
+same-device refresh preserves drafts, while another device starts with its own
+settings even when the two devices have identical saved values.
+Returning to an unchanged stock/dual iPod retains its complete song/playlist
+models, live selection, checks and widths. Reuse compares all captured snapshot
+values and a detached composite manifest, while controller identity, readiness
+and witness bookkeeping still run. Changed contents/status/history/provenance,
+loading/errors or a pending playlist reorder retain their publication paths.
 One connected export target is checked automatically; multiple targets start
 unchecked and may be checked singly or together. Successful Eject of the device
 being viewed opens the next remaining entry, or the preceding one when last;
@@ -246,8 +262,14 @@ Column controls the default right column; Color edits eight titles. My Settings
 has44 player/mixer fields and explicit Save to Global / Load Global, with the
 global profile in SoundBox Settings seeded from the actual USB. Unrelated exports
 preserve profiles/unknown bytes. Native name differs from the real volume name.
-The generic USB context menu is Export, Delete playlists, Eject.
-Reformat confirms the physical external USB, real name and FAT32/exFAT MBR choice.
+The generic USB context menu is Export, Delete playlists, Reformat USB, Eject,
+in that order. Generic USB Overview also offers Reformat USB…. Its request binds
+the displayed snapshot and mount session; the menu instead binds the right-clicked
+target's role, mount session and volume UUID and revalidates them on trigger.
+Neither depends on a later selection. Both refuse busy or replaced targets.
+Stock, dual, Rockbox and iPod USB roles never expose Reformat; the iPod USB menu
+keeps Export, Delete playlists, Eject. Reformat confirms the physical external USB, real
+name and FAT32/exFAT MBR choice.
 Source separation includes native analysis locations; post-erase checks verify the
 physical disk, MBR, one first data partition, filesystem, volume and mount before
 initialization. A same-filesystem quick erase reuses an existing full-capacity
@@ -258,18 +280,36 @@ HFS+ remains excluded. Dated physical format evidence is in the
 and [later USB audit](performance-audit.md#usb-deep-audit--november4-later-testing);
 HANDOFF records current runtime/gates. The earlier release's format tests were mock-only.
 
-Explicit USB settings saves capture the complete desktop source/analysis path
+USB preference gestures apply automatically through durable canonical admission,
+the shared device writer and verified readback before acknowledgement. There is
+no Save to USB button or routine footer notice. Failed admission retains the
+edited values with inline Retry/Discard; Quit and maintenance cannot lose them.
+Newer drafts survive older acknowledgements. Eject waits for admitted saves.
+Settings saves capture the complete desktop source/analysis path
 set before worker admission, preserving the overlap boundary without copying
 unrelated songs, cues or playlist catalogs. Selected playlist export still freezes
 its library/curation snapshot separately. Neither change permits automatic
-settings propagation or weakens the worker's fresh target/source checks.
+global-settings propagation or weakens the worker's fresh target/source checks.
 
-Headers use26 points; detail/song rows and empty stripes match the regular24-point
-browser. The USB playlist frame uses the same three columns and sizing as stock
+Device table headers use the library browser’s bold, centered labels at26
+points; detail/song rows and empty stripes match the regular24-point browser.
+Selection does not change header weight. Device column widths, resize policies
+and body-cell alignment stay independent of the library’s saved layouts.
+CDJ copy presentation uses an averaged measured byte rate across files, with a
+short initial measurement interval and steady half-second refreshes. Exact current
+file bytes and filename remain in the tooltip. The fixed rate slot follows the
+phase caption without moving with animated dots. Only actual copied songs and
+measured song bytes are counted; planning, library writing and cleanup use plain
+phase captions without invented overall percentages or internal task counts.
+Completion belongs only to the joined successful result. The USB playlist frame uses the same three columns and sizing as stock
 iPod Playlists, independently of the library browser's column state. Activation validates the selected actual
 USB audio/analysis in the device lane and uses a separate device track ID without
-Mac audio/source cue overlays or desktop write authority. Views remember per-volume
-tab, hierarchy, selection and scroll. Folder/playlist clicks expand or collapse;
+Mac audio/source cue overlays or desktop write authority. Folder checkboxes select
+the explicitly chosen subtree, including empty folders, for one confirmed delete;
+checking every child separately does not authorize deleting its parent.
+Dragging a source playlist to a device preserves the current browser location.
+A selected nested source folder becomes the export root without its ancestors;
+the source hierarchy remains unchanged. Folder/playlist clicks expand or collapse;
 only track rows receive selection highlighting. Explicit browser requests refresh
 native snapshots when switching exporters. Display-only snapshots include stable
 WAL pages copied locally, without live USB SQL or SHM locks. Publication still
@@ -1387,10 +1427,14 @@ artwork as verified new copies when the guarded destination is absent. Normal
 Sync trusts retained manifest inventory and does not look for missing files.
 Existing occupants, symlinks,
 and inaccessible paths are not treated as missing; commit rechecks vacancy and
-rollback is intended to retire only transaction-created copies. Acknowledged-copy
-rollback still has the replacement-ownership gap recorded in the
-[critical audit](critical-audit-2026-11.md); these guards do not establish safe
-disposal of a foreign replacement. A fully reconciled stock
+rollback is intended to retire only transaction-created copies. Current stock
+source captures an acknowledged copy's exact entity inside its live verified
+receipt. Compensation checks fresh catalog ownership before and after a no-replace
+claim, then verifies the claimed entity before retirement. Replaced, changed or
+externally referenced copies remain preserved with recovery attention. These
+guards cover stock acknowledged-copy compensation, including retained dual-result
+witnesses; broader Rockbox/catalog/artwork rollback families remain separate in the
+[critical audit](critical-audit-2026-11.md). A fully reconciled stock
 library with no semantic changes retains its original iTunesDB bytes even when
 the disposable stock shadow is absent.
 

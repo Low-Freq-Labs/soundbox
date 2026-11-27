@@ -14,6 +14,7 @@ from desktop.usb_device_view import UsbSnapshot
 from soundbox.cdj_usb import CdjLibrary,CdjPlaylist
 from soundbox.device_profile import DeviceProfile
 from soundbox.library import Library
+from soundbox.cdj_transaction import Change
 
 
 class Host(CdjDeviceMixin):
@@ -54,7 +55,7 @@ class CdjDeleteUI(unittest.TestCase):
         self.reader=self.enterContext(mock.patch('desktop.usb_device_view.read_native_usb_snapshot'))
         self.question=self.enterContext(mock.patch('desktop.cdj.QMessageBox.question',return_value=QMessageBox.Yes))
         self.warning=self.enterContext(mock.patch('desktop.cdj.QMessageBox.warning'))
-        self.plan=SimpleNamespace(changes=[object()],requires_commit=True,overwritten_playlists=(),close=mock.Mock())
+        self.plan=SimpleNamespace(changes=[Change('PIONEER/export.pdb','0'*64,'1'*64,1)],requires_commit=True,overwritten_playlists=(),close=mock.Mock())
         self.prepare=self.enterContext(mock.patch('soundbox.cdj_export.plan_playlist_delete',return_value=self.plan))
         self.commit=self.enterContext(mock.patch('soundbox.cdj_transaction.commit',return_value={'done':True}))
         self.workers=[]
@@ -116,12 +117,26 @@ class CdjDeleteUI(unittest.TestCase):
                     self.assertEqual(self.prepare.call_args.kwargs['target_role'],'ipod_usb')
                     host.started[-1][0].cancel();self.deliver(host)
 
-    def test_chooser_uses_fresh_leaf_rows_and_cancel_never_shows_delete_confirmation(self):
+    def test_chooser_uses_fresh_folder_and_playlist_rows_and_cancel_never_shows_delete_confirmation(self):
         host=self.host();dialog=SimpleNamespace(exec=lambda:QDialog.Rejected,playlist_ids=(),deleteLater=mock.Mock())
         with mock.patch('desktop.cdj.CdjDeleteChoices',return_value=dialog) as chooser:
             host._begin_cdj_delete(host.dev);self.deliver(host)
-        self.assertEqual(chooser.call_args.args[0],{'11':'Folder / Selected','12':'Keep'})
+        self.assertEqual(chooser.call_args.args[0],{'10':'Folder (folder)','11':'Folder / Selected','12':'Keep'})
         dialog.deleteLater.assert_called_once();self.question.assert_not_called();self.prepare.assert_not_called()
+
+    def test_explicit_empty_folder_is_confirmed_and_sent_as_exact_root_for_both_roles(self):
+        self.native=replace(self.native,playlists=(CdjPlaylist('4','0','SETS',True,()),
+            CdjPlaylist('5','4','HAMDI',True,())))
+        for role in ('generic_usb','ipod_usb'):
+            with self.subTest(role=role):
+                host=self.host(role);self.prepare.reset_mock();self.question.reset_mock()
+                host._begin_cdj_delete(host.dev,['5'],target_role=role)
+                self.deliver(host)
+                self.assertIn('SETS / HAMDI (folder)',self.question.call_args.args[2])
+                self.assertIn('subfolders',self.question.call_args.args[2])
+                self.deliver(host)
+                self.assertEqual(self.prepare.call_args.args,(host.dev,('5',)))
+                host.started[-1][0].cancel();self.deliver(host)
 
     def test_stale_cached_catalog_blocks_selected_ids_before_confirmation(self):
         host=self.host();self.reader.return_value=replace(self.snapshot,native=replace(self.native,
@@ -171,7 +186,7 @@ class CdjDeleteUI(unittest.TestCase):
         host._present_usb_device.assert_not_called()
 
     def test_overwrite_cancel_closes_named_immutable_plan_and_starts_no_commit(self):
-        host=self.host();plan=SimpleNamespace(changes=[object()],requires_commit=True,
+        host=self.host();plan=SimpleNamespace(changes=[Change('PIONEER/export.pdb','0'*64,'1'*64,1)],requires_commit=True,
             overwritten_playlists=('Existing Playlist',),close=mock.Mock())
         self.question.return_value=QMessageBox.Cancel
         host._review_cdj_plan(host.dev,plan)
@@ -183,7 +198,7 @@ class CdjDeleteUI(unittest.TestCase):
         for names in (('Existing Playlist',),()):
             with self.subTest(names=names):
                 host=self.host();self.question.reset_mock();self.commit.reset_mock()
-                plan=SimpleNamespace(changes=[object()],requires_commit=True,overwritten_playlists=names,close=mock.Mock())
+                plan=SimpleNamespace(changes=[Change('PIONEER/export.pdb','0'*64,'1'*64,1)],requires_commit=True,overwritten_playlists=names,close=mock.Mock())
                 host._review_cdj_plan(host.dev,plan)
                 self.assertEqual(self.question.call_count,1 if names else 0)
                 self.commit.assert_not_called();self.deliver(host)

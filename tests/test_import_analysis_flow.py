@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 import threading
 import time
+import wave
 from types import SimpleNamespace
 import unittest
 from unittest import mock
@@ -51,8 +52,8 @@ class ImportAnalysisFlow(unittest.TestCase):
     def cleanup_window(self):
         self.win.shutdown(); self.win.close(); self.win.deleteLater(); self.app.processEvents()
 
-    def wait(self, predicate):
-        end = time.monotonic() + 5
+    def wait(self, predicate, *, timeout=5):
+        end = time.monotonic() + timeout
         while not predicate() and time.monotonic() < end:
             QTest.qWait(5)
         self.assertTrue(predicate())
@@ -646,6 +647,147 @@ class ImportAnalysisFlow(unittest.TestCase):
             self.assertEqual({t.track_id for t in self.win._collection_tracks()},set(self.win.imported))
             analyze.assert_not_called()
         self.assertEqual(len(imports.expand_paths([folder,folder / 'first.wav'])),2)
+
+    def test_formatting_refuses_new_file_folder_dialog_and_shared_import_before_admission(self):
+        path=self.root/'new.wav';path.write_bytes(b'owned import fixture')
+        folder=self.root/'folder';folder.mkdir()
+        track=Track('sb-new','New','',path.as_uri(),imported=True)
+        before=(deepcopy(self.win.imported),deepcopy(self.win.custom),deepcopy(self.win.settings))
+        with mock.patch.object(self.win,'_usb_format_device','/synthetic/formatting'), \
+                mock.patch.object(self.win,'_save_state') as save, \
+                mock.patch('desktop.app.QFileDialog.getOpenFileNames') as picker, \
+                mock.patch('soundbox.imports.expand_paths') as expand, \
+                mock.patch.object(self.win,'_probe_import_metadata') as probe, \
+                mock.patch.object(self.win,'_flash_status') as status:
+            self.win._import_dialog(None)
+            self.win._import_files([str(path)])
+            self.win._import_files([str(folder)])
+            self.assertFalse(self.win._queue_shared_import([track],dict(kind='collection')))
+        self.assertEqual((self.win.imported,self.win.custom,self.win.settings),before)
+        self.assertEqual(self.win.lib.tracks_by_id,{})
+        save.assert_not_called();picker.assert_not_called();expand.assert_not_called();probe.assert_not_called()
+        self.assertEqual(status.call_count,4)
+        self.assertTrue(all('formatting' in call.args[0] for call in status.call_args_list))
+
+    def test_admitted_folder_drop_blocks_format_until_complete_visible_and_durable_import(self):
+        folder=self.root/'held-folder';folder.mkdir()
+        path=folder/'new.wav';path.write_bytes(b'owned import fixture')
+        entered=threading.Event();release=threading.Event();self.addCleanup(release.set)
+        expand=imports.expand_paths
+        def held(*args,**kwargs):
+            entered.set();release.wait(5)
+            return expand(*args,**kwargs)
+        self.win.settings['analysis']=dict(automatic=False)
+        with mock.patch('soundbox.imports.expand_paths',side_effect=held), \
+                mock.patch('soundbox.usb_format.capture') as capture, \
+                mock.patch.object(self.win,'_probe_import_metadata'):
+            self.win._import_files([str(folder)])
+            self.assertTrue(entered.wait(2));self.assertGreater(self.win._import_tasks.pending,0)
+            self.win._reformat_usb('/synthetic/no-target-access')
+            capture.assert_not_called();self.assertEqual(self.win._usb_format_device,'')
+            release.set();self.wait(lambda:bool(self.win.imported) and self.win._import_tasks.pending==0)
+        tid,=self.win.imported
+        self.assertEqual(self.win.lib.tracks_by_id[tid].path,path)
+        self.assertIn(tid,{row['id'] for row in self.win.model._rows})
+        self.assertEqual(StateRepository(self.win._data_file).load()['imported'],self.win.imported)
+
+    def test_accepted_folder_import_refuses_backup_restore_until_join_then_restore_stays_exact(self):
+        from soundbox import backup
+        w=self.win;folder=self.root/'held-before-restore';folder.mkdir()
+        path=folder/'accepted.wav';path.write_bytes(b'owned import fixture')
+        selected=self.root/'selected-state';selected.mkdir()
+        StateRepository(selected/'library.json').save(dict(custom={'Restored':[]},imported={},
+            artist_overrides={},title_overrides={},hidden_tracks={},settings={'analysis':{'automatic':False}}))
+        archive=self.root/'selected.zip';backup.export_backup(selected,archive)
+        destination=self.root/'later-backup.zip'
+        w.settings['analysis']=dict(automatic=False);w.custom={'Queued':[]};self.assertTrue(w._save_state())
+        entered=threading.Event();release=threading.Event();self.addCleanup(release.set)
+        expand=imports.expand_paths
+        def held(*args,**kwargs):
+            entered.set()
+            if not release.wait(5):raise AssertionError('Owned folder expansion was not released')
+            return expand(*args,**kwargs)
+        with mock.patch('soundbox.imports.expand_paths',side_effect=held):
+            w._import_files([str(folder)],'Queued');self.assertTrue(entered.wait(2))
+            self.assertEqual(w._import_tasks.pending,1);worker=next(iter(w._import_tasks._workers))
+            before=StateRepository(w._data_file).load();manifest=w._data_file.read_bytes()
+            for restoring in (False,True):
+                with self.subTest(restoring=restoring):
+                    operation=mock.Mock(side_effect=lambda:backup.restore_backup(w._data_file.parent,archive)
+                        if restoring else backup.export_backup(w._data_file.parent,destination))
+                    w._run_state_task(operation,restoring=restoring)
+                    operation.assert_not_called();self.assertIsNone(w._backup_worker)
+                    self.assertFalse(w._state_maintenance);self.assertFalse(w._state_publication)
+                    self.assertTrue(w.isEnabled());self.assertEqual(w._import_tasks.pending,1)
+                    self.assertFalse(worker.cancellation.is_set());self.assertFalse(w._import_tasks.stopping)
+                    self.assertEqual(StateRepository(w._data_file).load(),before)
+                    self.assertEqual(w._data_file.read_bytes(),manifest)
+            with mock.patch('desktop.app.engine.load_library') as loader:
+                self.assertFalse(w.open_library(str(self.root/'other.xml')))
+            loader.assert_not_called();self.assertEqual(w.lib.source,'synthetic')
+            with mock.patch.object(worker,'wait',wraps=worker.wait) as joined:
+                release.set();self.wait(lambda:w._import_tasks.pending==0)
+                joined.assert_called_once_with()
+        tid,=w.imported
+        self.assertEqual(w.custom['Queued'],[tid]);self.assertEqual(w.lib.tracks_by_id[tid].path,path)
+        committed=StateRepository(w._data_file).load()
+        self.assertEqual(committed['imported'],w.imported);self.assertEqual(committed['custom'],w.custom)
+        # Both operations become available after the accepted publication joins.
+        w._run_state_task(lambda:backup.export_backup(w._data_file.parent,destination),restoring=False)
+        self.assertIsNotNone(w._backup_worker);self.assertTrue(w._state_maintenance)
+        self.wait(lambda:w._backup_worker is None and not w._state_maintenance,timeout=15)
+        self.assertTrue(destination.is_file())
+        epoch=w._state_repository.area.generation
+        w._run_state_task(lambda:backup.restore_backup(w._data_file.parent,archive),restoring=True)
+        self.assertIsNotNone(w._backup_worker);self.assertTrue(w._state_maintenance)
+        self.wait(lambda:w._backup_worker is None and not w._state_maintenance,timeout=15)
+        self.assertGreater(w._state_repository.area.generation,epoch)
+        self.assertEqual(w.imported,{});self.assertEqual(w.custom,{'Restored':[]})
+        restored=StateRepository(w._data_file).load();self.app.processEvents();self.app.processEvents()
+        self.assertEqual(StateRepository(w._data_file).load(),restored)
+        self.assertEqual(restored.get('imported',{}),{})
+        self.assertEqual(restored['custom'],{'Restored':[]})
+        self.assertEqual(restored.get('settings',{}).get(shared_imports.KEY,[]),[])
+        self.assertEqual(restored.get('settings',{}).get(analysis_jobs.KEY,[]),[])
+        self.assertEqual(w._import_tasks.pending,0)
+        fresh=self.root/'fresh-after-restore.wav';fresh.write_bytes(b'new owned import')
+        w._import_files([str(fresh)]);self.wait(lambda:w._import_tasks.pending==0)
+        current=StateRepository(w._data_file).load()
+        self.assertEqual(len(current['imported']),1)
+        self.assertEqual(next(iter(current['imported'].values()))['path'],str(fresh))
+        self.assertEqual(current['custom'],{'Restored':[]})
+        self.assertEqual(path.read_bytes(),b'owned import fixture')
+
+    def test_finished_import_metadata_probe_blocks_maintenance_until_queued_joined_publication(self):
+        track=self.track('accepted-probe');path=track.path
+        with wave.open(str(path),'wb') as audio:
+            audio.setnchannels(1);audio.setsampwidth(2);audio.setframerate(44100)
+            audio.writeframes(b'\0\0'*44100)
+        w=self.win;w.imported[track.track_id]=dict(path=str(path),size=path.stat().st_size,time=0)
+        self.assertTrue(w._save_state());entered=threading.Event();release=threading.Event()
+        self.addCleanup(release.set);probe=imports.probe
+        def held(candidate):
+            entered.set()
+            if not release.wait(5):raise AssertionError('Owned metadata probe was not released')
+            return probe(candidate)
+        with mock.patch('soundbox.imports.probe',side_effect=held):
+            w._probe_import_metadata([track.track_id]);self.assertTrue(entered.wait(2))
+            worker=next(iter(w._import_tasks._workers));release.set()
+            self.assertTrue(worker.wait(5000));self.assertFalse(worker.isRunning())
+            self.assertTrue(worker.isFinished());self.assertEqual(w._import_tasks.pending,1)
+            before=StateRepository(w._data_file).load();manifest=w._data_file.read_bytes()
+            for restoring in (False,True):
+                with self.subTest(restoring=restoring):
+                    self.assertFalse(w._begin_state_maintenance(restoring=restoring))
+                    self.assertFalse(w._state_maintenance);self.assertFalse(w._state_publication)
+                    self.assertFalse(worker.cancellation.is_set());self.assertFalse(w._import_tasks.stopping)
+                    self.assertEqual(w._import_tasks.pending,1)
+                    self.assertEqual(StateRepository(w._data_file).load(),before)
+                    self.assertEqual(w._data_file.read_bytes(),manifest)
+            self.wait(lambda:w._import_tasks.pending==0)
+        self.assertEqual(w.imported[track.track_id]['time'],1)
+        self.assertEqual(StateRepository(w._data_file).load()['imported'],w.imported)
+        self.assertTrue(w._begin_state_maintenance());w._end_state_maintenance()
 
     def test_collection_drop_is_visible_before_slow_metadata_and_clears_stale_search_sort(self):
         old = self.track('older')

@@ -2,14 +2,15 @@
 import itertools
 from pathlib import Path
 from threading import Event
-from types import SimpleNamespace
+from types import MethodType,SimpleNamespace
 import unittest
 from unittest import mock
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QTimer,Qt
+from PySide6.QtWidgets import QApplication, QProgressBar
 
 from desktop.cdj import CdjDeviceMixin, CdjWorker, _cdj_progress
+from desktop.device_progress import CopyAverage
 from soundbox import cdj_transaction as tx
 from soundbox.operation_control import OperationCancelled, checkpoint, operation_scope, phase_progress
 from tests import test_cdj_transaction as fixtures
@@ -122,36 +123,48 @@ class CdjProgressPresentation(unittest.TestCase):
 
     def setUp(self):
         self.worker=object()
+        progress=QProgressBar();self.addCleanup(progress.deleteLater)
         self.host=SimpleNamespace(_cdj_worker=self.worker,_shutting_down=False,_cancelling=False,
             _set_device_progress=mock.Mock(),_start_pulse=mock.Mock(),_set_status_count=mock.Mock(),
-            status_label=mock.Mock())
-        self.state={'value':650,'published':0,'publication_total':2,
-                    'weights':(1,1),'prefix':(0,1,2)}
+            _set_status_rate=mock.Mock(),status_label=mock.Mock(),progress=progress)
+        self.state={'song_total':4_000_000,'song_copied':0,'song_count':1}
 
     def tick(self,stage,done,total,label=''):
         _cdj_progress(self.host,self.worker,self.state,stage,done,total,label)
 
-    def test_measured_phases_and_file_bytes_are_monotonic_and_never_terminal(self):
-        for event in (('CDJ checking',0,707,''),('CDJ checking',350,707,''),
+    def test_only_song_copy_has_measured_determinate_progress_and_never_claims_completion(self):
+        values=[]
+        for index,event in enumerate((('CDJ checking',0,707,''),('CDJ checking',350,707,''),
                 ('CDJ checking',707,707,''),('CDJ saving',0,1,''),
                 ('CDJ publishing',0,2,''),('CDJ copying',0,4_000_000,'Contents/Artist/A song.wav'),
                 ('CDJ copying',2_000_000,4_000_000,'Contents/Artist/A song.wav'),
                 ('CDJ copying',4_000_000,4_000_000,'Contents/Artist/A song.wav'),
                 ('CDJ publishing',1,2,''),('CDJ publishing',2,2,''),
-                ('CDJ finalizing',0,1,''),('CDJ cleanup',0,0,''),('CDJ finished',1,1,'')):
-            self.tick(*event)
-        values=[call.args[0] for call in self.host._set_device_progress.call_args_list]
-        self.assertEqual(values,sorted(values));self.assertEqual(values[0],650)
-        self.assertEqual(values[-1],990);self.assertNotIn(1000,values)
-        self.assertIn(mock.call('Copying A song.wav',keep_count=True),self.host._start_pulse.call_args_list)
-        self.assertIn(mock.call(2_000_000,4_000_000,byte_counts=True),self.host._set_status_count.call_args_list)
-        self.assertIn(mock.call(350,707,byte_counts=False),self.host._set_status_count.call_args_list)
+                ('CDJ finalizing',0,1,''),('CDJ cleanup',0,0,''),('CDJ finished',1,1,''))):
+            with mock.patch('desktop.cdj.time.monotonic',return_value=index/2):self.tick(*event)
+            self.assertFalse(self.host.progress.isTextVisible())
+            self.assertNotEqual(self.host.progress.value(),1000)
+            if event[0]=='CDJ copying':
+                self.assertEqual((self.host.progress.minimum(),self.host.progress.maximum()),(0,1000))
+                values.append(self.host.progress.value())
+            else:self.assertEqual((self.host.progress.minimum(),self.host.progress.maximum()),(0,0))
+        self.assertEqual(values,[0,500,999])
+        self.host._set_device_progress.assert_not_called()
+        self.assertIn(mock.call('Copying 1 of 1 song',keep_count=True),self.host._start_pulse.call_args_list)
+        self.assertIn(mock.call(4_000_000,caption='Copying 1 of 1 song...'),self.host._set_status_rate.call_args_list)
+        self.assertTrue(all(call==mock.call() for call in self.host._set_status_count.call_args_list))
+        self.assertEqual(self.state['songs_completed'],1)
 
     def test_stale_cancelled_and_shutdown_workers_cannot_repaint(self):
+        before=(self.host.progress.minimum(),self.host.progress.maximum(),self.host.progress.value(),
+                self.host.progress.isTextVisible())
         for attr,value in (('_cdj_worker',object()),('_cancelling',True),('_shutting_down',True)):
             previous=getattr(self.host,attr);setattr(self.host,attr,value)
             self.tick('CDJ copying',5,10,'Contents/song.wav')
             self.host._set_device_progress.assert_not_called();self.host._start_pulse.assert_not_called()
+            self.host._set_status_rate.assert_not_called();self.assertNotIn('copy_average',self.state)
+            self.assertEqual((self.host.progress.minimum(),self.host.progress.maximum(),self.host.progress.value(),
+                              self.host.progress.isTextVisible()),before)
             setattr(self.host,attr,previous)
 
     def test_worker_scope_delivers_large_byte_values_and_cooperative_cancellation(self):
@@ -164,22 +177,181 @@ class CdjProgressPresentation(unittest.TestCase):
         self.assertEqual(events,[('CDJ copying',2**32+1,2**32+2,'Contents/large.wav')])
         worker.cancel();worker.run();self.assertIsInstance(worker.result,OperationCancelled)
 
-    def test_actual_review_callbacks_keep_bar_monotonic_and_close_only_after_commit(self):
-        values=[];started=[]
+    def test_copy_average_counts_written_deltas_once_across_resets_files_and_large_values(self):
+        average=CopyAverage();large=2**32+19
+        self.assertIsNone(average.sample(0))
+        for done in (0,large//2,large,large,0,large-1):average.observe('A',done,100)
+        self.assertEqual(average.copied,large)
+        self.assertEqual(average.sample(100), (large,None))
+        self.assertIsNone(average.sample(100.49))
+        self.assertEqual(average.sample(100.5),(large,None))
+        average.observe('B',0,100.6);average.observe('B',1024,100.7)
+        self.assertIsNone(average.sample(100.99))
+        self.assertEqual(average.sample(101),(large+1024,large+1024))
+        self.assertEqual(average.sample(102),(large+1024,(large+1024)/2))
+
+    def test_tiny_file_copy_and_publication_events_share_two_hertz_footer_without_losing_bytes(self):
+        self.state['song_count']=0
+        for index in range(100):
+            now=100+index/10000
+            for event in (('CDJ publishing',index,100,f'PIONEER/{index}.DAT'),
+                          ('CDJ copying',0,1,f'PIONEER/{index}.DAT'),
+                          ('CDJ copying',1,1,f'PIONEER/{index}.DAT'),
+                          ('CDJ copying',1,1,f'PIONEER/{index}.DAT'),
+                          ('CDJ publishing',index+1,100,f'PIONEER/{index}.DAT')):
+                with mock.patch('desktop.cdj.time.monotonic',return_value=now):self.tick(*event)
+        self.assertEqual(self.state['copy_average'].copied,100)
+        self.host._set_status_rate.assert_called_once_with(None,caption='Copying songs...')
+        self.assertEqual(self.host._set_status_count.call_args_list,[mock.call()])
+        self.assertEqual(self.host._start_pulse.call_args_list,
+            [mock.call('Updating USB',keep_count=True),mock.call('Writing USB library',keep_count=True)])
+        self.assertEqual((self.host.progress.minimum(),self.host.progress.maximum()),(0,0))
+        self.host._set_device_progress.assert_not_called()
+
+    def test_multifile_timeline_keeps_average_and_stale_or_cancelled_events_cannot_change_it(self):
+        self.state['song_count']=2
+        events=((100,0,4_000_000,'A'),(100.1,2_000_000,4_000_000,'A'),
+                (100.2,4_000_000,4_000_000,'A'),(100.3,4_000_000,4_000_000,'A'),
+                (100.49,0,6_000_000,'B'),(100.5,3_000_000,6_000_000,'B'),
+                (100.75,3_000_000,6_000_000,'B'),(100.8,0,6_000_000,'B'),
+                (101,4_000_000,6_000_000,'B'),(101.2,6_000_000,6_000_000,'B'))
+        for now,done,total,name in events:
+            with mock.patch('desktop.cdj.time.monotonic',return_value=now):
+                self.tick('CDJ copying',done,total,'Contents/'+name+'.wav')
+                self.tick('CDJ publishing',1,2,'Contents/'+name+'.wav')
+        self.assertEqual(self.state['copy_average'].copied,10_000_000)
+        self.assertEqual(self.host._set_status_rate.call_args_list,[mock.call(None,caption='Copying 2 of 2 songs...'),
+            mock.call(None,caption='Copying 2 of 2 songs...'),mock.call(8_000_000,caption='Copying 2 of 2 songs...')])
+        self.assertEqual(self.state['songs_completed'],2)
+        self.host._set_status_count.assert_not_called()
+        for attr,value in (('_cdj_worker',object()),('_cancelling',True),('_shutting_down',True)):
+            previous=getattr(self.host,attr);setattr(self.host,attr,value)
+            with mock.patch('desktop.cdj.time.monotonic',side_effect=AssertionError('Inactive worker sampled clock')):
+                self.tick('CDJ copying',999_000_000,999_000_000,'Contents/stale.wav')
+            self.assertEqual(self.state['copy_average'].copied,10_000_000);setattr(self.host,attr,previous)
+        self.tick('CDJ finalizing',0,1)
+        self.assertEqual(self.host._start_pulse.call_args_list[-1],mock.call('Saving USB library',keep_count=True))
+        self.host._set_status_count.assert_called_once_with()
+
+    def test_real_footer_keeps_fixed_rate_slot_raw_bytes_and_immediate_phase_cancel_clear(self):
+        from desktop.app import MainWindow
+        host=self.host;host._cancel_export=mock.Mock();host._stock_view_warming=False
+        host._pulse_word=None;host._status_generation=0;host._update_device_action_state=mock.Mock()
+        host._pulse_timer=QTimer();host._pulse_timer.setInterval(300)
+        self.addCleanup(host._pulse_timer.stop);self.addCleanup(host._pulse_timer.deleteLater)
+        footer=MainWindow._bottom_bar(host);self.addCleanup(footer.deleteLater);self.addCleanup(footer.hide)
+        for name in ('_set_device_progress','_set_status_count','_set_status_rate','_start_pulse','_stop_pulse'):
+            setattr(host,name,MethodType(getattr(MainWindow,name),host))
+        footer.resize(640,28);footer.show();host.cancel_btn.setVisible(True)
+        large=2**32+1
+        self.state['song_total']=large+2**31
+        self.state['song_count']=2
+        def event(now,stage,done,total,label=''):
+            with mock.patch('desktop.cdj.time.monotonic',return_value=now):self.tick(stage,done,total,label)
+            self.app.processEvents()
+        event(100,'CDJ copying',0,large,'Contents/first.wav')
+        self.assertEqual(host.status_count_label.text(),'Measuring speed…')
+        controls=(host.progress.geometry(),host.cancel_btn.geometry(),host.status_count_label.geometry())
+        event(100.2,'CDJ copying',large//2,large,'Contents/first.wav')
+        self.assertEqual(host.status_count_label.text(),'Measuring speed…')
+        event(101,'CDJ copying',large,large,'Contents/first.wav')
+        self.assertEqual(host.status_count_label.text(),'4.3 GB/s avg')
+        event(101.1,'CDJ publishing',1,2,'Contents/second.wav')
+        event(101.2,'CDJ copying',0,2**31,'Contents/second.wav')
+        self.assertEqual(host.status_count_label.text(),'4.3 GB/s avg')
+        event(101.5,'CDJ copying',2**31,2**31,'Contents/second.wav')
+        self.assertIn(f'Copied: {large+2**31:,} bytes',host.status_label.toolTip())
+        self.assertIn(f'Current file: {2**31:,} / {2**31:,} bytes',host.status_label.toolTip())
+        self.assertEqual((host.progress.geometry(),host.cancel_btn.geometry(),host.status_count_label.geometry()),controls)
+        self.assertLessEqual(host.status_count_label.fontMetrics().horizontalAdvance(host.status_count_label.text()),host.status_count_label.width())
+        self.assertLessEqual(host.cancel_btn.geometry().right(),host.status_label.geometry().left())
+        self.assertLessEqual(host.status_label.geometry().right(),host.status_count_label.geometry().left())
+        self.assertLess(host.progress.value(),1000)
+        for rate in (999.99,999_999.99,999_999_999.99,999_999_999_999.99):
+            host._set_status_rate(rate);self.app.processEvents()
+            counter=host.status_count_label
+            self.assertTrue(counter.text().startswith('1000.0 '))
+            self.assertLess(counter.fontMetrics().horizontalAdvance(counter.text()),counter.contentsRect().width())
+            self.assertFalse(counter.grab().isNull())
+            self.assertEqual((host.progress.geometry(),host.cancel_btn.geometry(),counter.geometry()),controls)
+        event(101.51,'CDJ copying',0,100,'PIONEER/export.pdb')
+        self.assertEqual(host.status_label.text(),'Writing USB library')
+        self.assertNotIn('/ 100',host.status_count_label.text())
+        before=host.status_count_label.text()
+        event(101.52,'CDJ publishing',2,2,'PIONEER/export.pdb')
+        self.assertEqual(host.status_label.text(),'Writing USB library');self.assertEqual(host.status_count_label.text(),before)
+        event(101.53,'CDJ finalizing',0,1)
+        self.assertEqual(host.status_label.text(),'Saving USB library');self.assertTrue(host.status_count_label.isHidden())
+        event(101.54,'CDJ cleanup',0,4084)
+        self.assertEqual(host.status_label.text(),'Finishing USB update');self.assertTrue(host.status_count_label.isHidden())
+        self.assertNotIn('4084',host.status_label.toolTip())
+        host._cancelling=True;host._start_pulse('Cancelling')
+        self.assertTrue(host.status_count_label.isHidden())
+        event(102,'CDJ copying',9,10,'Contents/stale.wav')
+        self.assertEqual(host.status_label.text(),'Cancelling');self.assertTrue(host.status_count_label.isHidden())
+        host._stop_pulse();self.assertTrue(host.status_count_label.isHidden())
+
+    def test_speed_follows_fixed_caption_slot_through_animation_and_phase_changes(self):
+        from desktop.app import MainWindow
+        host=self.host;host._cancel_export=mock.Mock();host._stock_view_warming=False
+        host._pulse_word=None;host._status_generation=0;host._update_device_action_state=mock.Mock()
+        host._pulse_timer=QTimer();host._pulse_timer.setInterval(300)
+        self.addCleanup(host._pulse_timer.stop);self.addCleanup(host._pulse_timer.deleteLater)
+        footer=MainWindow._bottom_bar(host);self.addCleanup(footer.deleteLater);self.addCleanup(footer.hide)
+        for name in ('_set_device_progress','_set_status_count','_set_status_rate','_start_pulse','_stop_pulse'):
+            setattr(host,name,MethodType(getattr(MainWindow,name),host))
+        footer.resize(1000,28);footer.show();host.cancel_btn.show();host._set_device_progress(0)
+        anchor=None
+        for caption in ('Copying 0 of 999 songs','Copying 99 of 999 songs','Copying 999 of 999 songs','Writing USB library'):
+            host._start_pulse(caption,keep_count=True)
+            for rate in (None,12_000,999_999_999.99):
+                host._set_status_rate(rate,caption='Copying 999 of 999 songs...');self.app.processEvents()
+                measured=(host.progress.geometry(),host.cancel_btn.geometry(),
+                          host.status_label.geometry(),host.status_count_label.geometry())
+                if anchor is None:anchor=measured
+                self.assertEqual(measured,anchor)
+                self.assertEqual(host.status_count_label.alignment(),Qt.AlignLeft | Qt.AlignVCenter)
+                self.assertGreater(host.status_count_label.x(),host.status_label.geometry().right())
+                self.assertLessEqual(host.status_label.fontMetrics().horizontalAdvance(caption+'...'),
+                                     host.status_label.contentsRect().width())
+                self.assertLessEqual(host.status_count_label.fontMetrics().horizontalAdvance(host.status_count_label.text()),
+                                     host.status_count_label.contentsRect().width())
+                for _ in range(8):
+                    MainWindow._pulse_tick(host);self.app.processEvents()
+                    self.assertTrue(host.status_label.text().startswith(caption))
+                    self.assertEqual((host.progress.geometry(),host.cancel_btn.geometry(),
+                                      host.status_label.geometry(),host.status_count_label.geometry()),anchor)
+        host._start_pulse('Saving USB library',keep_count=True);host._set_status_count(0,1)
+        self.app.processEvents()
+        self.assertEqual(host.status_count_label.text(),'0/1')
+        self.assertEqual(host.status_count_label.alignment(),Qt.AlignCenter)
+        self.assertLess(host.status_count_label.geometry().right(),host.status_label.x())
+        host._set_device_progress(150)
+        self.assertTrue(host.progress.isTextVisible());self.assertEqual(host.progress.value(),150)
+        host._start_pulse('Cancelling');self.assertTrue(host.status_count_label.isHidden())
+        host._stop_pulse();self.assertFalse(host._status_rate_active)
+
+    def test_actual_review_callbacks_preserve_truthful_phase_boundaries_and_close_only_after_commit(self):
+        started=[];progress=QProgressBar();self.addCleanup(progress.deleteLater)
         host=SimpleNamespace(_shutting_down=False,_cancelling=False,_cdj_worker=None,
-            _set_device_progress=lambda value:values.append(value),_start_pulse=mock.Mock(),
-            _set_status_count=mock.Mock(),status_label=mock.Mock(),_finish_cdj=mock.Mock(),
+            progress=progress,_set_device_progress=mock.Mock(),_start_pulse=mock.Mock(),
+            _set_status_count=mock.Mock(),_set_status_rate=mock.Mock(),status_label=mock.Mock(),_finish_cdj=mock.Mock(),
             _finish_device_result_worker=mock.Mock(),
             _start_device_worker=lambda worker,*_args:started.append(worker))
-        plan=SimpleNamespace(changes=[object(),object()],requires_commit=True,
+        plan=SimpleNamespace(changes=[SimpleNamespace(path='Contents/song.wav',size=100,new_sha256='0'*64),
+                                     SimpleNamespace(path='PIONEER/export.pdb',size=20,new_sha256='1'*64)],requires_commit=True,
                              overwritten_playlists=(),close=mock.Mock())
         def commit(_plan,*,should_cancel,on_progress):
             phase_progress('CDJ checking',1,2,'')
             phase_progress('CDJ checking',2,2,'')
+            self.assertEqual((progress.minimum(),progress.maximum()),(0,0))
             phase_progress('CDJ publishing',0,2,'Contents/song.wav')
             phase_progress('CDJ copying',50,100,'Contents/song.wav')
+            self.assertEqual(progress.value(),500)
             on_progress(1,2,'Contents/song.wav')
+            self.assertEqual(progress.value(),500)  # File acknowledgement is not extra copied bytes.
             phase_progress('CDJ finalizing',0,1,'')
+            self.assertEqual((progress.minimum(),progress.maximum()),(0,0))
             phase_progress('CDJ cleanup',0,0,'')
             phase_progress('CDJ finished',1,1,'')
             return {'saved':True}
@@ -187,8 +359,9 @@ class CdjProgressPresentation(unittest.TestCase):
             CdjDeviceMixin._review_cdj_plan(host,'/generated/no-device-io',plan)
             worker=started[0];self.addCleanup(worker.deleteLater)
             plan.close.assert_not_called();worker.run();plan.close.assert_called_once()
-        self.assertEqual(values,sorted(values));self.assertEqual(values[-1],990)
-        self.assertNotIn(1000,values);host._finish_cdj.assert_not_called()
+        self.assertNotIsInstance(worker.result,Exception)
+        self.assertNotEqual(progress.value(),1000);self.assertFalse(progress.isTextVisible())
+        host._set_device_progress.assert_not_called();host._finish_cdj.assert_not_called()
 
     def test_only_successful_finished_delivery_marks_terminal_progress(self):
         from desktop.devices import DeviceFacts
@@ -207,35 +380,43 @@ class CdjProgressPresentation(unittest.TestCase):
                     CdjDeviceMixin._finish_cdj(host,dev,result)
                 if isinstance(result,Exception):host.progress.setValue.assert_not_called()
                 else:host.progress.setValue.assert_called_once_with(1000)
+                host.progress.setRange.assert_called_once_with(0,1000)
+                host.progress.setTextVisible.assert_called_once_with(True)
                 host.progress.setVisible.assert_called_once_with(False)
 
-    def test_actual_review_weights_large_media_and_tiny_metadata_by_captured_bytes(self):
-        values=[];started=[]
+    def test_actual_review_measures_song_bytes_without_guessing_catalog_or_removal_work(self):
+        started=[];progress=QProgressBar();self.addCleanup(progress.deleteLater)
         host=SimpleNamespace(_shutting_down=False,_cancelling=False,_cdj_worker=None,
-            _set_device_progress=lambda value:values.append(value),_start_pulse=mock.Mock(),
-            _set_status_count=mock.Mock(),status_label=mock.Mock(),_finish_cdj=mock.Mock(),
+            progress=progress,_set_device_progress=mock.Mock(),_start_pulse=mock.Mock(),
+            _set_status_count=mock.Mock(),_set_status_rate=mock.Mock(),status_label=mock.Mock(),_finish_cdj=mock.Mock(),
             _finish_device_result_worker=mock.Mock(),
             _start_device_worker=lambda worker,*_args:started.append(worker))
         big=8*1024*1024
-        plan=SimpleNamespace(changes=[SimpleNamespace(size=big),
-            *(SimpleNamespace(size=1024) for _ in range(100))],requires_commit=True,
+        plan=SimpleNamespace(changes=[SimpleNamespace(path='Contents/song.wav',size=big,new_sha256='0'*64),
+            SimpleNamespace(path='Contents/removed.wav',size=big*100,new_sha256=None),
+            *(SimpleNamespace(path=f'PIONEER/{i}.DAT',size=1024,new_sha256='1'*64) for i in range(100))],requires_commit=True,
             overwritten_playlists=(),close=mock.Mock())
         def commit(_plan,*,should_cancel,on_progress):
-            phase_progress('CDJ checking',101,101,'')
-            phase_progress('CDJ publishing',0,101,'Contents/song.wav')
+            phase_progress('CDJ checking',102,102,'')
+            self.assertEqual((progress.minimum(),progress.maximum()),(0,0))
+            phase_progress('CDJ publishing',0,102,'Contents/song.wav')
             phase_progress('CDJ copying',big//2,big,'Contents/song.wav')
-            self.assertGreaterEqual(values[-1],850);self.assertLessEqual(values[-1],865)
+            self.assertEqual(progress.value(),500)
             phase_progress('CDJ copying',big,big,'Contents/song.wav')
-            after_media=values[-1];self.assertGreater(after_media,960)
-            on_progress(1,101,'Contents/song.wav')
-            self.assertEqual(values[-1],after_media)
-            for index in range(1,101):
-                phase_progress('CDJ publishing',index,101,'PIONEER/generated.DAT')
-                on_progress(index+1,101,'PIONEER/generated.DAT')
+            after_media=progress.value();self.assertEqual(after_media,999)
+            on_progress(1,102,'Contents/song.wav')
+            self.assertEqual(progress.value(),after_media)
+            phase_progress('CDJ publishing',1,102,'Contents/removed.wav')
+            on_progress(2,102,'Contents/removed.wav')
+            self.assertEqual(progress.value(),after_media)
+            for index in range(2,102):
+                phase_progress('CDJ publishing',index,102,'PIONEER/generated.DAT')
+                on_progress(index+1,102,'PIONEER/generated.DAT')
+                self.assertEqual((progress.minimum(),progress.maximum()),(0,0))
             return {'saved':True}
         with mock.patch.object(tx,'commit',side_effect=commit):
             CdjDeviceMixin._review_cdj_plan(host,'/generated/no-device-io',plan)
             worker=started[0];self.addCleanup(worker.deleteLater);worker.run()
         self.assertNotIsInstance(worker.result,Exception)
-        self.assertEqual(values,sorted(values));self.assertEqual(values[-1],970)
-        self.assertNotIn(1000,values)
+        self.assertNotEqual(progress.value(),1000)
+        host._set_device_progress.assert_not_called()

@@ -1,6 +1,7 @@
 """Selected metadata ORM reads use generated SQLite only, with exact native IDs."""
 from types import SimpleNamespace
 from copy import deepcopy
+from dataclasses import replace
 from pathlib import Path
 import tempfile
 import unittest
@@ -12,7 +13,7 @@ from pyrekordbox.db6.tables import ContentFile, DjmdCue, DjmdSongMyTag, DjmdSong
 
 from soundbox.cdj_source import _selected_content_files, _selected_cues, capture_metadata
 from soundbox.rekordbox_db import _read_tags
-from soundbox.library import Library
+from soundbox.library import Library,Playlist
 
 
 def row(table, **values):
@@ -111,6 +112,26 @@ class SelectedMetadata(unittest.TestCase):
 
 
 class CapturedGlobalRevision(unittest.TestCase):
+    def test_destination_projection_never_changes_canonical_native_playlist_proof(self):
+        with tempfile.TemporaryDirectory() as area:
+            source=Path(area)/'master.db';source.write_bytes(b'generated source identity')
+            canonical=Playlist('Bass',['SETS','HAMDI'],[],'20')
+            library=Library({},[canonical],source,source_kind='rekordbox-db',source_library_id='42')
+            selected=replace(canonical,export_folder_path=['HAMDI'])
+            db=Mock();db.get_property.return_value=[SimpleNamespace(DBID='42')]
+            db.get_cue.return_value=[];db.get_my_tag.return_value=[]
+            with patch('soundbox.rekordbox_db._copy_stable_snapshot'), \
+                    patch('pyrekordbox.Rekordbox6Database',return_value=db), \
+                    patch('soundbox.rekordbox_db._content_rows',return_value=[]), \
+                    patch('soundbox.rekordbox_db._active_track_ids',return_value=set()), \
+                    patch('soundbox.rekordbox_db._read_playlists',return_value=[canonical]) as fresh:
+                ordinary=capture_metadata(library,[],playlists=[canonical])
+                projected=capture_metadata(library,[],playlists=[selected])
+                self.assertEqual(ordinary['source_revision'],projected['source_revision'])
+                fresh.return_value=[replace(canonical,folder_path=['OTHER','HAMDI'])]
+                with self.assertRaisesRegex(ValueError,'Source playlist changed'):
+                    capture_metadata(library,[],playlists=[selected])
+
     def test_full_rendered_tag_tree_and_order_bind_revision_without_unrelated_counters(self):
         with tempfile.TemporaryDirectory() as area:
             source=Path(area)/'master.db';source.write_bytes(b'explicit synthetic source identity')

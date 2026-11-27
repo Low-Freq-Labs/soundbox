@@ -912,6 +912,28 @@ class DeviceLabels(unittest.TestCase):
 
 
 class StockIpodUI(unittest.TestCase):
+    def attached_device_row(self,dev):
+        from PySide6.QtCore import QItemSelectionModel
+        from PySide6.QtWidgets import QTreeWidgetItem
+        from desktop.trees import DEVPATH_ROLE,DEVROLE_ROLE
+        trees=tuple(dict.fromkeys((_win.tree,_win.sb_tree,_win.device_tree)))
+        seats=[(tree,tree.currentItem(),tuple(tree.selectedItems())) for tree in trees]
+        pages=[(stack,stack.currentIndex()) for stack in
+               (_win.stack,_win.body_stack,_win.device_content_stack)]
+        item=QTreeWidgetItem(['Generated device']);item.setData(0,DEVPATH_ROLE,dev)
+        item.setData(0,DEVROLE_ROLE,'');_win.device_tree.addTopLevelItem(item)
+        def restore():
+            _win.device_tree.takeTopLevelItem(_win.device_tree.indexOfTopLevelItem(item))
+            for tree,current,selected in seats:
+                blocked=tree.blockSignals(True)
+                try:
+                    tree.setCurrentItem(current,0,QItemSelectionModel.NoUpdate);tree.clearSelection()
+                    for previous in selected:previous.setSelected(True)
+                finally:tree.blockSignals(blocked)
+            for stack,page in pages:stack.setCurrentIndex(page)
+        self.addCleanup(restore)
+        return item
+
     def test_device_poll_backs_off_only_while_no_mount_exists(self):
         from desktop.app import (
             _DEVICE_POLL_ACTIVE_MS,
@@ -1216,7 +1238,9 @@ class StockIpodUI(unittest.TestCase):
             pages.resize(950,900);pages.show();_app.processEvents()
             self.assertEqual(len(pages.controls),7)
             self.assertTrue(all(control.height()==28 for control in pages.controls.values()))
-            self.assertTrue(pages.apply_settings.isVisible())
+            from PySide6.QtWidgets import QPushButton
+            self.assertFalse(any(button.isVisible() and button.text()=='Save to USB'
+                                 for button in pages.findChildren(QPushButton)))
             pages.set_page(1)
             parent = pages.playlist_tree.topLevelItem(0)
             parent.setExpanded(True)
@@ -1333,8 +1357,8 @@ class StockIpodUI(unittest.TestCase):
         from types import SimpleNamespace
         from desktop.devices import DeviceFacts
         from desktop.usb_device_view import UsbSnapshot, UsbPlaylist
-        from desktop.trees import DEVPATH_ROLE
         dev = '/Volumes/SYNTHETIC-USB-VIEW'
+        device_item=self.attached_device_row(dev)
         previous = (_win._current_device_path, dict(_win._device_profiles),
                     dict(_win._usb_view_cache), dict(_win._usb_device_rows),
                     set(_win._usb_view_requests), _win.device_content_stack.currentIndex(),
@@ -1342,15 +1366,14 @@ class StockIpodUI(unittest.TestCase):
         snapshot = UsbSnapshot(Path(dev), 77, DeviceFacts(capacity_bytes=1000),
                                (UsbPlaylist('Set', 'Playlists/Set.m3u8', (('Track','/Music/a.wav'),)),))
         profile = SimpleNamespace(has_stock_ipod=False, label='USB', rockbox_export=True)
-        class Item:
-            def data(self, _column, _role):
-                return dev if _role==DEVPATH_ROLE else None
         try:
             _win._device_profiles[dev] = profile
             _win._usb_view_cache[dev] = snapshot
             _win._usb_device_rows[dev] = ('USB',400,0,profile)
             with mock.patch.object(_win.fs_model, 'setRootPath', side_effect=AssertionError('Root enumeration')),                     mock.patch.object(_win, '_refresh_devices') as refresh:
-                _win._on_device_click(Item(), 0)
+                _win._on_device_click(device_item, 0)
+                self.assertIs(_win.device_tree.currentItem(),device_item)
+                self.assertEqual(_win.device_tree.selectedItems(),[device_item])
                 self.assertEqual(_win.device_content_stack.currentIndex(), 2)
                 self.assertEqual(_win.usb_device_pages.stack.currentIndex(), 0)
                 self.assertEqual([b.text() for b in _win.device_tab_buttons[:2]], ['Overview','Playlists'])
@@ -2233,26 +2256,23 @@ class StockIpodUI(unittest.TestCase):
 
     def test_dual_boot_device_click_opens_stock_dashboard_tabs(self):
         from types import SimpleNamespace
-        from desktop.trees import DEVPATH_ROLE
 
         dev = "/Volumes/IPOD"
+        device_item=self.attached_device_row(dev)
         old_profile = _win._device_profiles.get(dev)
         old_reader = _win._read_stock_device_view
         old_current = _win._current_device_path
         old_role = _win._current_device_role
         calls = []
 
-        class _Item:
-            @staticmethod
-            def data(_column, _role):
-                return dev if _role==DEVPATH_ROLE else None
-
         _win._device_profiles[dev] = SimpleNamespace(
             kind="dual_boot", has_stock_ipod=True)
         _win._read_stock_device_view = (
             lambda device, profile: calls.append((device, profile)))
         try:
-            _win._on_device_click(_Item(), 0)
+            _win._on_device_click(device_item, 0)
+            self.assertIs(_win.device_tree.currentItem(),device_item)
+            self.assertEqual(_win.device_tree.selectedItems(),[device_item])
             self.assertEqual(_win.device_content_stack.currentIndex(), 1)
             self.assertTrue(all(
                 not button.isHidden() for button in _win.device_tab_buttons[:3]))
@@ -2268,9 +2288,9 @@ class StockIpodUI(unittest.TestCase):
 
     def test_device_click_uses_preloaded_dashboard_without_another_read(self):
         from types import SimpleNamespace
-        from desktop.trees import DEVPATH_ROLE
 
         dev = "/Volumes/PRELOADED-IPOD"
+        device_item=self.attached_device_row(dev)
         old_profile = _win._device_profiles.get(dev)
         old_cache = _win._stock_view_cache.get(dev)
         old_current = _win._current_device_path
@@ -2279,11 +2299,6 @@ class StockIpodUI(unittest.TestCase):
         old_read = _win._read_stock_device_view
         applied = []
         reads = []
-
-        class _Item:
-            @staticmethod
-            def data(_column, _role):
-                return dev if _role==DEVPATH_ROLE else None
 
         cached = (object(), None)
         try:
@@ -2294,7 +2309,9 @@ class StockIpodUI(unittest.TestCase):
                 lambda device, result: applied.append((device, result)))
             _win._read_stock_device_view = (
                 lambda *args, **kwargs: reads.append((args, kwargs)))
-            _win._on_device_click(_Item(), 0)
+            _win._on_device_click(device_item, 0)
+            self.assertIs(_win.device_tree.currentItem(),device_item)
+            self.assertEqual(_win.device_tree.selectedItems(),[device_item])
             self.assertEqual(applied, [(dev, cached)])
             self.assertEqual(reads, [])
         finally:
@@ -8090,6 +8107,16 @@ class PlaylistReorder(unittest.TestCase):
                          tree.topLevelItemCount())
 
 
+def _finish_import_probes(case):
+    """Retire fixture-owned callbacks before restoring the shared window."""
+    import time
+    from PySide6.QtTest import QTest
+    owner=getattr(_win,'_import_tasks',None)
+    deadline=time.monotonic()+5
+    while owner is not None and owner.pending and time.monotonic()<deadline:QTest.qWait(5)
+    case.assertEqual(getattr(owner,'pending',0),0,'Imported fixture metadata did not retire')
+
+
 class ImportedFiles(unittest.TestCase):
     """Livesets imported straight into SoundBox: they join the pool (so
     Collection shows them automatically), can land in a SoundBox playlist on
@@ -8111,6 +8138,7 @@ class ImportedFiles(unittest.TestCase):
         _win.imported = {}
 
     def tearDown(self):
+        _finish_import_probes(self)
         for tid in list(_win.imported):
             _win.lib.tracks_by_id.pop(tid, None)
         _win.imported = self._saved_imported
@@ -8193,9 +8221,12 @@ class FixLinksUI(unittest.TestCase):
         (self.tid,) = _win.imported
         self.new = base / "pt.1" / self.old.name
         self.new.parent.mkdir()
+        from soundbox import file_locations
+        self._old_bookmark=file_locations.create_bookmark(self.old)
         self.old.rename(self.new)  # the user's "move everything into a folder"
 
     def tearDown(self):
+        _finish_import_probes(self)
         for tid in list(_win.imported):
             _win.lib.tracks_by_id.pop(tid, None)
         _win.imported = self._saved
@@ -8208,29 +8239,33 @@ class FixLinksUI(unittest.TestCase):
             _win._schedule_waveform_recheck()
         self._td.cleanup()
 
-    def test_missing_then_relink_heals_library(self):
+    def test_legacy_missing_link_is_only_suggested_without_prior_audio_identity(self):
         from soundbox import imports
         self.assertEqual(set(imports.missing(_win.imported)), {self.tid})
         found = imports.find_moved(imports.missing(_win.imported),
                                    imports.search_roots(_win.imported))
-        self.assertEqual(found, {self.tid: self.new})
-        _win._apply_relinks(found)
-        self.assertEqual(imports.missing(_win.imported), {})
-        self.assertEqual(_win.lib.tracks_by_id[self.tid].path, self.new)
-        self.assertTrue(_win._waveform_rechecks_enabled)
+        self.assertEqual(found,{})
+        self.assertEqual(found.suggestions,{self.tid:self.new})
+        expected=_win._capture_relink_scope(imports.missing(_win.imported))
+        enabled=_win._waveform_rechecks_enabled
+        with mock.patch.object(_win,'_arm_waveform_rechecks') as preparation:
+            self.assertEqual(_win._apply_relinks(found,expected=expected),0)
+        preparation.assert_not_called()
+        self.assertEqual(set(imports.missing(_win.imported)),{self.tid})
+        self.assertEqual(_win.lib.tracks_by_id[self.tid].path,self.old)
+        self.assertEqual(_win._waveform_rechecks_enabled,enabled)
 
     def test_startup_identity_repair_keeps_stable_id_and_curation(self):
-        from soundbox.file_locations import LocationRepair, LocationUpdate
+        from soundbox import file_locations
         try:
             _win.custom["LIVESETS"] = [self.tid]
             _win.titles[self.tid] = "Curated Set Title"
-            result = LocationRepair(
-                updates={self.tid: LocationUpdate(
-                    expected_path=str(self.old), path=self.new,
-                    bookmark="new opaque locator")},
-                missing_count=1, unresolved_count=0)
+            self.assertTrue(self._old_bookmark)
+            _win.imported[self.tid][file_locations.BOOKMARK_KEY]=self._old_bookmark
+            expected=_win._capture_relink_scope(_win.imported)
+            result=file_locations.repair_locations({self.tid:expected['records'][self.tid]})
             with mock.patch("desktop.app.QTimer.singleShot"):
-                _win._on_import_locations_repaired(result)
+                _win._on_import_locations_repaired(result,expected=expected)
             self.assertEqual(_win.imported[self.tid]["path"], str(self.new))
             self.assertEqual(_win.lib.tracks_by_id[self.tid].path, self.new)
             self.assertEqual(_win.custom["LIVESETS"], [self.tid])
@@ -10190,10 +10225,12 @@ class StateMaintenance(unittest.TestCase):
         def flush():
             events.append(('view-preferences', None))
             host._settings_save_timer.start(120)
-        host.usb_device_pages = SimpleNamespace(_remember_view=flush)
+        host.usb_device_pages = SimpleNamespace(_remember_view=flush,
+            flush_auto_settings=lambda:events.append(('usb-settings',None)),_unadmitted_settings=[])
         try:
             self.assertTrue(SettingsPageMixin._begin_state_maintenance(host))
-            self.assertEqual(events, [('view-preferences', None), ('enabled', False), ('save', None)])
+            self.assertEqual(events, [('usb-settings', None), ('view-preferences', None),
+                                      ('enabled', False), ('save', None)])
             self.assertFalse(host._settings_save_timer.isActive())
             self.assertTrue(host._state_publication)
         finally:

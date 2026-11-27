@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QApplication
 
 from desktop.devices import DeviceFacts
 from soundbox.device_operations import DeviceSessionIdentity
+from soundbox.cdj_transaction import Change
 from tests.test_cdj_delete_ui import Host
 
 
@@ -21,7 +22,7 @@ class CdjInitializeUI(unittest.TestCase):
         self.root=Path(self.enterContext(tempfile.TemporaryDirectory())).resolve()
         self.facts=DeviceFacts(volume_uuid='generated-volume',writable=True)
         self.facts_mock=self.enterContext(mock.patch('desktop.cdj.device_facts',return_value=self.facts))
-        self.plan=SimpleNamespace(changes=[object()],requires_commit=True,overwritten_playlists=(),close=mock.Mock())
+        self.plan=SimpleNamespace(changes=[Change('PIONEER/export.pdb',None,'1'*64,1)],requires_commit=True,overwritten_playlists=(),close=mock.Mock())
         self.prepare=self.enterContext(mock.patch('soundbox.cdj_export.plan_initialize',return_value=self.plan))
         self.commit=self.enterContext(mock.patch('soundbox.cdj_transaction.commit',return_value={'done':True}))
         self.warning=self.enterContext(mock.patch('desktop.cdj.QMessageBox.warning'))

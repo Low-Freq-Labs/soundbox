@@ -30,6 +30,7 @@ def create_playlist_page(tree: QTreeWidget, *, selection_mode=QAbstractItemView.
     tree.setContextMenuPolicy(Qt.CustomContextMenu)
     tree.setEditTriggers(QAbstractItemView.NoEditTriggers)
     header = tree.header()
+    header.setDefaultAlignment(Qt.AlignCenter)
     header.setStretchLastSection(False)
     header.setSectionResizeMode(QHeaderView.Interactive)
     header.setSectionResizeMode(0, QHeaderView.Stretch)

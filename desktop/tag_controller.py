@@ -412,6 +412,8 @@ class TagEditController(TagAssignmentIntents, QObject):
         from soundbox.rekordbox_tag_definitions import load_authority as load_definition_authority, load_deletion_authority
         from soundbox.rekordbox_tag_rename import load_authority as load_rename_authority,AUTHORITY_FILE as RENAME_AUTHORITY_FILE
         from soundbox.rekordbox_metadata_store import load_authority as load_metadata_authority
+        from soundbox.media_conversion_store import load_authority as load_conversion_authority
+        from soundbox.rekordbox_locator_store import load_authority as load_locator_authority
         source = Path(source)
         for filename, loader in (('rekordbox-cue-authority.json', load_cue_authority),
                                  ('rekordbox-tag-authority.json', load_authority),
@@ -423,6 +425,8 @@ class TagEditController(TagAssignmentIntents, QObject):
                                  ('rekordbox-playlist-authority.json', load_playlist_authority),
                                  ('rekordbox-registration-authority.json', load_registration_authority),
                                  ('rekordbox-removal-authority.json', load_removal_authority),
+                                 ('rekordbox-media-conversion-authority.json', load_conversion_authority),
+                                 ('rekordbox-media-locator-authority.json', load_locator_authority),
                                  ('rekordbox-analysis-authority.json', load_analysis_authority),
                                  ('rekordbox-cbr-analysis-authority.json', load_cbr_authority)):
             path = self.data_root / filename

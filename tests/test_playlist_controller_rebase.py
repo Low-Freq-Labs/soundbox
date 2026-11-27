@@ -112,5 +112,46 @@ class PlaylistControllerRebase(unittest.TestCase):
             self.turn();self.assertEqual(prove.call_count,2);replay.assert_not_called()
         self.assertFalse(self.controller.pending);self.assertEqual(self.native_name(),'Second')
 
+    def folder(self):
+        created=store.request_for(self.writer.snapshot(),'create',name='Confirmed folder',folder=True)
+        current=self.writer.apply(created)
+        self.window.lib.source_playlist_catalog=deepcopy(current)
+        return created['playlist_id']
+
+    def test_ordinary_folder_confirmation_survives_unrelated_real_native_ack_and_durable_rebase(self):
+        identity=self.folder()
+        first=self.rename('Unrelated rename')
+        deletion=store.request_for(self.window.lib.source_playlist_catalog,'delete',identity=identity)
+        self.assertTrue(self.controller.enqueue(first));self.assertTrue(self.controller.enqueue(deletion))
+        self.turn()
+        tail=self.controller.pending[0]
+        self.assertEqual(tail['request']['revision'],self.writer.snapshot()['revision'])
+        self.assertEqual(tail['error'],'')
+        for key in (*store._FOLDER_DELETE_FIELDS,'operation_id'):
+            self.assertEqual(tail['request'][key],deletion[key])
+        self.assertEqual(self.window.saved[-1][QUEUE],[tail])
+        self.turn()  # Preserve exact Collection pins before source deletion.
+        self.turn()
+        self.assertFalse(self.controller.pending)
+        self.assertFalse(any(row['ID']==identity and row['rb_local_deleted']==0
+                             for row in self.writer.snapshot()['nodes']))
+
+    def test_ordinary_folder_rebase_conflict_preserves_saved_scope_and_stops_following_native_delete(self):
+        identity=self.folder()
+        first=store.request_for(self.window.lib.source_playlist_catalog,'rename',identity=identity,name='Newer folder name')
+        deletion=store.request_for(self.window.lib.source_playlist_catalog,'delete',identity=identity)
+        self.assertTrue(self.controller.enqueue(first));self.assertTrue(self.controller.enqueue(deletion))
+        admitted=deepcopy(self.controller.pending[1]['request'])
+        self.turn()
+        tail=self.controller.pending[0]
+        self.assertEqual(tail['request'],admitted)
+        self.assertIn('changed',tail['error'])
+        self.assertEqual(self.window.saved[-1][QUEUE],[tail])
+        before=self.writer.database.read_bytes(),self.writer.xml.read_bytes()
+        admitted_count=len(self.window.tag_controller.admitted)
+        self.controller.pump()
+        self.assertEqual(len(self.window.tag_controller.admitted),admitted_count)
+        self.assertEqual((self.writer.database.read_bytes(),self.writer.xml.read_bytes()),before)
+
 
 if __name__=='__main__':unittest.main()

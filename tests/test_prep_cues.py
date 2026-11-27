@@ -438,6 +438,154 @@ class CueEditingInterface(unittest.TestCase):
                 store.assert_not_called();self.assertEqual(journal.read_bytes(),original)
             controller.shutdown()
 
+    def _check_media_startup_recovery(self, kind, phase, mode='delete'):
+        from contextlib import ExitStack
+        from dataclasses import asdict
+        import hashlib
+        import json
+        import subprocess
+        import sys
+        from uuid import uuid4
+        from desktop.workers import RefreshWorker
+        from soundbox import media_conversion_store as media, rekordbox_locator_store as locator
+        from soundbox import rekordbox_cue_store as cues, rekordbox_tags as tags
+        from soundbox.rekordbox_write import _connect, _state
+        from tests.support.native_library import source_fixture
+        from tests.support.audio import wave as pcm_wave
+        from test_wave_conversion import wave as float_wave
+
+        with tempfile.TemporaryDirectory() as td, ExitStack() as patches:
+            root=Path(td).resolve();source=root/'source';source_fixture(source)
+            data=root/'data';data.mkdir();database=source/'master.db';xml=source/'masterPlaylists6.xml'
+            audio=root/'song.wav';original=root/'original.flac';original.write_bytes(b'owned original fixture')
+            (float_wave if kind=='conversion' else pcm_wave)(audio)
+            before_audio=audio.read_bytes();before_xml=xml.read_bytes()
+            conn=_connect(database)
+            try:
+                conn.execute("UPDATE djmdContent SET UUID='uuid-one',FolderPath=?,FileType=?,FileNameL=?,rb_local_synced=1,usn=NULL WHERE ID='1'",
+                             (str(audio) if kind=='conversion' else '/never/open.wav',11 if kind=='conversion' else 5,
+                              'song.wav' if kind=='conversion' else 'song.flac'))
+                schema=tags._schema(conn);before=_state(conn)
+            finally:conn.close()
+            before_db=database.read_bytes()
+            for obj,key in ((cues,'_closed'),(tags,'_assert_closed')):
+                patches.enter_context(mock.patch.object(obj,key,return_value=None))
+            for obj in (cues,tags):
+                patches.enter_context(mock.patch.object(obj,'_installed_version',return_value=tags.NATIVE_VERSION))
+            if kind=='conversion':
+                authority=media.ConversionAuthority(str(database),'123',schema,'0'*64,True)
+                store=media.ConversionStore(authority,data)
+            else:
+                authority=locator.LocatorAuthority(str(database),'123',schema,'0'*64,('1',))
+                store=locator.LocatorStore(authority,data)
+            operation=str(uuid4())
+            payload=dict(kind=kind,authority=asdict(authority),data=str(data),phase=phase,mode=mode,
+                         audio=str(audio),operation=operation)
+            if kind=='locator':
+                payload['plan']=store.prepare([dict(id='1',uuid='uuid-one',before_path='/never/open.wav',
+                    target=str(audio),original=str(original),before_sha256=locator._sha(original),after_sha256=locator._sha(audio))])
+            (data/f'rekordbox-media-{kind}-authority.json').write_text(json.dumps(
+                dict(format=f'soundbox-media-{kind}-authority-v1',**asdict(authority))))
+            child=root/'child.json';child.write_text(json.dumps(payload))
+            code='''import json,os,sys
+from pathlib import Path
+from soundbox import media_conversion_store as m,rekordbox_locator_store as l
+from soundbox import rekordbox_cue_store as c,rekordbox_tags as t
+b=json.loads(Path(sys.argv[1]).read_bytes());c._closed=lambda:None;t._assert_closed=lambda:None
+c._installed_version=t._installed_version=lambda:t.NATIVE_VERSION
+if b['kind']=='conversion':
+ w=m.ConversionStore(m.ConversionAuthority(**b['authority']),b['data'])
+ m._fault=lambda p:os._exit(73) if p==b['phase'] else None
+ w.convert(b['audio'],b['operation'],native=[dict(id='1',uuid='uuid-one')])
+else:
+ a=b['authority'];a['track_ids']=tuple(a['track_ids']);w=l.LocatorStore(l.LocatorAuthority(**a),b['data'])
+ old=w.lease._connect
+ def connect():
+  conn=old()
+  if b['mode']=='wal':conn.execute('PRAGMA journal_mode=WAL')
+  return conn
+ w.lease._connect=connect;l._fault=lambda p:os._exit(73) if p==b['phase'] else None
+ w.apply(b['plan'])
+'''
+            crashed=subprocess.run([sys.executable,'-c',code,str(child)],capture_output=True,text=True)
+            self.assertEqual(crashed.returncode,73,crashed.stderr);self.assertTrue(store.journal.exists())
+            controller=TagEditController(data)
+            try:
+                self.assertIsNone(controller.lib)
+                def snapshot():
+                    conn=_connect(database,readonly=True)
+                    try:return _state(conn)
+                    finally:conn.close()
+                def reader(_source):
+                    # This is the actual RefreshWorker reader boundary, before any source parse.
+                    self.assertFalse(store.journal.exists())
+                    self.assertEqual(xml.read_bytes(),before_xml)
+                    expected=payload['plan']['after'] if kind=='locator' and phase=='committed' else before
+                    self.assertEqual(snapshot(),expected)
+                    if kind=='conversion':
+                        result=json.loads((store._folder(operation)/'receipt.json').read_bytes())
+                        self.assertEqual(Path(result['original']).read_bytes(),before_audio)
+                        self.assertEqual(media._sha(audio),result['after_sha256'])
+                        self.assertEqual(database.read_bytes(),before_db)
+                    else:
+                        self.assertEqual(audio.read_bytes(),before_audio)
+                        self.assertEqual(original.read_bytes(),b'owned original fixture')
+                    return library()
+                worker=RefreshWorker(database);worker.preflight=controller.recover_before_read
+                with mock.patch('desktop.workers.rekordbox_db.load_live',side_effect=reader) as load:
+                    worker.run();load.assert_called_once_with(database)
+                self.assertEqual(worker.error,'');self.assertIsNotNone(worker.result)
+                def inventory():
+                    return {str(p.relative_to(root)):hashlib.sha256(p.read_bytes()).hexdigest()
+                            for p in root.rglob('*') if p.is_file()}
+                completed=inventory();controller.recover_before_read(database)
+                self.assertEqual(inventory(),completed)
+            finally:controller.shutdown()
+
+    def test_conversion_authority_alone_recovers_real_interruption_before_startup_reader(self):
+        for phase in ('journal','replaced'):
+            with self.subTest(phase=phase):self._check_media_startup_recovery('conversion',phase)
+
+    def test_locator_authority_alone_recovers_real_interruption_before_startup_reader_including_wal(self):
+        for phase,mode in (('sql','delete'),('committed','delete'),('sql','wal'),('committed','wal')):
+            with self.subTest(phase=phase,mode=mode):self._check_media_startup_recovery('locator',phase,mode)
+
+    def test_each_media_authority_blocks_unknown_startup_journal_without_borrowing_foreign_permission(self):
+        from dataclasses import asdict
+        import json
+        from sqlcipher3 import dbapi2 as sqlcipher
+        from desktop.workers import RefreshWorker
+        from soundbox import media_conversion_store as media,rekordbox_locator_store as locator
+        for kind in ('conversion','locator'):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as td:
+                root=Path(td);lib=library();controller=TagEditController(root)
+                try:
+                    authority=(media.ConversionAuthority(str(lib.source),lib.source_library_id,'a'*64,'0'*64,True)
+                               if kind=='conversion' else locator.LocatorAuthority(str(lib.source),lib.source_library_id,'a'*64,'0'*64,('1',)))
+                    path=root/f'rekordbox-media-{kind}-authority.json'
+                    path.write_text(json.dumps(dict(format=f'soundbox-media-{kind}-authority-v1',**asdict(authority))))
+                    journal=controller._write_root(lib)/'transaction.json';journal.parent.mkdir(parents=True)
+                    journal.write_bytes(b'{"format":"unknown-media-recovery"}');original=journal.read_bytes()
+                    worker=RefreshWorker(Path(lib.source));worker.preflight=controller.recover_before_read
+                    with mock.patch('desktop.workers.rekordbox_db.load_live') as reader, \
+                            mock.patch.object(sqlcipher,'connect',side_effect=AssertionError('No source SQL')) as connection:
+                        worker.run();reader.assert_not_called();connection.assert_not_called()
+                        self.assertIn('Unrecognized rekordbox recovery state',worker.error)
+                        with mock.patch.object(controller,'_recover_pending') as dispatch:
+                            controller.recover_before_read(Path('/foreign/master.db'));dispatch.assert_not_called()
+                        connection.assert_not_called()
+                    self.assertEqual(journal.read_bytes(),original)
+                    # Foreign and invalid permissions disable writes without blocking ordinary browsing.
+                    body=json.loads(path.read_bytes());body['library_id']='another-library'
+                    body['database']='/foreign/master.db'
+                    for permission in (body,{'format':'invalid-authority-format'}):
+                        path.write_text(json.dumps(permission))
+                        with mock.patch('desktop.workers.rekordbox_db.load_live',return_value=lib) as reader:
+                            worker=RefreshWorker(Path(lib.source));worker.preflight=controller.recover_before_read
+                            worker.run();reader.assert_called_once_with(Path(lib.source));self.assertEqual(worker.error,'')
+                    self.assertEqual(journal.read_bytes(),original)
+                finally:controller.shutdown()
+
     def test_refresh_recovers_before_read_and_stops_when_recovery_is_unknown(self):
         from desktop.workers import RefreshWorker
         events = []

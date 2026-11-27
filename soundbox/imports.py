@@ -28,6 +28,21 @@ from .library import Library, Track
 from .paths import is_within, sanitize_component
 
 ID_PREFIX = "sb-"
+AUDIO_SHA256_KEY = 'audio_sha256'
+
+
+class RelinkSearch(dict):
+    """Verified matches only; legacy suggestions never assert audio identity."""
+    def __init__(self, *, complete=True):
+        super().__init__()
+        self.complete = complete
+        self.suggestions: dict[str, Path] = {}
+        self.proofs: dict[str, tuple] = {}
+
+
+def relink_file_epoch(path: Path):
+    """A worker proof expires if its exact regular-file observation changes."""
+    return file_locations.file_epoch(path)
 
 # What we let in (all Rockbox-playable). Finder drops and the file dialog
 # filter through this same set.
@@ -383,7 +398,7 @@ def _index(roots: list[Path], cap: int = 200_000):
                     for entry in entries:
                         checkpoint()
                         if seen >= cap:
-                            return by_name, by_size
+                            return by_name, by_size, False
                         seen += 1
                         if entry.name.startswith('.'):
                             continue
@@ -392,58 +407,67 @@ def _index(roots: list[Path], cap: int = 200_000):
                                 pending.append(Path(entry.path))
                                 continue
                             p = Path(entry.path)
-                            if not is_audio(p) or not entry.is_file():
+                            if not is_audio(p) or not entry.is_file(follow_symlinks=False):
                                 continue
                             by_name.setdefault(p.name.lower(), []).append(p)
-                            by_size.setdefault((entry.stat().st_size, p.suffix.lower()), []).append(p)
+                            by_size.setdefault((entry.stat(follow_symlinks=False).st_size, p.suffix.lower()), []).append(p)
                         except OSError:
-                            continue
+                            return by_name, by_size, False
             except OSError:
-                continue
-    return by_name, by_size
+                return by_name, by_size, False
+    return by_name, by_size, True
 
 
-def find_moved(lost: dict, roots: list[Path]) -> dict[str, Path]:
-    """tid -> new location for files the user moved. Matching, strictest first:
-    exact filename (case-insensitive), disambiguated by recorded byte size;
-    then a unique size+extension match (catches a renamed file). Multiple
-    same-name/size candidates must have identical, stably read bytes before
-    choosing the shallowest copy. Different or unstable files stay unresolved.
-    Unique candidates require no payload read."""
-    by_name, by_size = _index([Path(r) for r in roots])
-    found: dict[str, Path] = {}
+def find_moved(lost: dict, roots: list[Path]) -> RelinkSearch:
+    """Relocate only against a previously recorded independent audio digest.
+
+    A complete walk may suggest an exact original name and positive saved size
+    (and duration when known). A suggestion never becomes an identity witness.
+    No candidate is selected from a capped or unreadable search. This explicit
+    search does not backfill missing hashes from the very candidate in question.
+    """
+    by_name, by_size, complete = _index([Path(r) for r in roots])
+    found = RelinkSearch(complete=complete)
+    if not complete:return found
     def live(candidates):
         result = []
         for candidate in candidates:
             try:
-                if candidate.is_file():
-                    result.append((candidate, candidate.stat().st_size))
+                result.append((candidate,relink_file_epoch(candidate)))
             except OSError:
-                continue
+                # A candidate disappearing/unreadable after indexing also makes
+                # the supposedly unique search incomplete.
+                found.complete=False
         return result
     for tid, rec in lost.items():
         old = Path(str(rec.get("path", "")))
         size = int(rec.get("size", 0) or 0)
         named = live(by_name.get(old.name.lower(), []))
-        cands = [path for path, _size in named]
-        if size and cands:
-            sized = [path for path, actual_size in named if actual_size == size]
-            if sized:
-                cands = sized
-            elif len(cands) > 1:
-                cands = []  # several same-name files, none the right size
-        if not cands and size:
-            cands = [path for path, actual_size in live(by_size.get((size, old.suffix.lower()), []))
-                     if actual_size == size]
-            if len(cands) != 1:
-                cands = []  # rename rescue only when it's unambiguous
-        if len(cands) == 1:
-            found[tid] = cands[0]
-        elif len(cands) > 1 and size:
+        named = [(path,epoch) for path,epoch in named if size<=0 or epoch[2]==size]
+        duration=int(rec.get('time',0) or 0)
+        def duration_matches(path):return duration<=0 or duration_seconds(path)==duration
+        digest=rec.get(AUDIO_SHA256_KEY)
+        if (type(digest) is not str or len(digest)!=64
+                or any(char not in '0123456789abcdef' for char in digest)):
+            suggestions=[path for path,_epoch in named if size>0 and duration_matches(path)]
+            if len(suggestions)==1:found.suggestions[tid]=suggestions[0]
+            continue
+        candidates=dict(named)
+        if size>0:
+            candidates.update((path,epoch) for path,epoch in live(by_size.get((size,old.suffix.lower()),[]))
+                              if epoch[2]==size)
+        matches=[]
+        for path,epoch in candidates.items():
             try:
-                digests = [_payload_digest(path, size) for path in cands]
+                if not duration_matches(path):continue
+                actual=_payload_digest(path,epoch[2])
+                if actual is None or relink_file_epoch(path)!=epoch:found.complete=False
+                elif actual==digest:matches.append((path,epoch))
             except OSError:
-                continue
-            if digests[0] is not None and all(value == digests[0] for value in digests):
-                found[tid] = min(cands, key=lambda p: (len(p.parts), str(p)))
+                found.complete=False
+        if matches:
+            path,epoch=min(matches,key=lambda item:(len(item[0].parts),str(item[0])))
+            found[tid]=path;found.proofs[tid]=epoch
+    if not found.complete:
+        found.clear();found.proofs.clear();found.suggestions.clear()
     return found

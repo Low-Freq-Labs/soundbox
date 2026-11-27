@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 import tempfile
 
-from . import metadata, rekordbox_db
+from . import rekordbox_db
 from .rekordbox_analysis import resolve_dat_path
 
 
@@ -160,10 +160,9 @@ def capture_metadata(library, tracks, *, titles=None, artists=None, playlists=No
                 if analysis is None:
                     raise ValueError(f'Native analysis is missing: {selected.name}')
                 raw_title, raw_artist = row.Title or '', row.Artist.Name if row.Artist else ''
-                artist = metadata.effective_artist(selected.track_id, raw_title, raw_artist, artists,
-                    True, library.artist_registry, path.stem, cleanup=library.metadata_cleanup_enabled)
-                title = metadata.effective_title(selected.track_id, raw_title, artist, titles, library.title_junk,
-                    cleanup=library.metadata_cleanup_enabled, source_artist=raw_artist, registry=library.artist_registry)
+                from .engine import effective_pair
+                title,artist=effective_pair(selected,artists,titles,library=library,stem=path.stem,
+                    source_pair=(raw_title,raw_artist))
                 cue_rows = sorted(cues.get(tid, []), key=lambda c: (c['kind'], c['time_ms']))
                 extra = dict(source_id=_number(tid), content_link=_number(row.ContentLink),
                     cue_update_count=_number(row.CueUpdated),

@@ -162,16 +162,80 @@ class NativeInstallerPreflight(unittest.TestCase):
 #define main preflight_main
 #include {json.dumps(str(package.PREFLIGHT_SOURCE))}
 #undef main
+#include <sys/wait.h>
 static int fixture_pid;
 int fixture_listpids(void *buffer, int bytes) {{
     if (!buffer) return 1;
     if (bytes < (int)sizeof(pid_t)) return 0;
     ((pid_t *)buffer)[0] = fixture_pid ? fixture_pid : getpid(); return 1;
 }}
-int main(int argc, char **argv) {{ fixture_pid = argc > 1 ? atoi(argv[1]) : 0; return preflight_main(); }}
+int main(int argc, char **argv) {{
+    if (argc > 1 && !strcmp(argv[1], "zombie")) {{
+        fixture_pid = fork();
+        if (fixture_pid < 0) return 90;
+        if (!fixture_pid) _exit(0);
+        siginfo_t info = {{0}};
+        if (waitid(P_PID, (id_t)fixture_pid, &info, WEXITED | WNOWAIT)) return 91;
+        int result = preflight_main();
+        if (waitpid(fixture_pid, NULL, 0) != fixture_pid) return 92;
+        return result;
+    }}
+    fixture_pid = argc > 1 ? atoi(argv[1]) : 0;
+    return preflight_main();
+}}
 ''')
         package.run(['/usr/bin/xcrun', 'clang', '-Wall', '-Wextra', '-Werror', wrapper,
                      '-framework', 'CoreFoundation', '-o', cls.binary])
+        cls.fallback_binary = cls.root / 'fallback-preflight'
+        fallback = cls.root / 'fallback-fixture.c'
+        fallback.write_text(f'''#include <libproc.h>
+#include <sys/sysctl.h>
+#include <sys/proc.h>
+#include <errno.h>
+#include <string.h>
+#include <unistd.h>
+static int fixture_mode;
+static pid_t fixture_pid;
+static int fixture_listpids(void *buffer, int bytes) {{
+    if (!buffer) return 1;
+    if (bytes < (int)sizeof(pid_t)) return 0;
+    ((pid_t *)buffer)[0] = fixture_pid; return 1;
+}}
+static int fixture_pidpath(int pid, void *buffer, uint32_t bytes) {{
+    (void)pid; (void)buffer; (void)bytes; errno = EPERM; return 0;
+}}
+static int fixture_pidinfo(int pid, int flavor, uint64_t arg, void *buffer, int bytes) {{
+    (void)pid; (void)flavor; (void)arg; (void)buffer; (void)bytes; errno = EPERM; return 0;
+}}
+static int fixture_sysctl(int *name, u_int length, void *out, size_t *size, void *value, size_t count) {{
+    if (length != 4 || name[0] != CTL_KERN || name[1] != KERN_PROC
+            || name[2] != KERN_PROC_PID || name[3] != fixture_pid
+            || *size != sizeof(struct kinfo_proc) || value || count) {{ errno = EINVAL; return -1; }}
+    if (fixture_mode == 4) {{ errno = EPERM; return -1; }}
+    struct kinfo_proc info = {{0}};
+    info.kp_proc.p_pid = fixture_pid + (fixture_mode == 2 ? 1 : 0);
+    info.kp_proc.p_stat = fixture_mode == 1 ? SRUN : SZOMB;
+    memcpy(out, &info, sizeof(info));
+    *size = fixture_mode == 3 ? sizeof(info) - 1 : fixture_mode == 5 ? 0 : sizeof(info);
+    return 0;
+}}
+#define SOUNDBOX_INSTALL_LOCATION {json.dumps(str(cls.target))}
+#define SOUNDBOX_BUNDLE_ID "com.lowfreqlabs.soundbox.installer-fixture"
+#define proc_listallpids fixture_listpids
+#define proc_pidpath fixture_pidpath
+#define proc_pidinfo fixture_pidinfo
+#define sysctl fixture_sysctl
+#define main preflight_main
+#include {json.dumps(str(package.PREFLIGHT_SOURCE))}
+#undef main
+int main(int argc, char **argv) {{
+    fixture_pid = getppid();
+    fixture_mode = argc > 1 ? atoi(argv[1]) : 0;
+    return preflight_main();
+}}
+''')
+        package.run(['/usr/bin/xcrun', 'clang', '-Wall', '-Wextra', '-Werror', fallback,
+                     '-framework', 'CoreFoundation', '-o', cls.fallback_binary])
 
     @classmethod
     def tearDownClass(cls):
@@ -195,6 +259,22 @@ int main(int argc, char **argv) {{ fixture_pid = argc > 1 ? atoi(argv[1]) : 0; r
         self.fixture_bundle(self.target)
         self.assertEqual(self.check().returncode, 0)
 
+    def test_owned_kernel_zombie_does_not_block_installation(self):
+        result = self.check('zombie')
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_uninspectable_pid_requires_exact_complete_kernel_zombie_proof(self):
+        # The bounded PID is this live test process; no real application is
+        # inspected. Synthetic kernel replies isolate every fallback condition.
+        for mode in range(6):
+            with self.subTest(mode=mode):
+                result = subprocess.run([str(self.fallback_binary), str(mode)],
+                                        capture_output=True, text=True)
+                if mode == 0:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                else:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn('Could not prove Soundbox', result.stderr)
     def test_existing_foreign_app_or_symlink_is_refused(self):
         self.fixture_bundle(self.target)
         (self.target / 'Contents/Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': 'foreign'}))

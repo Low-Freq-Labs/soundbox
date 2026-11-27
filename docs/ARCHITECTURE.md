@@ -808,6 +808,11 @@ reconcile other source playlists simply because those playlists were exported
 earlier. Export starts with collapsed folders and uses themed device rows with
 USB/iPod icons. Playlist-browser containers toggle on click without selection;
 track rows alone are highlighted.
+Device sidebar selection identifies the visible browser page. `DeviceTree`
+leaves selection unchanged for context clicks and requests navigation only for
+actual keyboard selection/activation. Menu targets bind their own path/role.
+Explicit Browse resolves the attached role before navigation selects it; discovery
+or other programmatic current-item changes do not request a new page.
 cdj_incremental freezes only selected changed/new
 inputs and merges copied native catalogs through native/cdj/src/merge.rs. Prior
 payload contracts remain inventory, not a fresh audit. Input signatures/per-playlist
@@ -909,7 +914,21 @@ available width, including the row scrollbar’s overlaid strip. Ordinary layout
 scrolling; if selected fields exceed even their minimum widths, both library
 browser views allow horizontal scrolling so every field remains reachable. Saved layouts
 record columns_keys: restoring an older ten-column Qt header must explicitly keep
-new metadata fields hidden. Artists mirrors shared widths and visibility.
+new metadata fields hidden. `desktop.browser_columns` restores Qt header state
+through stable `COLUMNS` keys and applies a complete layout before revealing a
+view. Collection and Artists share the default visibility, order and widths;
+each playlist inherits that default until a user header edit creates its own
+layout. Native layouts bind exact source/ID/UUID; XML uses an unambiguous
+source/full-path fallback, so an external XML rename begins a new layout. Local
+playlist tokens follow rename and retire on deletion in the same source-scoped
+curation save. Header drags work in both browsers, including Artist/Track, and
+mirror without changing musical order, selection or the independent device
+headers. Library and device table headers use the same bold, centered labels
+regardless of row selection or playlist context. Device playlist, music, file
+and detail headers retain their own column widths and resize policies. Programmatic fit/restore does not create playlist overrides. Quitting
+on a playlist preserves the separate default; sparse preference commits own
+durability. Unsupported or corrupt saved layouts fall back without deleting the
+saved data, and newly introduced optional fields remain hidden.
 ScrollPerItem keeps 24-point rows aligned with the sidebar. TrackModel declines
 unsupported paint roles early without adding a row cache or source reads.
 
@@ -1523,17 +1542,21 @@ refresh, preserving compressed waveform payloads.
   carries opaque Core Foundation bookmark data that can resolve the same file
   after a file or parent-folder move. A background startup repair touches only
   records with a missing path or legacy missing bookmark. Legacy/unresolvable
-  records receive one batched Spotlight query constrained by exact filename
-  and recorded size; only a unique live result is accepted and immediately
-  receives a fresh bookmark. Ambiguous/unindexed cases remain missing until
-  the user chooses an explicit folder for the bounded `Fix Missing Links…`
-  scan. It prunes hidden subtrees and bounds all visited entries. Multiple
-  same-name/size candidates require identical stable bytes before selecting a
-  duplicate; unique candidates need no payload read. Stable SoundBox track IDs keep playlists, edits, art, and analysis
-  attached through every successful relocation. The explicit scan still has
-  confirmed sole-candidate size and truncated-inventory uniqueness gaps in the
-  [critical ledger](critical-audit-2026-11.md); this intended identity contract is
-  not a claim those queued defects are fixed.
+  records receive a batched Spotlight query constrained by filename and size,
+  but those matches remain unresolved suggestions. Filename/size equality grants
+  no independent audio identity. The explicit bounded `Fix Missing Links…` scan
+  prunes hidden subtrees and records capped, inaccessible or failed inventory as
+  incomplete. It rejects known-size mismatches even for a sole candidate and
+  automatically accepts only a stable digest match to a previously recorded
+  independent `audio_sha256`. Legacy records lack that witness; no production
+  hash producer or exact-file acceptance flow is currently implemented.
+  Both startup and explicit callbacks retain captured source/song/record/Restore
+  ownership and publish track/view changes only after canonical persistence;
+  failed saves restore the exact previous imported records. Native-bound imports
+  require the separate native Locator route and cannot report a local-only
+  relink. Stable track IDs retain playlists, edits, artwork and analysis. These
+  safety guards leave legacy identity/native Locator functionality open in the
+  [critical ledger](critical-audit-2026-11.md).
 - **Storage-provider timestamp drift is content-verified.** V5 source identity
   normally remains the cheap exact size/mtime gate. If a provider move changes
   only that identity, SoundBox verifies the cache's recorded boundary
@@ -1914,6 +1937,16 @@ direct collaborations and named remix/edition identities remain distinct.
 Component spelling votes count each track once, with trusted names supplying
 recognition rather than extra votes. Only identified title-credit spans receive
 that spelling; explicit manual titles remain exact.
+`metadata_context` prepares sparse, immutable manual values during the existing
+registry inventory. `engine.effective_pair` uses them only for the matching
+source kind/path/library ID, local/native ID, UUID, native path and current native
+scalar. A physical override still wins. Browser/Artists, player labels, artwork
+queries and detached firmware exports share this rule. The context is disposable
+presentation input, not saved curation or native-write authority. Reader/cache
+IPC strips it; presentation rebuilds it from captured canonical inputs, while
+artwork workers consume the prepared context and exports freeze selected manual
+scalar values into their existing detached inputs. Browser cache schema changes prevent
+older derived rows from supplying a first frame with different manual spelling.
 Registry preparation and browser/prepared-view cache keys include the choice,
 so a previous Clean projection cannot supply Keep rows. Firmware exporters retain
 their separate media/format/ownership rules.
@@ -2455,6 +2488,13 @@ Native playlist completion uses separate proof strengths: exact reconstructed
 committed catalog edge plus current equality for causal FIFO rebasing; historical
 retained pair plus fresh ContentID/UUIDs for Collection retention. Worker-side
 folder-delete preflight persists exact descendant pins before writer admission.
+Ordinary folder confirmation also captures its complete descendant identities,
+topology, order and active memberships before opening the dialog. Its marked
+request must retain that semantic scope through projection, admission, retry,
+receipt reconstruction and recovery. A changed subtree requires a fresh review;
+causal native clock renewal alone does not change the confirmed selection.
+Unmarked retained requests keep their original reconstruction rules, and the
+ordinary multi-row SQL/clock protocol remains distinct from smart-leaf deletion.
 Ordinary membership removal also saves a separate local-overlay proof outside
 the native request. ACK retires only its captured value for matching playlist
 and track identities; later overlays survive. Failed storage restores the prior

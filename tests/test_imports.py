@@ -187,28 +187,35 @@ class FixLinks(unittest.TestCase):
         new.parent.mkdir()
         new.write_bytes(b"abc")
         lost = {"a": self._rec(self.root / "AHEE Lost Lands 2024.m4a", 3)}
-        self.assertEqual(imports.find_moved(lost, [self.root]), {"a": new})
+        result=imports.find_moved(lost,[self.root])
+        self.assertEqual(result,{})
+        self.assertEqual(result.suggestions,{'a':new})
 
     def test_case_insensitive_name_match(self):
         new = self.root / "sub" / "SET ONE.MP3"
         new.parent.mkdir()
         new.write_bytes(b"abcd")
         lost = {"a": self._rec(self.root / "Set One.mp3", 4)}
-        self.assertEqual(imports.find_moved(lost, [self.root]), {"a": new})
+        result=imports.find_moved(lost,[self.root])
+        self.assertEqual(result,{})
+        self.assertEqual(result.suggestions,{'a':new})
 
-    def test_renamed_file_rescued_by_unique_size(self):
+    def test_legacy_renamed_file_is_not_identified_by_unique_size(self):
         new = self.root / "renamed completely.m4a"
         new.write_bytes(b"12345678")
         lost = {"a": self._rec(self.root / "original name.m4a", 8)}
-        self.assertEqual(imports.find_moved(lost, [self.root]), {"a": new})
+        self.assertEqual(imports.find_moved(lost, [self.root]), {})
 
-    def test_same_name_wrong_size_still_matches_by_name(self):
-        # Exact filename is a strong signal even if bytes changed (re-tag etc.)
+    def test_same_name_wrong_size_is_rejected_and_original_record_is_preserved(self):
         new = self.root / "sub" / "set.m4a"
         new.parent.mkdir()
         new.write_bytes(b"different-size")
         lost = {"a": self._rec(self.root / "set.m4a", 3)}
-        self.assertEqual(imports.find_moved(lost, [self.root]), {"a": new})
+        before=dict(lost['a'])
+        result=imports.find_moved(lost,[self.root])
+        self.assertEqual(result,{})
+        self.assertEqual(result.suggestions,{})
+        self.assertEqual(lost['a'],before)
 
     def test_ambiguous_same_name_no_size_is_skipped(self):
         (self.root / "d1").mkdir(); (self.root / "d2").mkdir()
@@ -223,6 +230,9 @@ class FixLinks(unittest.TestCase):
         top.write_bytes(b"same")
         (self.root / "deep" / "er" / "set.m4a").write_bytes(b"same")
         lost = {"a": self._rec(self.root / "old" / "set.m4a", 4)}
+        self.assertEqual(imports.find_moved(lost,[self.root]),{})
+        # Independent prior bytes are necessary even when current copies agree.
+        lost['a'][imports.AUDIO_SHA256_KEY]=hashlib.sha256(b'same').hexdigest()
         self.assertEqual(imports.find_moved(lost, [self.root]), {"a": top})
 
     def test_same_name_and_size_with_different_audio_stays_unresolved(self):
@@ -234,19 +244,73 @@ class FixLinks(unittest.TestCase):
         self.assertEqual(first.read_bytes(), b'one!')
         self.assertEqual(second.read_bytes(), b'two!')
 
-    def test_unique_relink_does_not_hash_audio(self):
+    def test_unique_legacy_name_and_size_remains_a_suggestion_without_hashing_audio(self):
         candidate = self.root / 'set.m4a'; candidate.write_bytes(b'audio')
         lost = {'a': self._rec(self.root / 'gone/set.m4a', 5)}
         with mock.patch.object(imports, '_payload_digest', side_effect=AssertionError('unneeded payload read')):
-            self.assertEqual(imports.find_moved(lost, [self.root]), {'a': candidate})
+            result=imports.find_moved(lost,[self.root])
+        self.assertEqual(result,{})
+        self.assertEqual(result.suggestions,{'a':candidate})
 
     def test_unstable_duplicate_proof_never_selects_a_path(self):
         (self.root / 'one').mkdir(); (self.root / 'two').mkdir()
         (self.root / 'one/set.m4a').write_bytes(b'same')
         (self.root / 'two/set.m4a').write_bytes(b'same')
         lost = {'a': self._rec(self.root / 'gone/set.m4a', 4)}
+        lost['a'][imports.AUDIO_SHA256_KEY]=hashlib.sha256(b'same').hexdigest()
         with mock.patch.object(imports, '_payload_digest', side_effect=['verified', None]):
             self.assertEqual(imports.find_moved(lost, [self.root]), {})
+
+    def test_prior_audio_identity_can_relocate_renamed_file_and_reject_equal_size_impostor(self):
+        original=self.root/'original.m4a';original.write_bytes(b'original audio')
+        record=self._rec(original,original.stat().st_size)
+        record[imports.AUDIO_SHA256_KEY]=hashlib.sha256(original.read_bytes()).hexdigest()
+        moved=self.root/'renamed.m4a';original.rename(moved)
+        before=dict(record)
+        result=imports.find_moved({'a':record},[self.root])
+        self.assertEqual(result,{'a':moved});self.assertTrue(result.complete)
+        self.assertEqual(result.proofs['a'],imports.relink_file_epoch(moved))
+        moved.write_bytes(b'different song')
+        self.assertEqual(imports.find_moved({'a':record},[self.root]),{})
+        self.assertEqual(record,before)
+
+    def test_recorded_duration_is_required_for_a_legacy_suggestion(self):
+        candidate=self.root/'set.wav';_write_wav(candidate,2)
+        record=self._rec(self.root/'gone/set.wav',candidate.stat().st_size)
+        record['time']=3
+        self.assertEqual(imports.find_moved({'a':record},[self.root]).suggestions,{})
+        record['time']=2
+        result=imports.find_moved({'a':record},[self.root])
+        self.assertEqual(result,{})
+        self.assertEqual(result.suggestions,{'a':candidate})
+
+    def test_partial_budget_or_unreadable_subtree_cannot_assert_uniqueness(self):
+        candidate=self.root/'set.m4a';candidate.write_bytes(b'original audio')
+        record=self._rec(self.root/'gone/set.m4a',candidate.stat().st_size)
+        record[imports.AUDIO_SHA256_KEY]=hashlib.sha256(candidate.read_bytes()).hexdigest()
+        blocked=self.root/'unreadable';blocked.mkdir()
+        (blocked/'another.m4a').write_bytes(b'original audio')
+        index=imports._index
+        with mock.patch.object(imports,'_index',side_effect=lambda roots:index(roots,cap=1)):
+            partial=imports.find_moved({'a':record},[self.root])
+        self.assertFalse(partial.complete);self.assertEqual(partial,{})
+        self.assertEqual(partial.suggestions,{})
+        scan=os.scandir
+        def guarded(directory):
+            if Path(directory)==blocked:raise PermissionError('owned unreadable fixture')
+            return scan(directory)
+        with mock.patch.object(imports.os,'scandir',side_effect=guarded):
+            partial=imports.find_moved({'a':record},[self.root])
+        self.assertFalse(partial.complete);self.assertEqual(partial,{})
+
+    def test_prior_hash_never_overrides_known_size_mismatch_or_accepts_symlink(self):
+        candidate=self.root/'set.m4a';candidate.write_bytes(b'original audio')
+        record=self._rec(self.root/'gone/set.m4a',candidate.stat().st_size+1)
+        record[imports.AUDIO_SHA256_KEY]=hashlib.sha256(candidate.read_bytes()).hexdigest()
+        self.assertEqual(imports.find_moved({'a':record},[self.root]),{})
+        target=self.root/'payload.bin';candidate.rename(target);candidate.symlink_to(target)
+        record['size']=target.stat().st_size
+        self.assertEqual(imports.find_moved({'a':record},[self.root]),{})
 
     def test_payload_proof_rejects_a_same_size_path_replacement(self):
         candidate, replacement = self.root / 'set.m4a', self.root / 'replacement.m4a'
@@ -279,13 +343,13 @@ class FixLinks(unittest.TestCase):
             self.assertNotEqual(Path(path), hidden)
             return scan(path)
         with mock.patch.object(imports.os, 'scandir', side_effect=guarded):
-            self.assertEqual(imports._index([self.root]), ({}, {}))
+            self.assertEqual(imports._index([self.root]), ({}, {}, True))
 
     def test_scan_budget_counts_unrelated_files(self):
         for index in range(10):
             (self.root / f'{index}.txt').write_text('unrelated')
         with mock.patch.object(imports, 'is_audio', wraps=imports.is_audio) as classify:
-            self.assertEqual(imports._index([self.root], cap=3), ({}, {}))
+            self.assertEqual(imports._index([self.root], cap=3), ({}, {}, False))
         self.assertEqual(classify.call_count, 3)
 
     def test_search_roots_nearest_existing_ancestor(self):

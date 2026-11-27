@@ -1,4 +1,5 @@
 import io
+from dataclasses import replace
 import os
 import wave
 import tempfile
@@ -45,6 +46,25 @@ class TestSyncEndToEnd(unittest.TestCase):
         self.assertEqual(pr.found, 2)
         self.assertEqual(pr.missing, 1)
         self.assertEqual(rep.bytes_to_copy, 4 + 6)
+
+    def test_explicit_folder_root_survives_rockbox_export_and_sync(self):
+        canonical=Playlist('BASSSTATION',['SETS','HAMDI'],['1'],'selected')
+        self.lib.playlists=[canonical]
+        selected=replace(canonical,export_folder_path=['HAMDI'])
+        sync_mod.run(self.lib,[selected],self.target,layout='tree',dry_run=False)
+        destination=self.target/'Playlists/HAMDI/BASSSTATION.m3u8'
+        self.assertTrue(destination.is_file())
+        self.assertFalse((self.target/'Playlists/SETS').exists())
+        recorded=manifest.load(self.target)
+        self.assertEqual(recorded['playlists']['selected']['folder_path'],['SETS','HAMDI'])
+        self.assertEqual(recorded['playlists']['selected']['export_folder_path'],['HAMDI'])
+        sync_mod.run(self.lib,[canonical],self.target,layout='tree',dry_run=False)
+        self.assertFalse((self.target/'Playlists/SETS').exists())
+        sync_mod.resync(self.lib,self.target)
+        self.assertTrue(destination.is_file())
+        self.assertFalse((self.target/'Playlists/SETS').exists())
+        self.assertEqual(canonical.folder_path,['SETS','HAMDI'])
+        self.assertIsNone(canonical.export_folder_path)
 
     def test_rockbox_only_export_refuses_composite_manifest(self):
         manifest.save(self.target, {

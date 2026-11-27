@@ -90,6 +90,82 @@ class CdjPlaylistDelete(unittest.TestCase):
         self.assertEqual({name:(self.target/name).read_bytes() for name in unowned},before)
         self.assert_stock()
 
+    def test_explicit_empty_folder_deletes_only_that_folder_and_never_its_ancestor(self):
+        seed=Playlist('Seed',['SETS','HAMDI'],['17'],pid='seed')
+        outside=Playlist('Keep empty',[],[],pid='keep-empty')
+        self.export([seed,outside]);native=self.native()
+        seed_row=next(row for row in native.playlists if row.title=='Seed' and not row.folder)
+        tx.commit(self.delete(native,[seed_row.id]));empty=self.native()
+        self.assertEqual(empty.songs,())
+        hamdi=next(row for row in empty.playlists if row.title=='HAMDI')
+        sets=next(row for row in empty.playlists if row.title=='SETS')
+        keep=next(row for row in empty.playlists if row.title=='Keep empty')
+        self.assertTrue(hamdi.folder);self.assertEqual(hamdi.parent,sets.id)
+        with mock.patch('soundbox.cdj_source.capture_metadata',side_effect=AssertionError('Folder delete opened source')):
+            plan=self.delete(empty,[hamdi.id])
+        self.assertFalse(any(change.retire for change in plan.changes))
+        tx.commit(plan);after=self.native()
+        self.assertNotIn(hamdi.id,{row.id for row in after.playlists})
+        self.assertEqual(next(row for row in after.playlists if row.id==sets.id),sets)
+        self.assertEqual(next(row for row in after.playlists if row.id==keep.id),keep)
+        for key in ('playlists','classic_playlists'):
+            self.assertNotIn(int(hamdi.id),{int(row['id']) for row in after.catalog[key]})
+            self.assertIn(int(sets.id),{int(row['id']) for row in after.catalog[key]})
+        tx.commit(self.delete(after,[sets.id]));final=self.native()
+        self.assertEqual(final.playlists,(keep,))
+        self.assertEqual(final.songs,());self.assert_stock()
+
+    def test_explicit_folder_union_preserves_outside_references_and_recovers_exact_catalogs(self):
+        self.case.extra_track('18')
+        selected=Playlist('Delete nested',['SETS','HAMDI'],['17','18','17'],pid='delete-nested')
+        keep=Playlist('Keep',['OUTSIDE'],['17'],pid='keep-outside')
+        self.export([selected,keep]);native=self.native()
+        root=next(row for row in native.playlists if row.title=='SETS')
+        child=next(row for row in native.playlists if row.title=='HAMDI')
+        retained={row.id:row for row in native.playlists if row.title in ('OUTSIDE','Keep')}
+        shared=next(row for row in native.songs if row.source_id=='17')
+        shared_path=self.target/shared.path.lstrip('/')
+        shared_before=(shared_path.read_bytes(),shared_path.stat().st_ino)
+        before={path:raw for path,raw in native.files}
+        plan=self.delete(native,[root.id,child.id])
+        with self.assertRaises(faults.SimulatedCrash):
+            tx.commit(plan,on_progress=lambda *_:(_ for _ in ()).throw(faults.SimulatedCrash()))
+        session=tx.CdjSession(self.target,[],token=self.case.token,volume_uuid=self.case.volume,target_role=self.role)
+        tx.recover(session,self.case.recovery)
+        self.assertEqual({path:(self.target/path).read_bytes() for path in before},before)
+        stopped=[];retry=self.delete(self.native(),[root.id,child.id])
+        with self.assertRaisesRegex(RuntimeError,'cancelled'):
+            tx.commit(retry,should_cancel=lambda:bool(stopped),on_progress=lambda *_:stopped.append(True))
+        self.assertEqual({path:(self.target/path).read_bytes() for path in before},before)
+        tx.commit(self.delete(self.native(),[root.id,child.id]));after=self.native()
+        self.assertEqual({row.id:row for row in after.playlists},retained)
+        self.assertEqual({row.source_id for row in after.songs},{'17'})
+        self.assertEqual((shared_path.read_bytes(),shared_path.stat().st_ino),shared_before)
+        for key in ('playlists','classic_playlists'):
+            self.assertEqual({int(row['id']) for row in after.catalog[key]},set(map(int,retained)))
+        self.assert_stock()
+
+    def test_folder_delete_preserves_classic_only_outside_playlist_and_its_shared_media(self):
+        selected=Playlist('Delete nested',['SETS','HAMDI'],['17'],pid='delete-nested')
+        keep=Playlist('Classic-only keep',['OUTSIDE'],['17'],pid='classic-only')
+        self.export([selected,keep]);before=self.native()
+        classic_path=self.target/'PIONEER/rekordbox/export.pdb';classic=classic_path.read_bytes()
+        keep_row=next(row for row in before.playlists if row.title==keep.name)
+        # Keep one real foreign Classic-only reference; the shared song remains
+        # present throughout fixture construction and must survive deletion.
+        tx.commit(self.delete(before,[keep_row.id]));classic_path.write_bytes(classic)
+        divergent=self.native();root=next(row for row in divergent.playlists if row.title=='SETS')
+        foreign=next(row for row in divergent.catalog['classic_playlists'] if int(row['id'])==int(keep_row.id))
+        self.assertNotIn(int(keep_row.id),{int(row['id']) for row in divergent.catalog['playlists']})
+        shared=divergent.songs[0];path=self.target/shared.path.lstrip('/')
+        preserved=(path.read_bytes(),path.stat().st_ino)
+        tx.commit(self.delete(divergent,[root.id]));after=self.native()
+        self.assertEqual(next(row for row in after.catalog['classic_playlists'] if int(row['id'])==int(keep_row.id)),foreign)
+        self.assertNotIn(int(keep_row.id),{int(row['id']) for row in after.catalog['playlists']})
+        self.assertEqual([row.title for row in after.playlists],['OUTSIDE'])
+        self.assertEqual((path.read_bytes(),path.stat().st_ino),preserved)
+        self.assert_stock()
+
     def test_crash_and_cancel_restore_selected_catalogs_and_media_without_other_firmware_changes(self):
         self.export([self.case.playlist]);native=self.native();leaf=next(p for p in native.playlists if not p.folder)
         before={path:(self.target/path).read_bytes() for path,_raw in native.files}
@@ -136,3 +212,42 @@ class CdjPlaylistDelete(unittest.TestCase):
 
 class CdjIpodUsbPlaylistDelete(CdjPlaylistDelete):
     role='ipod_usb'
+
+
+class FolderDeleteGraphProof(unittest.TestCase):
+    def view(self):
+        rows=[dict(id=4,parent=0,title='SETS',folder=True),
+              dict(id=5,parent=4,title='HAMDI',folder=True),
+              dict(id=6,parent=5,title='Inside',folder=False),
+              dict(id=8,parent=0,title='OUTSIDE',folder=True),
+              dict(id=9,parent=8,title='Keep',folder=False)]
+        return dict(playlists=rows,classic_playlists=deepcopy(rows))
+
+    def test_explicit_roots_expand_once_without_ancestors_or_classic_only_foreign_rows(self):
+        from soundbox.cdj_delete import _selected_rows
+        view=self.view();view['classic_playlists'].append(dict(id=10,parent=8,title='Foreign',folder=False))
+        _rows,selected=_selected_rows(view,{5,6})
+        self.assertEqual(selected,{5,6});self.assertNotIn(4,selected);self.assertNotIn(10,selected)
+        for key in ('playlists','classic_playlists'):
+            view[key]=[row for row in view[key] if row['id']!=6]
+        self.assertEqual(_selected_rows(view,{5})[1],{5})
+
+    def test_ambiguous_parent_graphs_and_cross_catalog_selected_subtrees_refuse(self):
+        from soundbox.cdj_delete import _selected_rows
+        for case in ('duplicate','cycle','missing-parent','leaf-parent','float-id','boolean-parent',
+                     'classic-cycle','classic-title','classic-parent','classic-folder','classic-descendant','missing-classic'):
+            with self.subTest(case=case):
+                view=self.view()
+                if case=='duplicate':view['playlists'].append(deepcopy(view['playlists'][1]))
+                elif case=='cycle':view['playlists'][0]['parent']=5
+                elif case=='missing-parent':view['playlists'][1]['parent']=999
+                elif case=='leaf-parent':view['playlists'][1]['parent']=9
+                elif case=='float-id':view['playlists'][1]['id']=5.1
+                elif case=='boolean-parent':view['playlists'][1]['parent']=True
+                elif case=='classic-cycle':view['classic_playlists'][0]['parent']=5
+                elif case=='classic-title':view['classic_playlists'][1]['title']='Another identity'
+                elif case=='classic-parent':view['classic_playlists'][1]['parent']=8
+                elif case=='classic-folder':view['classic_playlists'][1]['folder']=False
+                elif case=='classic-descendant':view['classic_playlists'].append(dict(id=10,parent=5,title='Unknown',folder=False))
+                elif case=='missing-classic':view['classic_playlists']=[]
+                with self.assertRaises(ValueError):_selected_rows(view,{5})

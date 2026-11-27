@@ -23,7 +23,7 @@ class StatePublicationChangedError(StateChangedError):
 _ROOTS={'settings':'settings','title_overrides':'titles','artist_overrides':'overrides',
         'artist_aliases':'aliases','playlist_removals':'removals'}
 PREFERENCE_KEYS=frozenset(('quantize','beat_jump_mode','waveform_zoom','autoplay_mode',
-    'columns_state','columns_keys','sidebar_split','sidebar_width','window_geometry','window_rect','keyboard',
+    'columns_state','columns_keys','browser_column_layouts','sidebar_split','sidebar_width','window_geometry','window_rect','keyboard',
     'analysis','waveform_mode','beat_count_mode','custom_playlist_expanded','theme_accent',
     'theme_text_mode','theme_text_custom','device_views',
     'stock_ipod_identity','stock_ipod_models','my_tag_order'))  # display history only, never writer/signing authority

@@ -474,9 +474,10 @@ class PlaylistPresentation(unittest.TestCase):
         self.assertEqual(self.controller.pending[0]['error'],'')
         print(f'persisted folder-delete feedback: {elapsed:.2f} ms')
 
-    def test_failure_and_discard_reconcile_newest_catalog_and_retry_reprojects(self):
+    def test_failure_and_discard_reconcile_newest_catalog_and_retry_preserves_confirmation_scope(self):
         self.assertTrue(self.win._native_request('delete',identity='1'))
         self.durable()
+        captured=deepcopy(self.controller.pending[0]['request'])
         self.win.lib.source_playlist_catalog['nodes'][1]['Name']='External'
         self.win.lib.playlists[0].name='External'
         deferred=[];reconcile=self.win._native_reconcile_source
@@ -502,13 +503,19 @@ class PlaylistPresentation(unittest.TestCase):
         self.assertIsNotNone(self.win._find_tree_item('Folder / External','2'))
         self.assertTrue(self.win._find_tree_item('', '3').isExpanded())
         self.assertTrue(self.controller.retry());self.durable()
-        self.assertIsNone(self.win._find_tree_item('Folder / External','2'))
+        self.assertIsNotNone(self.win._find_tree_item('Folder / External','2'))
+        self.assertEqual(self.controller.pending[0]['request'],captured)
         self.discard()
         self.assertEqual(self.controller.pending,[])
         self.wait(lambda:self.win._start_rekordbox_refresh.call_count==1)
         self.win._start_rekordbox_refresh.assert_called_once_with(Path('/synthetic/master.db'))
         self.assertIsNotNone(self.win._find_tree_item('Folder / External','2'))
         self.assertEqual(self.win.removals,{})
+        with mock.patch.object(QMessageBox,'question',return_value=QMessageBox.Yes):
+            self.win._native_delete('1')
+        self.durable()
+        self.assertIsNone(self.win._find_tree_item('Folder / External','2'))
+        self.assertNotEqual(self.controller.pending[0]['request']['delete_scope_revision'],captured['delete_scope_revision'])
 
     def test_failed_admission_keeps_row_and_identity_mismatch_does_not_hide_a_new_song_list(self):
         source=deepcopy(self.win.lib.source_playlist_catalog)

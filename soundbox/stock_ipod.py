@@ -28,7 +28,7 @@ import tempfile
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Callable, cast
+from typing import Any, Callable
 from collections.abc import Mapping, Sequence
 
 import mutagen
@@ -53,7 +53,7 @@ from clickwheel.ipod.itunesdb_writer.mhyp_writer import PlaylistItemMeta  # type
 from clickwheel.ipod.sync import _existing_track_to_trackinfo  # type: ignore[import-untyped]
 
 from . import manifest as device_manifest
-from . import metadata
+from . import engine
 from .ipod_policy import pace_classic_usb as _pace_classic_usb
 from .library import Library, Playlist, Track
 from .paths import is_within
@@ -105,7 +105,7 @@ from .stock_ipod_format import StockWriteFormat, inspect_stock_write_format, sto
 from .stock_ipod_signing import verified_stock_signing_context, sign_stock_database
 from .stock_ipod_native_preserve import preserve_native_catalog
 from .sync import DeviceSession, VerifiedCopyReceipt, assert_target_safe
-from .device_staging import PublicationOwnershipLost
+from .device_staging import PublicationOwnershipLost, new_file_output
 
 
 SUPPORTED_SUFFIXES = STOCK_AUDIO_SUFFIXES
@@ -403,6 +403,7 @@ class StockIpodCommitResult:
     catalog_witness: StockCatalogWitness | None = field(default=None, repr=False, compare=False)
     catalog_notice: str = ""
     recovery_payloads: RecoveryPayloads | None = field(default=None, repr=False, compare=False)
+    copied_entities: tuple[stock_delete.IndexedFile, ...] = field(default=(), repr=False, compare=False)
 
 
 @dataclass(frozen=True)
@@ -842,25 +843,9 @@ def _effective_track_metadata(
     captured = frozen_pair(display_rows, track.track_id)
     if captured is not None:
         return captured
-    override = (title_overrides or {}).get(track.track_id)
-    artist = metadata.effective_artist(
-        track.track_id,
-        override or track.name,
-        track.artist,
-        artist_overrides,
-        derive_artists,
-        cast("metadata.ArtistRegistry | None", library.artist_registry),
-        stem=source.stem, cleanup=library.metadata_cleanup_enabled,
-    )
-    title = metadata.effective_title(
-        track.track_id,
-        track.name,
-        artist,
-        title_overrides,
-        getattr(library, "title_junk", None),
-        cleanup=library.metadata_cleanup_enabled,
-        source_artist=track.artist, registry=library.artist_registry,
-    )
+    title, artist = engine.effective_pair(
+        track, artist_overrides, title_overrides, derive_artists,
+        library=library, stem=source.stem)
     return (title or source.stem) if library.metadata_cleanup_enabled else title, artist
 
 
@@ -3495,6 +3480,64 @@ def accept_stock_ipod_noop(plan: StockIpodSyncPlan) -> StockIpodCommitResult:
         catalog_witness=witness, catalog_warning=plan.catalog_warning, catalog_notice=plan.catalog_notice)
 
 
+def _require_copy_cleanup_catalog(session: DeviceSession, relative: Path,
+                                  expected: bytes) -> None:
+    """Require an exact catalog during new-copy rollback.
+
+    The original catalog cannot reference our expected-absent paths; an own
+    published payload is checked before restoring that original. This bounded
+    optimistic observation does not lock another exporter; callers check
+    again at the final claimed-file boundary instead of trusting planning/ACK.
+    """
+    observed = stock_delete.capture(session, relative)
+    if observed is None or observed.size != len(expected):
+        raise PublicationOwnershipLost('Stock catalog changed; newly copied media is retained')
+    with session.parent_fd(relative) as (parent, name):
+        descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+        try:
+            if stock_delete._epoch(os.fstat(descriptor)) != observed.epoch:
+                raise PublicationOwnershipLost('Stock catalog changed before new-media cleanup')
+            offset = 0
+            while block := os.read(descriptor, 1024 * 1024):
+                if block != expected[offset:offset + len(block)]:
+                    raise PublicationOwnershipLost('Stock catalog adopted or changed new media; copies retained')
+                offset += len(block)
+            if (offset != len(expected)
+                    or stock_delete._epoch(os.fstat(descriptor)) != observed.epoch
+                    or stock_delete._epoch(os.stat(name, dir_fd=parent, follow_symlinks=False)) != observed.epoch):
+                raise PublicationOwnershipLost('Stock catalog changed during new-media cleanup')
+        finally:
+            os.close(descriptor)
+    session.revalidate()
+
+
+def _record_new_media_conflict(session: DeviceSession, recovery: Path,
+                               copied: Mapping[Path, stock_delete.IndexedFile],
+                               database_sha256_before: str, failures: Sequence[str]) -> None:
+    """Keep only the failed operation's scalar witnesses, never audio backups.
+
+    These observations explain retained copies after restart; they are not fresh
+    deletion authority. Unknown or externally adopted media stays for review.
+    """
+    payload = json.dumps({
+        'format': 'soundbox-stock-new-media-conflict-v1',
+        'target': str(session.target), 'mount_identity': session.mount_identity,
+        'database_sha256_before': database_sha256_before, 'failures': list(failures),
+        'files': [dict(path=str(item.relative_path), epoch=item.epoch,
+                       parent=item.parent_identity) for item in copied.values()],
+        'authority': 'None. Exact current catalog and entity ownership must be re-established before cleanup.',
+    }, sort_keys=True).encode() + b'\n'
+    # An unexpected occupant in the recovery directory is not our receipt.
+    with new_file_output(session.guard(recovery / 'new-media-conflict.json'),
+                         session.parent_fd, session.revalidate) as publication:
+        publication.output.write(payload)
+        publication.publish()
+        publication.output.seek(0)
+        if publication.output.read() != payload:
+            raise PublicationOwnershipLost('New-media conflict metadata failed verification')
+        publication.accept()
+
+
 def commit_stock_ipod_sync(
     plan: StockIpodSyncPlan,
     on_track_committed: Callable[[Path], None] | None = None,
@@ -3753,6 +3796,7 @@ def commit_stock_ipod_sync(
     recovery_payloads = recovery_payloads.remember(session, payload_paths)
     media_progress = _StockProgress('iTunes media', plan.bytes_to_copy, 'Copying songs to iPod')
     copied: list[Path] = []
+    copied_entities: dict[Path, stock_delete.IndexedFile] = {}
     rewritten: list[StockMediaRewrite] = []
     committed = False
     artwork_committed = False
@@ -3784,8 +3828,15 @@ def commit_stock_ipod_sync(
                         on_progress=copy_progress) as receipt:
                     if not isinstance(receipt, VerifiedCopyReceipt):
                         raise PublicationOwnershipLost('New media copy lost its exact publication receipt')
+                    entity = stock_delete.capture(session, copy_item.relative_path)
                     receipt.require_current(session, destination, size=copy_item.size, sha256=copy_item.sha256)
+                    if entity is None:
+                        raise PublicationOwnershipLost('Verified new media disappeared before ownership capture')
+                    copied_entities[destination] = entity
                 copied.append(destination)
+            except PublicationOwnershipLost as ownership_error:
+                raise PublicationOwnershipLost(
+                    f'New stock media {copy_item.relative_path}: {ownership_error}') from ownership_error
             finally:
                 staging.close()
                 if prepared is not None:
@@ -3913,24 +3964,33 @@ def commit_stock_ipod_sync(
             rollback_failures: list[str] = []
             if getattr(original_exc, 'recovery_status', '') == 'recovery required':
                 rollback_failures.append('Uncertain new media ownership: ' + str(original_exc))
+            catalog_safe = True
             if committed:
                 try:
+                    _require_copy_cleanup_catalog(session, plan.database_relative_path, plan.rendered_database)
                     session.atomic_write(database, original_database)
                 except Exception as rollback_exc:
                     rollback_failures.append(f"iTunesDB: {rollback_exc}")
-                if original_play_counts is not None and not plan.preserve_play_counts and not play_counts.exists():
+                    catalog_safe = False
+                if catalog_safe and original_play_counts is not None and not plan.preserve_play_counts and not play_counts.exists():
                     try:
                         session.atomic_write(play_counts, original_play_counts)
                     except Exception as rollback_exc:
                         rollback_failures.append(f"Play Counts: {rollback_exc}")
-            if artwork_committed or (
+            if catalog_safe:
+                try:
+                    _require_copy_cleanup_catalog(session, plan.database_relative_path, original_database)
+                except Exception as rollback_exc:
+                    rollback_failures.append(f'Catalog ownership: {rollback_exc}')
+                    catalog_safe = False
+            if catalog_safe and (artwork_committed or (
                 plan.rendered_artwork is not None
                 and not plan.rendered_artwork.incremental
                 and (
                     plan.rendered_artwork.publish_artwork_db
                     or plan.rendered_artwork.range_writes
                 )
-            ):
+            )):
                 output_paths = [Path("iPod_Control") / "Artwork" / "ArtworkDB"]
                 if (
                     plan.rendered_artwork is not None
@@ -3951,11 +4011,19 @@ def commit_stock_ipod_sync(
                     except Exception as rollback_exc:
                         rollback_failures.append(f"{relative}: {rollback_exc}")
             for destination in reversed(copied):
+                if not catalog_safe:
+                    continue  # A changed catalog may now own this accepted copy.
                 try:
-                    session.guard(destination).unlink(missing_ok=True)
-                except OSError as rollback_exc:
+                    _require_copy_cleanup_catalog(session, plan.database_relative_path, original_database)
+                    stock_delete.retire(session, copied_entities[destination],
+                        recovery / ('.new-copy-' + hashlib.sha256(str(destination).encode()).hexdigest() + '.pending'),
+                        before_unlink=lambda: _require_copy_cleanup_catalog(
+                            session, plan.database_relative_path, original_database))
+                except (OSError, RuntimeError) as rollback_exc:
                     rollback_failures.append(f"orphan media {destination}: {rollback_exc}")
             for rewrite_item in reversed(rewritten):
+                if not catalog_safe:
+                    continue
                 destination = session.guard(rewrite_item.relative_path)
                 saved = session.guard(
                     recovery / "media" / rewrite_item.relative_path.parent
@@ -3979,11 +4047,19 @@ def commit_stock_ipod_sync(
                 except Exception as rollback_exc:
                     rollback_failures.append(
                         f"rewritten media {destination}: {rollback_exc}")
+            if rollback_failures and copied_entities:
+                try:
+                    _record_new_media_conflict(session, recovery, copied_entities,
+                        plan.database_sha256_before, rollback_failures)
+                except (OSError, RuntimeError, ValueError) as evidence_error:
+                    rollback_failures.append(f'New media conflict evidence: {evidence_error}')
             record_outcome(session, recovery, "recovery required" if rollback_failures else "rolled back",
-                           error=str(original_exc), local_root=(plan.rockbox_media_cache.root
+                           error=str(original_exc) + ('; rollback conflicts: ' + '; '.join(rollback_failures)
+                                if rollback_failures else ''), local_root=(plan.rockbox_media_cache.root
                                if plan.rockbox_media_cache else Path(tempfile.gettempdir()) / "soundbox-source-staging"))
             if not rollback_failures:
-                try:recovery_payloads.retire(session)
+                try:
+                    recovery_payloads.retire(session)
                 except (OSError, RuntimeError, ValueError) as cleanup_error:
                     logging.getLogger('soundbox').warning('Rolled-back iPod payload cleanup retained evidence: %s', cleanup_error)
             setattr(original_exc, "recovery_status", "recovery required" if rollback_failures else "rolled back")
@@ -4097,6 +4173,7 @@ def commit_stock_ipod_sync(
             catalog_artwork_updates=plan.catalog_artwork_track_count,
             catalog_witness=witness,
             recovery_payloads=recovery_payloads if plan.dual_boot else None,
+            copied_entities=tuple(copied_entities.values()),
         )
 
     except Exception as exc:
@@ -4107,7 +4184,8 @@ def commit_stock_ipod_sync(
                 recovered_tracks=len(plan.adoptions), reused_tracks=plan.reused_track_count,
                 rewritten_tracks=len(rewritten), playlists=plan.playlist_names,
                 database_sha256=hashlib.sha256(plan.rendered_database).hexdigest(),
-                recovery_payloads=recovery_payloads if plan.dual_boot else None),
+                recovery_payloads=recovery_payloads if plan.dual_boot else None,
+                copied_entities=tuple(copied_entities.values())),
         ) from exc
 
 
@@ -4133,8 +4211,9 @@ def rollback_committed_stock_ipod_sync(
     database = session.guard(plan.database_relative_path)
     expected_after = hashlib.sha256(plan.rendered_database).hexdigest()
     if not database.is_file() or _sha256(database) != expected_after:
-        raise StockIpodError(
-            "Committed iTunesDB changed before composite rollback")
+        failure = StockIpodError("Committed iTunesDB changed before composite rollback")
+        failure.recovery_status = 'recovery required'
+        raise failure
     recovery = result.recovery_directory
     if recovery.parent.parent.resolve() != (plan.target / ".soundbox").resolve():
         raise StockIpodError("Stock recovery directory is outside this device")
@@ -4142,6 +4221,23 @@ def rollback_committed_stock_ipod_sync(
     if not saved_database.is_file() or _sha256(
             saved_database) != plan.database_sha256_before:
         raise StockIpodError("Stock recovery iTunesDB is missing or invalid")
+    copied_entities = {item.relative_path: item for item in result.copied_entities}
+    try:
+        if (len(copied_entities) != len(result.copied_entities)
+                or set(copied_entities) != {item.relative_path for item in plan.copies}):
+            raise PublicationOwnershipLost('Created stock media lost its operation-local ownership witnesses')
+        for entity in copied_entities.values():
+            stock_delete.verify(session, entity)
+    except (OSError, RuntimeError) as error:
+        try:
+            _record_new_media_conflict(session, recovery.relative_to(plan.target), copied_entities,
+                plan.database_sha256_before, (str(error),))
+        except (OSError, RuntimeError, ValueError) as evidence_error:
+            logging.getLogger('soundbox').warning('Stock copy conflict evidence could not be saved: %s', evidence_error)
+        record_outcome(session, recovery.relative_to(plan.target), 'recovery required', error=str(error))
+        failure = StockIpodError(f'New stock media changed before composite rollback: {error}')
+        failure.recovery_status = 'recovery required'
+        raise failure from error
 
     before_by_path = {item.relative_path: item for item in plan.artwork_before}
     if plan.rendered_artwork is not None and (
@@ -4197,15 +4293,27 @@ def rollback_committed_stock_ipod_sync(
     session.atomic_copy(saved_database, database)
     if _sha256(database) != plan.database_sha256_before:
         raise StockIpodError("Restored iTunesDB failed verification")
+    original_database = saved_database.read_bytes()
     for copy_item in plan.copies:
         destination = session.guard(copy_item.relative_path)
-        if destination.is_file() and (
-            destination.stat().st_size != copy_item.size
-            or _sha256(destination) != copy_item.sha256
-        ):
-            raise StockIpodError(
-                f"New stock media changed before rollback: {destination}")
-        destination.unlink(missing_ok=True)
+        try:
+            _require_copy_cleanup_catalog(session, plan.database_relative_path, original_database)
+            stock_delete.retire(session, copied_entities[copy_item.relative_path],
+                recovery.relative_to(plan.target)
+                    / ('.new-copy-' + hashlib.sha256(str(destination).encode()).hexdigest() + '.pending'),
+                before_unlink=lambda: _require_copy_cleanup_catalog(
+                    session, plan.database_relative_path, original_database))
+        except (OSError, RuntimeError) as error:
+            try:
+                _record_new_media_conflict(session, recovery.relative_to(plan.target),
+                    copied_entities,
+                    plan.database_sha256_before, (str(error),))
+            except (OSError, RuntimeError, ValueError) as evidence_error:
+                logging.getLogger('soundbox').warning('Stock copy conflict evidence could not be saved: %s', evidence_error)
+            record_outcome(session, recovery.relative_to(plan.target), 'recovery required', error=str(error))
+            failure = StockIpodError(f'New stock media could not be safely retired: {error}')
+            failure.recovery_status = 'recovery required'
+            raise failure from error
 
     record_outcome(session, recovery.relative_to(plan.target), 'rolled back',
                    error='The composite outer generation was rolled back')

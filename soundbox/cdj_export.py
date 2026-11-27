@@ -31,6 +31,7 @@ def _stable_id(key):
 
 
 def _selected(library, additions, all_playlists, previous, *, allow_empty=False):
+    from .export_selection import retain_projection
     available = {manifest.playlist_key(p): p for p in all_playlists}
     jobs = {}
     for value in previous.get('selection', []) if previous else []:
@@ -38,9 +39,13 @@ def _selected(library, additions, all_playlists, previous, *, allow_empty=False)
         if key not in available:
             # A removed managed playlist is omitted in both native formats.
             continue
-        jobs[key] = available[key]
+        jobs[key] = retain_projection(available[key],value,
+            source_key='source_folder',destination_key='folder') if 'source_folder' in value else available[key]
     for playlist in additions:
-        jobs[manifest.playlist_key(playlist)] = playlist
+        key = manifest.playlist_key(playlist)
+        prior: dict = next((row for row in previous.get('selection',()) if row['key']==key),{}) if previous else {}
+        jobs[key] = (retain_projection(playlist,prior,source_key='source_folder',destination_key='folder')
+            if 'source_folder' in prior else playlist)
     if not jobs and not allow_empty and not (previous and previous.get('library_managed', True)):
         raise ValueError('Drag a playlist onto this USB to establish its CDJ library')
     return jobs
@@ -54,8 +59,9 @@ def _playlist_dto(library, jobs, tracks, previous):
     selection = []
     for key, playlist in jobs.items():
         parent = 0
-        for at, name in enumerate(playlist.folder_path):
-            folder_key = 'folder:'+'/'.join(playlist.folder_path[:at+1])
+        folder = playlist.destination_folder_path
+        for at, name in enumerate(folder):
+            folder_key = 'folder:'+'/'.join(folder[:at+1])
             node_id = _stable_id(folder_key)
             if node_id in used and used[node_id] != folder_key:
                 raise ValueError('Playlist folder identity collision')
@@ -70,7 +76,9 @@ def _playlist_dto(library, jobs, tracks, previous):
         nodes[key] = dict(id=node_id, name=playlist.name, parent_id=parent, folder=False,
                           track_indices=[index[t.track_id] for t in library.resolve(playlist)],
                           device_id=int(old.get(str(node_id), {}).get('id', 0)))
-        selection.append(dict(key=key, pid=playlist.pid, name=playlist.name, folder=playlist.folder_path))
+        row = dict(key=key, pid=playlist.pid, name=playlist.name, folder=folder)
+        if playlist.export_folder_path is not None:row['source_folder']=list(playlist.folder_path)
+        selection.append(row)
     next_id = int(previous.get('next_playlist_id', 1)) if previous else 1
     for node in nodes.values():
         if not node['device_id']:
@@ -397,22 +405,18 @@ def selection_hint(library, playlists, *, titles=None, artists=None):
 
 
 def _selection_hint(library, playlists, track_rows, *, titles=None, artists=None):
-    from .metadata import effective_title, effective_artist
+    from .engine import effective_pair
     rows = []
     for playlist in playlists:
         tracks = []
         for t in library.resolve(playlist):
             if t.track_id not in track_rows:
-                artist = effective_artist(t.track_id,t.name,t.artist,artists,True,library.artist_registry,t.path.stem,
-                                          cleanup=library.metadata_cleanup_enabled)
-                track_rows[t.track_id]=[t.track_id, t.source_uuid, str(t.path), t.bpm, t.key,
-                    t.source_cue_revision,
-                    effective_title(t.track_id,t.name,artist,titles,library.title_junk,
-                                    cleanup=library.metadata_cleanup_enabled, source_artist=t.artist,
-                                    registry=library.artist_registry), artist,
+                title,artist=effective_pair(t,artists,titles,library=library)
+                track_rows[t.track_id]=[t.track_id,t.source_uuid,str(t.path),t.bpm,t.key,
+                    t.source_cue_revision,title,artist,
                     getattr(library,'info_overrides',{}).get(t.track_id,{})]
             tracks.append(track_rows[t.track_id])
-        rows.append([manifest.playlist_key(playlist),playlist.name,playlist.folder_path,tracks])
+        rows.append([manifest.playlist_key(playlist),playlist.name,playlist.destination_folder_path,tracks])
     return digest(json.dumps(rows,sort_keys=True,separators=(',', ':')).encode())
 
 

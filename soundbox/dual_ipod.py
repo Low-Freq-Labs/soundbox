@@ -23,13 +23,12 @@ import os
 import secrets
 from pathlib import Path
 import time
-from typing import Any, Callable, Sequence, cast
+from typing import Any, Callable, Sequence
 from collections.abc import Mapping
 from .stock_ipod_catalog_state import StockCatalogWitness
 from .ipod_export_metadata import freeze_display_rows, frozen_pair
 
 from . import artencode
-from . import metadata
 from . import manifest as legacy_manifest
 from . import playlists as pl_mod
 from . import rockbox_config
@@ -1166,6 +1165,9 @@ def _combined_playlists(
         if not isinstance(row, dict):
             raise DualIpodError(f"Manifest playlist row is invalid: {key}")
         current_playlist: Playlist | None = incoming.get(key)
+        if current_playlist is not None:
+            from .export_selection import retain_projection
+            current_playlist = retain_projection(current_playlist,row)
         if current_playlist is None:
             tracks = row.get("tracks")
             folder = row.get("folder_path")
@@ -1177,6 +1179,7 @@ def _combined_playlists(
                 [str(track_id) for track_id in tracks],
                 pid=str(row.get("pid") or ""),
                 export_key=key if key.startswith('cust:') and row.get('pid') else '',
+                export_folder_path=row.get('export_folder_path'),
             )
         output.append(current_playlist)
         seen.add(key)
@@ -1322,7 +1325,9 @@ def _filtered_playlists(
             keys.append(track.track_id)
         output.append(Playlist(
             playlist.name, list(playlist.folder_path), keys, pid=playlist.pid,
-            export_key=playlist.export_key))
+            export_key=playlist.export_key,
+            export_folder_path=(list(playlist.export_folder_path)
+                if playlist.export_folder_path is not None else None)))
     return output, list(missing.values()), list(unsupported.values())
 
 
@@ -1340,25 +1345,9 @@ def _effective_display_metadata(
     captured = frozen_pair(display_rows, track.track_id)
     if captured is not None:
         return captured
-    override = (title_overrides or {}).get(track.track_id)
-    artist = metadata.effective_artist(
-        track.track_id,
-        override or track.name,
-        track.artist,
-        artist_overrides,
-        derive_artists,
-        cast("metadata.ArtistRegistry | None", library.artist_registry),
-        stem=source.stem, cleanup=library.metadata_cleanup_enabled,
-    )
-    title = metadata.effective_title(
-        track.track_id,
-        track.name,
-        artist,
-        title_overrides,
-        getattr(library, "title_junk", None),
-        cleanup=library.metadata_cleanup_enabled,
-        source_artist=track.artist, registry=library.artist_registry,
-    )
+    from .engine import effective_pair
+    title,artist=effective_pair(track,artist_overrides,title_overrides,derive_artists,
+        library=library,stem=source.stem)
     return (title or source.stem) if library.metadata_cleanup_enabled else title, artist
 
 

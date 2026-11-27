@@ -9,9 +9,9 @@ from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
-from . import manifest, metadata
+from . import manifest
 from .library import Library, Playlist, Track
 from .stock_ipod_catalog_state import CatalogWitnessRow, StockCatalogWitness
 from .stock_ipod_playlist_binding import (
@@ -74,15 +74,9 @@ class StockPlaylistRecognition:
 
 def _labels(track: Track, library: Library, derive_artists: bool,
             artist_overrides: dict | None, title_overrides: dict | None) -> set[tuple[str, str]]:
-    title = str((title_overrides or {}).get(track.track_id) or track.name)
-    artist = metadata.effective_artist(
-        track.track_id, title, track.artist, artist_overrides or {}, derive_artists,
-        registry=cast("metadata.ArtistRegistry | None", library.artist_registry), stem=track.path.stem,
-        cleanup=library.metadata_cleanup_enabled)
-    title = metadata.effective_title(track.track_id, track.name, artist, title_overrides,
-                                     getattr(library, "title_junk", None),
-                                     cleanup=library.metadata_cleanup_enabled,
-                                     source_artist=track.artist, registry=library.artist_registry) or track.path.stem
+    from .engine import effective_pair
+    title,artist=effective_pair(track,artist_overrides,title_overrides,derive_artists,library=library)
+    title=title or track.path.stem
     return {(str(track.name).strip(), str(track.artist).strip()),
             (title.strip(), artist.strip())}
 
@@ -101,14 +95,9 @@ def catalog_metadata(track: Track, library: Library, *, derive_artists: bool = T
     # Repeating title rescue here is both wasted work and a second dependency
     # on registry state that the frozen pair deliberately replaces.
     if display is None or 'title' not in display or 'artist' not in display:
-        raw_title = (title_overrides or {}).get(track.track_id) or track.name
-        artist = metadata.effective_artist(track.track_id, raw_title, track.artist, artist_overrides,
-            derive_artists, cast("metadata.ArtistRegistry | None", library.artist_registry), stem=track.path.stem,
-            cleanup=library.metadata_cleanup_enabled)
-        row.update(title=metadata.effective_title(track.track_id, track.name, artist, title_overrides,
-                                                getattr(library, "title_junk", None),
-                                                cleanup=library.metadata_cleanup_enabled,
-                                                source_artist=track.artist, registry=library.artist_registry), artist=artist)
+        from .engine import effective_pair
+        title,artist=effective_pair(track,artist_overrides,title_overrides,derive_artists,library=library)
+        row.update(title=title,artist=artist)
     row.update(getattr(library, "info_overrides", {}).get(track.track_id, {}))
     if display is not None:
         row.update(display)

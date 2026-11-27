@@ -71,13 +71,17 @@ class PlaylistTrackOrder(unittest.TestCase):
         self.assertEqual([row['_native_membership']['ID'] for row in model._rows], ['1', '2', '3'])
 
     def test_local_custom_set_keeps_order_on_reopen(self):
-        host = self.host(native=False); rendered = []
+        host = self.host(native=False); rendered = []; events = []
         host.custom = {'Set': ['one', 'two', 'one']}; host.hidden = set()
         host._annotate_art = lambda rows: rows
-        host._set_refreshed_rows = rendered.extend
-        host.stack = SimpleNamespace(setCurrentIndex=lambda index: None)
+        host._activate_browser_columns = lambda view: events.append(('layout', view))
+        def show_rows(rows):
+            events.append(('rows',)); rendered.extend(rows)
+        host._set_refreshed_rows = show_rows
+        host.stack = SimpleNamespace(setCurrentIndex=lambda index: events.append(('show', index)))
         MainWindow._show_custom(host, 'Set')
         self.assertEqual([row['id'] for row in rendered], ['one', 'two', 'one'])
+        self.assertEqual(events, [('layout', 'sb:Set'), ('rows',), ('show', 0)])
 
 
 class NativeTrackOrderBatch(unittest.TestCase):

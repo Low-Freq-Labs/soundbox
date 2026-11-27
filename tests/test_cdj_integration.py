@@ -1,5 +1,6 @@
 """Compiled renderer + independent decoders, using required offline copies only."""
 from copy import deepcopy
+from dataclasses import replace
 import json
 from pathlib import Path
 import shutil
@@ -87,6 +88,36 @@ class CdjIntegrationTests(unittest.TestCase):
         self.lib.tracks_by_id[tid]=track
         return track
 
+    def test_selected_folder_roots_survive_native_render_merge_and_reexport(self):
+        self.playlist.folder_path=['SETS','HAMDI']
+        old_layout=self.selected([self.playlist]);cdj_transaction.commit(old_layout)
+        selected=replace(self.playlist,export_folder_path=['HAMDI'])
+        first=self.selected([selected]);cdj_transaction.commit(first)
+        other=Playlist('Second set',['SETS','DUB'],list(self.playlist.keys),'2000',
+                       export_folder_path=['DUB'])
+        self.lib.playlists.append(replace(other,export_folder_path=None))
+        second=self.selected([other]);cdj_transaction.commit(second)
+        third=self.selected([self.playlist]);cdj_transaction.commit(third)
+        native=read_library(self.target,self.token)
+        by_id={str(row.id):row for row in native.playlists}
+        def display(row):
+            parts=[row.title];parent=str(row.parent)
+            while parent not in ('','0','root'):
+                folder=by_id[parent];parts.insert(0,folder.title);parent=str(folder.parent)
+            return ' / '.join(parts)
+        names=[display(row) for row in native.playlists if not row.folder]
+        self.assertIn('HAMDI / '+self.playlist.name,names)
+        self.assertIn('DUB / Second set',names)
+        self.assertFalse(any('SETS' in name.split(' / ') for name in names))
+        self.assertNotIn('SETS',[row.title for row in native.playlists if row.folder])
+        classic=native.catalog['classic_playlists']
+        self.assertTrue(classic)
+        self.assertNotIn('SETS',[row['title'] for row in classic if row['folder']])
+        self.assertEqual(sorted((row['title'],row['parent'],row['folder']) for row in classic),
+                         sorted((row.title,str(row.parent),row.folder) for row in native.playlists))
+        self.assertEqual(self.playlist.folder_path,['SETS','HAMDI'])
+        self.assertIsNone(self.playlist.export_folder_path)
+
     def plus_connection(self):
         import base64,re,zlib
         from sqlcipher3 import dbapi2 as sqlcipher
@@ -98,6 +129,29 @@ class CdjIntegrationTests(unittest.TestCase):
         db=sqlcipher.connect(self.target/DATABASE_FILES[2])
         db.execute("PRAGMA key='"+key.replace("'","''")+"'")
         return db
+
+    def test_projected_root_preserves_real_classic_only_child_and_foreign_named_folder(self):
+        self.playlist.folder_path=['SETS','HAMDI']
+        other=Playlist('Classic only',['SETS','HAMDI'],[],'other')
+        self.lib.playlists.append(other)
+        cdj_transaction.commit(self.selected([self.playlist,other]))
+        before=read_library(self.target,self.token)
+        retained=next(row for row in before.catalog['classic_playlists'] if row['title']=='Classic only')
+        with self.plus_connection() as db:
+            db.execute('DELETE FROM playlist WHERE playlist_id=?',[int(retained['id'])])
+            db.execute('INSERT INTO playlist(playlist_id,sequenceNo,name,image_id,attribute,playlist_id_parent) VALUES(9000,99,?,0,1,0)',
+                       ['SETS'])
+        changed=read_library(self.target,self.token)
+        self.assertNotIn('Classic only',[row.title for row in changed.playlists])
+        projected=replace(self.playlist,export_folder_path=['HAMDI'])
+        cdj_transaction.commit(self.selected([projected]))
+        after=read_library(self.target,self.token)
+        peer=next(row for row in after.catalog['classic_playlists'] if row['id']==retained['id'])
+        self.assertEqual({key:peer[key] for key in ('title','parent','folder','entries')},
+                         {key:retained[key] for key in ('title','parent','folder','entries')})
+        self.assertIn(str(retained['parent']),{row['id'] for row in after.catalog['classic_playlists']})
+        foreign=next(row for row in after.playlists if row.id=='9000')
+        self.assertEqual((foreign.title,str(foreign.parent),foreign.folder),('SETS','0',True))
 
     def test_browser_membership_ids_preserve_native_records_sharing_one_audio_path(self):
         self.extra_track('18');self.playlist.keys=['17','18','17']

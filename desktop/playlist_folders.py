@@ -22,13 +22,23 @@ class PlaylistFoldersMixin:
         return item.parent().data(0, CUSTOM_FOLDER_ROLE) if item.parent() else ''
 
     def _commit_local_tree(self, nodes, custom=None, *, select=None, icon_rename=None):
+        # A full-save refusal flushes dirty preferences. Do not stage renamed
+        # layout tokens into that flush while an earlier durable ACK owns it.
+        if (getattr(self,'_state_publication',False) or getattr(self,'_state_maintenance',False)
+                or getattr(self,'_shutting_down',False)):
+            if not getattr(self,'_shutting_down',False):self._flash_status('Finishing the current save; try the playlist edit again',8)
+            return False
         previous = self.custom
         existed = 'custom_playlist_tree' in self.settings
         old_tree = self.settings.get('custom_playlist_tree')
         old_expanded = self.settings.get('custom_playlist_expanded')
         old_icons=self.settings.get('playlist_icons');had_icons='playlist_icons' in self.settings
+        from .browser_columns import KEY as column_key,local_changes
+        old_columns=self.settings.get(column_key);had_columns=column_key in self.settings
         members = previous if custom is None else custom
+        column_changes=local_changes(self,previous,members,icon_rename)
         nodes = folders.reconcile(members, nodes)
+        if column_changes is not None:self.settings[column_key]=column_changes
         self.custom = {n['playlist']:members[n['playlist']] for n, _ in folders.walk(nodes) if 'playlist' in n}
         self.settings['custom_playlist_tree'] = nodes
         icon_key=getattr(self,'_local_playlist_icon_key',None)
@@ -49,6 +59,8 @@ class PlaylistFoldersMixin:
             if old_expanded is not None:self.settings['custom_playlist_expanded'] = old_expanded
             if had_icons:self.settings['playlist_icons']=old_icons
             else:self.settings.pop('playlist_icons',None)
+            if had_columns:self.settings[column_key]=old_columns
+            else:self.settings.pop(column_key,None)
             return False
         self._refresh_custom()
         if select:

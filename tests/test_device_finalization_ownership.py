@@ -67,7 +67,7 @@ class DeviceFinalizationOwnership(unittest.TestCase):
         h.progress = QProgressBar(self.frame)
         h.progress.setRange(0,1000)
         h.eject_btn, h.device_sync_btn, h.cancel_btn = (QPushButton(self.frame) for _ in range(3))
-        h.stock_ipod_pages = SimpleNamespace(set_loading=mock.Mock(), set_snapshot=mock.Mock(),
+        h.stock_ipod_pages = SimpleNamespace(set_loading=mock.Mock(), set_snapshot=mock.Mock(return_value=False),
             set_playlist_deletion_available=mock.Mock(), set_primary_action=mock.Mock(),
             set_error=mock.Mock(), restore_playlist_order_seat=mock.Mock())
         h.stock_catalog_witness_store = SimpleNamespace(load=lambda *_:None)

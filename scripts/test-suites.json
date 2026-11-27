@@ -22,6 +22,7 @@
         "test_graveyard_readiness",
         "test_graveyard_ui",
         "test_import_analysis_flow",
+        "test_import_relink_controller",
         "test_local_folder_deletion",
         "test_mac_trash",
         "test_media_conversion_controller",
@@ -183,6 +184,7 @@
         "test_title_policy_handlers",
         "test_metadata_cleanup_policy",
         "test_metadata_cleanup_views",
+        "test_manual_metadata_context",
         "test_rekordbox_installations"
       ],
       "recovery": [
@@ -617,7 +619,10 @@
         "test_cdj_initialize_ui",
         "test_usb_setup_discovery",
         "test_usb_setup_ui",
+        "test_usb_format_entrypoint",
         "test_usb_playlist_layout",
+        "test_usb_auto_settings",
+        "test_usb_settings_ui",
         "test_eject_navigation",
         "test_cdj_progress"
       ],
@@ -711,6 +716,8 @@
         "test_usb_setup_discovery",
         "test_usb_setup_ui",
         "test_usb_playlist_layout",
+        "test_usb_settings_ui",
+        "test_usb_auto_settings",
         "test_eject_navigation",
         "test_cdj_progress"
       ],
@@ -801,6 +808,7 @@
         "test_ui",
         "test_onboarding",
         "test_default_browser_columns",
+        "test_browser_column_layouts",
         "test_ui_source_playlists"
       ],
       "recovery": [

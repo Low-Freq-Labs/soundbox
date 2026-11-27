@@ -70,22 +70,44 @@ def _find(lib: Library, display_path: str) -> Playlist | None:
     return next((p for p in lib.playlists if p.display_path == display_path), None)
 
 
+def effective_pair(track: Track, overrides: dict | None = None,
+                   titles: dict | None = None, derive: bool = True, *,
+                   library: Library | None = None, registry=None, junk=None,
+                   cleanup: bool = True, stem: str | None = None,
+                   source_pair: tuple[str, str] | None = None) -> tuple[str, str]:
+    """Shared displayed/query/export scalars, with exact-source fulfilled edits.
+
+    Physical overrides remain strongest. Prepared manual ACK inputs fill only
+    absent overrides; a bare Track or unbound Library never supplies provenance.
+    """
+    from .metadata_context import values
+    if library is not None:
+        if registry is None:registry=library.artist_registry
+        if junk is None:junk=library.title_junk
+        cleanup=cleanup and library.metadata_cleanup_enabled
+    cleanup = cleanup and (registry is None or registry.cleanup_enabled)
+    name, source_artist = source_pair if source_pair is not None else (track.name, track.artist)
+    manual_title, manual_artist = values(library, track, source_pair)
+    if manual_title is not None and (titles is None or track.track_id not in titles):
+        titles = {track.track_id: manual_title}
+    if manual_artist is not None and (overrides is None or track.track_id not in overrides):
+        overrides = {track.track_id: manual_artist}
+    src = (titles or {}).get(track.track_id) or name
+    artist = metadata.effective_artist(track.track_id, src, source_artist, overrides,
+        derive, registry, stem=track.path.stem if stem is None else stem, cleanup=cleanup)
+    title = metadata.effective_title(track.track_id, name, artist, titles, junk,
+        cleanup=cleanup, source_artist=source_artist, registry=registry)
+    return title, artist
+
+
 def track_row(track: Track, overrides: dict | None = None,
               titles: dict | None = None, derive: bool = True,
-              registry=None, junk=None, *, cleanup=True) -> dict:
-    """A table row with the *effective* title and artist (overrides win)."""
-    r = track.to_row()
-    cleanup = cleanup and (registry is None or registry.cleanup_enabled)
-    # Artist first (derived from the raw/overridden name), THEN the neat title —
-    # which may strip that very artist off the title's edge.
-    src = (titles or {}).get(track.track_id) or track.name
-    artist = metadata.effective_artist(
-        track.track_id, src, track.artist, overrides, derive, registry,
-        stem=track.path.stem, cleanup=cleanup)
-    r["artist"] = artist
-    r["title"] = metadata.effective_title(track.track_id, track.name, artist, titles, junk, cleanup=cleanup,
-                                          source_artist=track.artist, registry=registry)
-    return r
+              registry=None, junk=None, *, cleanup=True, library: Library | None = None) -> dict:
+    """A table row with the effective title and artist (overrides win)."""
+    row = track.to_row()
+    row['title'], row['artist'] = effective_pair(track, overrides, titles, derive,
+        library=library, registry=registry, junk=junk, cleanup=cleanup)
+    return row
 
 
 def playlist_rows(lib: Library, display_path: str, overrides: dict | None = None,
@@ -96,7 +118,7 @@ def playlist_rows(lib: Library, display_path: str, overrides: dict | None = None
         return []
     reg = lib.artist_registry
     junk = getattr(lib, "title_junk", None)
-    return [track_row(t, overrides, titles, derive, reg, junk, cleanup=lib.metadata_cleanup_enabled)
+    return [track_row(t, overrides, titles, derive, reg, junk, cleanup=lib.metadata_cleanup_enabled, library=lib)
             for t in lib.resolve(pl)]
 
 

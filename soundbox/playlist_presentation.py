@@ -8,7 +8,8 @@ from collections import defaultdict, deque
 import math
 
 from .library import Playlist
-from .rekordbox_playlist_store import command_requests,tree_bindings,CREATE_ORDINARY_OPERATIONS,CREATE_SMART_OPERATIONS
+from .rekordbox_playlist_store import (command_requests,tree_bindings,require_ordinary_delete_scope,
+                                       CREATE_ORDINARY_OPERATIONS,CREATE_SMART_OPERATIONS)
 from .rekordbox_write import WriteProofError
 from . import playlist_creation_placement
 
@@ -175,6 +176,8 @@ def project(library, jobs):
                 if (row['ParentID'] == target['ParentID'] and row['rb_local_deleted'] == 0
                         and row['Seq'] > target['Seq']):row['Seq'] -= 1
         elif operation=='delete':
+            try:require_ordinary_delete_scope(request,catalog)
+            except (ValueError,KeyError,WriteProofError):break
             deleted={identity}
             while True:
                 descendants={r['ID'] for r in nodes if r['ParentID'] in deleted and r['rb_local_deleted']==0}

@@ -18,10 +18,62 @@ sys.path.insert(0, str(ROOT))
 from scripts.test_suites import LEVELS, load_catalog, normalize_selector, suite_plan
 
 
+_COCOA_TEST_ARGUMENTS = ('-ApplePersistenceIgnoreState','YES',
+                         '-NSIgnorePersistentState','YES',
+                         '-NSQuitAlwaysKeepsWindows','NO')
+
+
+def qt_test_python_command(code,*arguments,platform=None):
+    """Launch an owned Python probe with its payload argv and Cocoa policy.
+
+    AppKit reads the original OS argv. Strip the private suffix before executing
+    the payload so paths and ordinary probe arguments retain their exact meaning.
+    Offscreen children need no bootstrap and retain their original command.
+    """
+    command=[sys.executable,'-c',code,*map(str,arguments)]
+    if sys.platform!='darwin' or (platform or os.environ.get('QT_QPA_PLATFORM'))!='cocoa':
+        return command
+    bootstrap=('import sys; del sys.argv[-'+str(len(_COCOA_TEST_ARGUMENTS))+':]; '
+               'exec(compile('+repr(code)+',"<owned-cocoa-probe>","exec"))')
+    return [sys.executable,'-c',bootstrap,*map(str,arguments),*_COCOA_TEST_ARGUMENTS]
+
+
+def _bootstrap_cocoa_test_process():
+    """Ignore restoration only in this owned macOS Cocoa test process.
+
+    AppKit reads the original process arguments, even when a fixture creates
+    QApplication([]). Relaunch before importing Qt or creating temporary state;
+    only the exact internal suffix is removed from the Python test CLI.
+    """
+    arguments=sys.argv[1:]
+    if sys.platform!='darwin' or any(option in arguments for option in
+            ('--suite','--list-suites','--plan','--help','-h')):
+        return
+    native=('--cocoa' in arguments or '--phase=native' in arguments
+            or any(arguments[index:index+2]==['--phase','native']
+                   for index in range(len(arguments))))
+    if not native:return
+    size=len(_COCOA_TEST_ARGUMENTS)
+    if tuple(arguments[-size:])==_COCOA_TEST_ARGUMENTS:
+        del sys.argv[-size:]
+        return
+    os.execv(sys.executable,[sys.executable,str(Path(__file__).resolve()),
+                            *arguments,*_COCOA_TEST_ARGUMENTS])
+
+
 class TimedResult(unittest.TextTestResult):
     def __init__(self,*args,**kwargs):
         super().__init__(*args,**kwargs)
         self.case_timings=[]
+
+    def stopTest(self,test):
+        super().stopTest(test)
+        # Test cleanups have stopped their workers and queued widget deletion.
+        # Dispatch that deletion while the case still retains its Python model
+        # and window wrappers, before TestSuite releases the completed case.
+        from PySide6.QtCore import QCoreApplication,QEvent
+        if QCoreApplication.instance() is not None:
+            QCoreApplication.sendPostedEvents(None,QEvent.DeferredDelete)
 
     def addDuration(self,test,elapsed):
         super().addDuration(test,elapsed)
@@ -245,8 +297,11 @@ def main():
         print(f'{args.phase}: running {len(ids)} of {len(all_ids)} discovered tests; '
               'remaining tests belong to the other required process.', flush=True)
     started=time.monotonic()
-    result = unittest.TextTestRunner(verbosity=1, buffer=True, durations=15,resultclass=TimedResult).run(
-        unittest.TestSuite(selected))
+    suite = unittest.TestSuite(selected)
+    # IDs above own the report inventory. TestSuite must be the only owner of
+    # case objects so its ordinary per-case release can retire Qt resources.
+    del cases, selected
+    result = unittest.TextTestRunner(verbosity=1, buffer=True, durations=15,resultclass=TimedResult).run(suite)
     elapsed=time.monotonic()-started
     ok = (result.wasSuccessful() and not result.skipped and not result.expectedFailures
           and result.testsRun == len(ids))
@@ -268,6 +323,7 @@ def main():
 
 
 if __name__ == '__main__':
+    _bootstrap_cocoa_test_process()
     if any(option in sys.argv for option in ('--suite','--list-suites','--plan','--help','-h')):
         raise SystemExit(main())
     # Each process owns separate disposable Qt state, including modules which

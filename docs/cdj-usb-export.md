@@ -85,7 +85,8 @@ iPod exports likewise continue through their own guarded planning/commit path
 without an extra first-generation plan confirmation. USB Export and drops
 are additive to the existing library: only the selected playlists are reconciled,
 without applying later source edits to unrelated previously exported playlists;
-Save to USB applies explicit preference edits. None adds a second prepared-plan
+Preference gestures apply automatically through durable admission and verified
+readback, without a Save to USB button or routine footer notice. None adds a second prepared-plan
 confirmation. Drops prepare selected new/changed inputs only. Unchanged native
 records may be adopted by source identity, counters and metadata, without reading
 USB media. Existing audio placement survives display-only changes. Replacing a selected
@@ -137,8 +138,10 @@ of a catalog path, including FAT's decomposed names. Case-only aliases, multiple
 equivalent directory entries, links and mount changes still refuse. Each existing
 path component receives a fresh no-follow identity check; directory-name lists
 are reused only while their observed identity and change stamps match.
-Progress separates preflight, copying and finalization, weights copied files by
-bytes and reports the active filename and byte count within large copies. A
+Progress separates checking, copying, library writing and finalization. Copying
+uses actual song bytes and unique completed songs; other phases have no guessed
+overall percentage or internal file/task count. A fixed measured average follows
+the phase caption; filename and exact current bytes remain in its tooltip. A
 completed progress bar requires the joined successful result, not the last file.
 After a successful write, stale visible song rows are cleared with a browse
 notice while settings drafts and view state survive. A deliberate USB/tab click
@@ -159,9 +162,15 @@ panels. Native name differs from the real macOS volume name. Shared headers use
 26 points; song/detail rows and empty stripes match the 24-point regular browser.
 Actual USB-song activation validates selected device audio/analysis in the shared
 read lane and loads a separate device ID without substituting Mac audio or source
-cue overlays. Views retain per-volume tab, hierarchy, selection and scroll.
+cue overlays. First entry after launch opens Overview; later visits in the same
+session retain the tab. Hierarchy, selection and scroll remain saved.
 In the playlist browser, clicking a folder or playlist expands/collapses it;
-only song rows receive selection highlighting. Checkbox actions remain separate.
+only song rows receive selection highlighting. Folder checkboxes capture explicit
+subtree deletion, including empty folders; separately checking all leaves never
+authorizes their parent. A nested source-folder export starts at that selected
+folder, preserving its descendants without adding unselected ancestors. Source
+identity and canonical ancestry remain unchanged. Dragging a source selection
+onto the USB preserves the browser location. Checkbox actions remain separate.
 Native playlist membership IDs keep distinct records' metadata and covers
 separate even when those records reference the same audio file. Artwork badges
 describe the USB catalog reference rather than the current Mac artwork cache.
@@ -172,7 +181,9 @@ column. Color edits the eight comment titles. Explicit saves patch requested
 classic and Plus rows, preserving unknown flags and unrelated catalog content.
 The sort menu never rewrites playlist membership order. Active/inactive lists
 have contrasting panels and visible borders. Color inputs sit directly beside
-their dots without a duplicate colored name.
+their dots without a duplicate colored name. Edits apply quietly through the
+shared durable queue. Inline failures retain drafts for Retry or explicit Discard;
+older acknowledgements cannot overwrite newer edits. Eject drains accepted saves.
 
 My Settings edits 44 player/mixer fields directly on the USB. Global My Settings
 in SoundBox Settings seeds once from the active recognized USB profile. Save to
@@ -233,15 +244,22 @@ fields stay hidden when older header state is restored; deliberate selections
 that exceed the viewport can scroll. Progress/count/Cancel share a fixed-height
 footer and cannot resize the browser.
 
-The ordinary USB menu is Export, Delete playlists, Eject, including the USB entry
-alongside an iPod. USB targets never Sync. Overwrite confirms the selected existing
+The generic USB menu is Export, Delete playlists, Reformat USB, Eject, in that
+order. The USB entry alongside an iPod keeps Export, Delete playlists, Eject.
+USB targets never Sync. Overwrite confirms the selected existing
 native playlist names before export. Delete confirms selected native leaf IDs,
 rechecks all three catalogs and preserves shared/unselected/unowned content.
 The iPod companion is the same USB surface and backend, with an explicit scoped
 admission that cannot touch stock/Rockbox namespaces. One physical mount still
 owns serialization and Eject. My Settings remains in the shared USB tabs.
 
-The retained, separately guarded formatting backend is outside this music menu.
+Generic USB Overview and its context menu offer Reformat USB…. The Overview
+request binds its displayed snapshot and current mount session. The menu binds
+the right-clicked target's role, mount session and volume UUID, independently of
+the selected device or loaded Overview, and rechecks them when triggered. Both
+refuse busy or replaced targets; formatting never appears for stock, dual,
+Rockbox or iPod USB roles. The existing,
+separately guarded formatting backend remains responsible for physical admission.
 It presents the real volume name, capacity/affected mounted partitions and
 FAT32/exFAT choice, then requires its destructive confirmation. It revalidates the
 physical external USB and source separation (including native analysis paths).

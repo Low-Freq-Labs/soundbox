@@ -992,7 +992,7 @@ class MetadataController(QObject):
                 uuid=track.source_uuid,path=track.source_native_path or str(track.path)))
             fields=self.display_fields(track)
             row=w._row_for(track) if hasattr(w,'_row_for') else engine.track_row(track,w.overrides,w.titles,
-                registry=w.lib.artist_registry,junk=w._title_junk(),
+                registry=w.lib.artist_registry,junk=w._title_junk(),library=w.lib,
                 cleanup=metadata_cleanup_policy.choice_for(w.settings,w.lib)=='clean')
             row.update({field:value for field,value in w.settings.get('track_info',{}).get(track.track_id,{}).items()
                         if field in ('title','artist')})
@@ -1289,7 +1289,7 @@ class MetadataController(QObject):
         if track is None or track_id in getattr(w.lib,'source_binding_issues',{}):
             w._flash_status('Refresh the song identity before editing metadata',12);return False
         cleanup=metadata_cleanup_policy.choice_for(w.settings,w.lib)=='clean'
-        previous=engine.track_row(track,w.overrides,w.titles,registry=w.lib.artist_registry,junk=w._title_junk(),
+        previous=engine.track_row(track,w.overrides,w.titles,registry=w.lib.artist_registry,junk=w._title_junk(),library=w.lib,
             cleanup=metadata_cleanup_policy.choice_for(w.settings,w.lib)=='clean')
         previous.update({field:value for field,value in w.settings.get('track_info',{}).get(track_id,{}).items()
                          if field in ('title','artist')})
@@ -1339,12 +1339,12 @@ class MetadataController(QObject):
                    for t in w.lib.tracks_by_id.values()]
             trusted=[t.artist for t in w.lib.tracks_by_id.values() if t.artist]+[v for v in artists.values() if v.strip()]
             registry=metadata.build_registry(bases,trusted,w.aliases,cleanup_enabled=cleanup)
-        effective=engine.track_row(track,artists,titles,registry=registry,junk=w._title_junk(),
+        effective=engine.track_row(track,artists,titles,registry=registry,junk=w._title_junk(),library=w.lib,
             cleanup=metadata_cleanup_policy.choice_for(w.settings,w.lib)=='clean')
         if 'artist' in changes and not changes['artist'].strip():
             effective['artist']=registry.canonical(origin['automatic']) if registry else origin['automatic']
-            effective['title']=metadata.effective_title(track_id,track.name,effective['artist'],titles,w._title_junk(),
-                cleanup=cleanup,source_artist=track.artist,registry=registry)
+            effective['title']=engine.effective_pair(track,{track_id:effective['artist']},titles,
+                library=w.lib,registry=registry,junk=w._title_junk(),cleanup=cleanup)[0]
         if 'title' in changes and not changes['title'].strip():effective['title']=origin['automatic_title']
         info=dict(w.settings.get('track_info',{}).get(track_id,{}))
         for field in ('title','artist'):

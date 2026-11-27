@@ -125,6 +125,12 @@ def _catalog(library, playlists, previous, all_playlists, additive, standalone=(
     next_playlist = int(previous['next_playlist_id'])
     jobs = {manifest.playlist_key(p):p for p in playlists} if additive else _selected(
         library,playlists,[*library.playlists,*all_playlists],previous)
+    from .export_selection import retain_projection
+    old_selection = {row['key']:row for row in previous['selection']}
+    jobs = {key:(retain_projection(playlist,old_selection[key],
+                source_key='source_folder',destination_key='folder')
+                if 'source_folder' in old_selection.get(key,{}) else playlist)
+            for key,playlist in jobs.items()}
     selection = {p['key']:deepcopy(p) for p in previous['selection']} if additive else {}
     by_source = {int(t['source_id']):int(t['id']) for t in old['track_rows'] if int(t['master_db_id'])==int(library.source_library_id)}
     classic={int(t['id']):t for t in old.get('classic_track_rows',[])}
@@ -144,6 +150,8 @@ def _catalog(library, playlists, previous, all_playlists, additive, standalone=(
     used_sources = set()
     # Existing source->device bindings are exact manifest identities, not titles.
     touched_nodes=set()
+    prunable_ancestors=set()
+    old_nodes={int(row['id']):row for row in old['playlists']}
     def node(source_id, name, parent, folder):
         nonlocal next_playlist
         if source_id not in bindings:
@@ -163,15 +171,27 @@ def _catalog(library, playlists, previous, all_playlists, additive, standalone=(
                               tracks=existing['tracks'] if existing and folder else [])
         return identity
     claimed = {}
-    for old in previous['selection']:
-        claimed[_stable_id('playlist:'+old['key'])] = old['key']
-        for at in range(len(old['folder'])):
-            key = 'folder:'+'/'.join(old['folder'][:at+1])
+    for prior_selection in previous['selection']:
+        claimed[_stable_id('playlist:'+prior_selection['key'])] = prior_selection['key']
+        for at in range(len(prior_selection['folder'])):
+            key = 'folder:'+'/'.join(prior_selection['folder'][:at+1])
             claimed[_stable_id(key)] = key
     for key,playlist in jobs.items():
         parent = 0
-        for at,name in enumerate(playlist.folder_path):
-            folder_key = 'folder:'+'/'.join(playlist.folder_path[:at+1])
+        folder = playlist.destination_folder_path
+        if playlist.export_folder_path is not None:
+            prior=old_selection.get(key,{})
+            old_folder=prior.get('folder',[])
+            for at in range(len(old_folder)):
+                source_id=_stable_id('folder:'+'/'.join(old_folder[:at+1]))
+                ancestor_id=bindings.get(source_id)
+                before=old_nodes.get(ancestor_id,{}) if ancestor_id is not None else {}
+                if (ancestor_id is not None and before.get('folder')
+                        and before.get('source_id')==source_id and ancestor_id not in foreign_playlists
+                        and ancestor_id not in old.get('divergent_playlists',())):
+                    prunable_ancestors.add(ancestor_id)
+        for at,name in enumerate(folder):
+            folder_key = 'folder:'+'/'.join(folder[:at+1])
             source_id = _stable_id(folder_key)
             if source_id in claimed and claimed[source_id]!=folder_key:
                 raise ValueError('CDJ playlist identity collision')
@@ -192,7 +212,9 @@ def _catalog(library, playlists, previous, all_playlists, additive, standalone=(
                 by_source[tid] = next_track;next_track += 1
             members.append(by_source[tid])
         nodes[identity]['tracks'] = members
-        selection[key] = dict(key=key,pid=playlist.pid,name=playlist.name,folder=playlist.folder_path)
+        row = dict(key=key,pid=playlist.pid,name=playlist.name,folder=folder)
+        if playlist.export_folder_path is not None:row['source_folder']=list(playlist.folder_path)
+        selection[key] = row
     for track in standalone:
         tid=int(track.native_id)
         if tid in tracks and tracks[tid].track_id != track.track_id:
@@ -200,6 +222,18 @@ def _catalog(library, playlists, previous, all_playlists, additive, standalone=(
         tracks[tid]=track;used_sources.add(tid)
         if tid not in by_source:
             by_source[tid]=next_track;next_track+=1
+    # Reparenting an explicit folder can retire its now-empty old managed
+    # ancestors. Scope this to the selected playlists' proven prior paths;
+    # other folders and every ancestor still containing any row remain intact.
+    while prunable_ancestors:
+        empty={identity for identity in prunable_ancestors if identity in nodes
+               and not any(int(row['parent'])==identity for row in nodes.values())
+               and not any(int(row['parent'])==identity and int(row['id']) not in touched_nodes
+                           for row in old.get('classic_playlists',()))}
+        if not empty:break
+        for identity in empty:
+            del nodes[identity];touched_nodes.add(identity)
+        prunable_ancestors.difference_update(empty)
     # The native merge prunes only removed selected members with no remaining
     # playlist references. Unrelated collection-only records remain intact.
     final_tracks = set(by_audio.values())

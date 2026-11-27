@@ -89,6 +89,16 @@ static int processes_closed(void) {
             struct proc_bsdinfo info = {0};
             int got = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, sizeof(info));
             if (got == (int)sizeof(info) && info.pbi_status == SZOMB) continue;
+            /* Some defunct processes reject libproc inspection even though
+             * kill(pid, 0) still succeeds. Only an independent exact-PID kernel
+             * zombie observation can exclude them; unknown live processes refuse. */
+            struct kinfo_proc kernel_info = {0};
+            size_t kernel_size = sizeof(kernel_info);
+            int mib[] = { CTL_KERN, KERN_PROC, KERN_PROC_PID, pid };
+            if (sysctl(mib, 4, &kernel_info, &kernel_size, NULL, 0) == 0
+                    && kernel_size == sizeof(kernel_info)
+                    && kernel_info.kp_proc.p_pid == pid
+                    && kernel_info.kp_proc.p_stat == SZOMB) continue;
             if (kill(pid, 0) == -1 && errno == ESRCH) continue;
             result = -1; break;
         }

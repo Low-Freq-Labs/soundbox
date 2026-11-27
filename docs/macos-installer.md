@@ -34,7 +34,9 @@ bundle, including obsolete app code, while preserving AppData, musical curation,
 artwork, credentials, media, conversions and unfinished recovery outside the
 bundle. It never starts or terminates Soundbox. A native preinstall check refuses
 an upgrade while an actual Soundbox bundle or native helper is running; an
-unverifiable process snapshot also refuses. App launch during installation is
+unverifiable live process snapshot also refuses. A failed libproc observation
+can exclude a defunct process only when an independent kernel result has the
+complete expected size, exact requested PID and zombie state. App launch during installation is
 unsupported: keep Soundbox closed until Installer finishes.
 
 ## Build and verify

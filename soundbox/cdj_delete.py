@@ -1,7 +1,6 @@
 """Selected native CDJ playlist deletion; source and other firmware stay separate."""
 from __future__ import annotations
 
-from collections import Counter
 from pathlib import Path
 import json
 import tempfile
@@ -13,20 +12,56 @@ from .cdj_usb import DATABASE_FILES,digest,read_library,run_renderer
 from .operation_control import checkpoint,OperationCancelled
 
 
+def _playlist_graph(rows):
+    """Validate captured node identity and parentage before expanding a root."""
+    by_id={};children: dict[int,list[int]]={}
+    try:
+        for row in rows:
+            if (type(row['id']) not in (str,int) or type(row['parent']) not in (str,int)
+                    or isinstance(row['id'],str) and not row['id'].isdecimal()
+                    or isinstance(row['parent'],str) and not row['parent'].isdecimal()):
+                raise ValueError('Invalid CDJ playlist identity')
+            identity=int(row['id']);parent=int(row['parent'])
+            if (isinstance(row['id'],bool) or isinstance(row['parent'],bool)
+                    or not 0<identity<=0xffffffff or not 0<=parent<=0xffffffff
+                    or identity in by_id or type(row['folder']) is not bool
+                    or not isinstance(row['title'],str)):
+                raise ValueError('Ambiguous CDJ playlist identity')
+            by_id[identity]=row;children.setdefault(parent,[]).append(identity)
+        checked=set()
+        for identity in by_id:
+            trail=set();current=identity
+            while current and current not in checked:
+                if current in trail:raise ValueError('CDJ playlist parent cycle')
+                trail.add(current);parent=int(by_id[current]['parent'])
+                if parent and (parent not in by_id or not by_id[parent]['folder']):
+                    raise ValueError('CDJ playlist has no unambiguous folder parent')
+                current=parent
+            checked.update(trail)
+    except (KeyError,TypeError,OverflowError) as exc:
+        raise ValueError('Invalid captured CDJ playlist graph') from exc
+    return by_id,children
+
+
 def _selected_rows(view,ids):
-    rows=view['playlists'];counts=Counter(int(row['id']) for row in rows)
-    by_id={int(row['id']):row for row in rows}
-    if any(counts[value]!=1 or by_id[value]['folder'] for value in ids):
-        raise ValueError('Select existing CDJ playlists, without folders or ambiguous identities')
-    classic=view.get('classic_playlists',[])
-    classic_counts=Counter(int(row['id']) for row in classic)
-    for row in classic:
-        identity=int(row['id'])
-        if identity not in ids:continue
-        current=by_id[identity]
-        if classic_counts[identity]!=1 or any(row[key]!=current[key] for key in ('title','parent','folder')):
-            raise ValueError('The selected playlist identity differs between native CDJ catalogs')
-    return by_id
+    by_id,children=_playlist_graph(view['playlists'])
+    classic,classic_children=_playlist_graph(view.get('classic_playlists',[]))
+    def expand(rows,descendants):
+        if any(identity not in rows for identity in ids):
+            raise ValueError('Select existing CDJ playlists or folders')
+        selected=set(ids);pending=list(ids)
+        while pending:
+            identity=pending.pop()
+            if not rows[identity]['folder']:continue
+            for child in descendants.get(identity,()):
+                if child not in selected:selected.add(child);pending.append(child)
+        return selected
+    selected=expand(by_id,children)
+    if expand(classic,classic_children)!=selected or any(
+            any(classic[identity][key]!=by_id[identity][key] for key in ('title','parent','folder'))
+            for identity in selected):
+        raise ValueError('The selected folder or playlist identity differs between native CDJ catalogs')
+    return by_id,selected
 
 
 def plan_playlist_delete(target,playlist_ids,*,token,volume_uuid,target_role='generic_usb',
@@ -58,7 +93,8 @@ def plan_playlist_delete(target,playlist_ids,*,token,volume_uuid,target_role='ge
             if value!=digest(dict(native.files)[path]):
                 raise ValueError('The CDJ library changed after playlist selection; select it again')
     previous=current_baseline(native,saved,saved['db_id'] if saved else 0)
-    before=previous['view'];rows=_selected_rows(before,selected)
+    before=previous['view'];rows,selected=_selected_rows(before,selected)
+    ids=sorted(selected)
     workspace=tempfile.TemporaryDirectory(prefix='soundbox-cdj-delete-')
     try:
         root=Path(workspace.name).resolve()
@@ -71,7 +107,7 @@ def plan_playlist_delete(target,playlist_ids,*,token,volume_uuid,target_role='ge
             selected_only=True,selected_track_ids=[],selected_playlist_ids=ids)
         request=root/'delete.json';request.write_text(json.dumps(spec))
         view=run_renderer('merge',root,request,should_cancel=should_cancel)
-        if any(int(row['id']) in selected for row in view['playlists']):
+        if any(int(row['id']) in selected for key in ('playlists','classic_playlists') for row in view[key]):
             raise ValueError('Selected CDJ playlist deletion was not rendered')
         for row in view['playlists']:
             old=rows.get(int(row['id']))

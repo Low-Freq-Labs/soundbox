@@ -320,6 +320,10 @@ QHeaderView::section {{
     text-transform: uppercase; font-size: 11px;
 }}
 QHeaderView::section:hover {{ color: {TEXT_HI}; }}
+/* Qt bolds selected columns; browser headers keep that weight in every view. */
+#TrackTable QHeaderView::section, #ArtistsBrowser QHeaderView::section,
+#DeviceBrowser QHeaderView::section, #StockDevicePlaylists QHeaderView::section,
+#StockDeviceMusic QHeaderView::section, #StockDeviceDetails QHeaderView::section {{ font-weight: bold; }}
 
 QMenu {{ background: {PANEL}; border: 1px solid {BORDER}; }}
 QMenu::item {{ padding: 5px 40px 5px 14px; }}

@@ -65,6 +65,51 @@ class StockDeleteFilesystems(unittest.TestCase):
             firewire_guid='0011223344556677' if classic else '')
         return fixture, database, common
 
+    def test_verified_new_copy_failure_cleans_only_its_exact_fat_entity(self):
+        for replacement in (False, True):
+            with self.subTest(replacement=replacement):
+                fixture = native_fixture.StockIpodSync('test_database_write_failure_removes_only_new_media')
+                fixture.setUp(); self.addCleanup(fixture.doCleanups)
+                target = self.mount / (self._testMethodName + str(replacement))
+                shutil.copytree(fixture.ipod, target)
+                plan = stock_ipod.plan_stock_ipod_sync(
+                    fixture.library, [fixture.playlist], target,
+                    model_number='MA446', filesystem='fat32', usb_family='iPod Video')
+                destination = target / plan.copies[0].relative_path
+                database = target / plan.database_relative_path
+                before = database.read_bytes()
+                write = DeviceSession.atomic_write
+                foreign = b'foreign generated FAT copy'
+
+                def replace_after_ack(relative):
+                    if replacement:
+                        path = target / relative
+                        incoming = path.with_suffix('.foreign')
+                        incoming.write_bytes(foreign); incoming.replace(path)
+
+                def fail_catalog(session, path, data):
+                    if Path(path).name == 'iTunesDB':
+                        raise OSError('Generated FAT database failure')
+                    return write(session, path, data)
+
+                with mock.patch.object(DeviceSession, 'atomic_write', fail_catalog):
+                    with self.assertRaises(stock_ipod.StockIpodError if replacement else OSError) as error:
+                        stock_ipod.commit_stock_ipod_sync(plan, on_track_committed=replace_after_ack)
+                self.assertEqual(database.read_bytes(), before)
+                receipts = list((target / '.soundbox/stock-ipod-recovery').glob('*/plan.json'))
+                self.assertEqual(len(receipts), 1)
+                import json
+                receipt = json.loads(receipts[0].read_bytes())
+                if replacement:
+                    self.assertEqual(error.exception.recovery_status, 'recovery required')
+                    self.assertEqual(destination.read_bytes(), foreign)
+                    self.assertEqual(receipt['transaction_state'], 'recovery required')
+                    self.assertTrue((receipts[0].parent / 'iTunesDB.before').exists())
+                else:
+                    self.assertEqual(error.exception.recovery_status, 'rolled back')
+                    self.assertFalse(destination.exists())
+                    self.assertTrue(receipt['payload_retirement']['complete'])
+
     @contextmanager
     def no_media_or_pixel_reads(self, target):
         opened = Path.open

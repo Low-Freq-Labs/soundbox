@@ -27,11 +27,28 @@ Overwrite confirmation. New exports have no added confirmation. Selected USB
 playlist Delete has one concise confirmation before planning, binds the checked
 native IDs and all three catalog bytes, preserves unrelated rows in both catalogs,
 and retires only exact-owned assets unused by every remaining CDJ playlist.
-Unowned files remain untouched. The USB context menu is Export, Delete playlists,
-Eject; device preferences remain in the ordinary shared USB tabs. Formatting is
-not a music-menu action. The guarded maintenance backend retains its physical
-stock/dual refusal. Tab highlight and visible content follow the same owned stack;
+Unowned files remain untouched. The generic USB context menu is Export, Delete
+playlists, Reformat USB, Eject, in that order. The independent iPod USB role omits
+Reformat USB; device preferences remain in the ordinary shared USB tabs. The
+guarded maintenance backend retains its physical stock/dual refusal. Tab highlight and visible content follow the same owned stack;
 a late saved-page restore or hidden stock page cannot retab the USB surface.
+
+The first device visit after launch opens Overview for USB and iPod; subsequent
+visits may retain the current session's tab. Saved hierarchy/scroll/checks remain
+independent. A source playlist drag onto a device preserves browser navigation.
+Selecting a nested export folder makes that folder the destination root without
+changing canonical source ancestry. Explicit folder-delete checkboxes include
+the captured descendants and empty root; derived all-checked parents grant no
+additional deletion authority.
+
+USB preference gestures durably admit exact attachment/source-bound changes,
+serialize through the existing writer, verify native readback and acknowledge
+only after the worker joins. No Save to USB button or routine footer notice is
+shown. Newer drafts survive older acknowledgements. Failed admission retains
+unsaved input with inline Retry/Discard and a Quit/maintenance barrier. Eject
+waits for accepted saves. Global settings still require deliberate propagation.
+Copy progress counts actual songs/bytes with a fixed average after the phase
+caption; other phases show no guessed overall percentage or internal task count.
 
 An eligible new USB attachment gets one bounded metadata/name-only check for
 the fixed CDJ catalog paths. A missing library offers Configure / Not now once
@@ -1006,7 +1023,7 @@ repository can answer the question.
   reads, off-device catalog preparation and manifest-last publication. Display
   reads may include stable WAL pages in a local copy, never SHM/live USB SQL;
   this grants no publication authority over active SQLite companions. Playlist
-  drops, Export and explicit Save to USB authorize publication. Replacing an
+  drops, Export and explicit USB preference gestures authorize publication. Replacing an
   existing selected playlist requires its named Overwrite confirmation; new
   exports need no additional prepared-plan question. Preserve current native collections/playlists
   across either exporter's writes. Never treat a changed native catalog alone as
@@ -1037,14 +1054,20 @@ repository can answer the question.
   My Settings has44 recognized player/mixer controls, a SoundBox-global logical
   profile seeded from the active USB, and explicit Save to Global / Load Global.
   Existing opaque bytes survive edits; global changes do not auto-propagate.
-  The USB menu is Export, Delete playlists, Eject. Export selects
+  The generic USB menu is Export, Delete playlists, Reformat USB, Eject, in that
+  order; an iPod USB role keeps Export, Delete playlists, Eject. Export selects
   playlists on the left and connected devices on the right; one action queues
   checked targets through the existing serialized device lane. Capture source
   binding and each target mount/UUID, rebind selected playlist IDs before each
   target, and cancel remaining targets on request/shutdown. Each target retains
   its exporter-specific source, identity and recovery guards; normal iPod Export
   adds no second plan review.
-  The separately guarded formatting backend requires concrete destructive confirmation, real physical USB identity,
+  Generic USB Overview also exposes Reformat USB…. Its request binds the
+  displayed snapshot and current mount session. The menu binds the right-clicked
+  target's role, mount session and volume UUID and rechecks them on trigger,
+  independently of later device selection or an Overview cache. Busy, replaced,
+  stock, dual, Rockbox and iPod-USB targets cannot enter formatting there.
+  The existing formatting backend requires concrete destructive confirmation, real physical USB identity,
   source separation and FAT32/exFAT MBR; stock/dual never expose it. HFS+ remains
   excluded. Ordinary iPod menu/erase rules are unchanged. See the CDJ guide.
   Finder-created `._*` AppleDouble files and abandoned `*.sbpart` temporaries
@@ -1567,6 +1590,11 @@ curation, transaction recovery or required offline fixtures.
 2. Back up and hash complete SoundBox state: preserve exact `library.json` plus
    referenced `.state-records/` and materialize portable JSON under the area lock.
    A manifest alone is insufficient. Record cache counts when relevant.
+   If provider metadata may refresh at launch, capture its bounded prelaunch
+   bytes/hashes and row/account comparison inputs privately too; filesystem
+   epochs alone cannot prove retained content after refresh. Record permitted
+   refresh deltas separately from exact retained rows, without reading Keychain
+   credentials. Retire completed payloads after acceptance, keeping small results.
 3. Quit SoundBox gracefully and verify its process exited.
 4. Move the old `/Applications/Soundbox.app` to a temporary rollback directory;
    install with `ditto`. **Never use `rm -rf` for app installation.**

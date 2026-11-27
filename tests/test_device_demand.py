@@ -1,5 +1,6 @@
 """Startup and passive UI work never construct disconnected device surfaces."""
 from pathlib import Path
+from dataclasses import replace
 import sys
 import tempfile
 from threading import Event
@@ -18,18 +19,155 @@ from desktop.export_dialog import ExportSelectionMixin
 from desktop.trees import DEVPATH_ROLE
 
 
+class UsbPreferenceDemand(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):cls.app=QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        from desktop.usb_device_view import UsbDevicePages,UsbSnapshot
+        from desktop.devices import DeviceFacts
+        from soundbox.cdj_usb import CdjLibrary
+        from soundbox import my_settings
+        self.pages=UsbDevicePages();self.addCleanup(self.dispose)
+        files=my_settings.new_files({})
+        self.profile=my_settings.values(files.items())
+        self.native=CdjLibrary((),'Generated',0,0,(),0,tuple(files.items()),preferences={
+            'categories':[(4,4,'TRACK',1,True),(1,1,'GENRE',0,False)],
+            'sorts':[(25,25,'TRACK',1,True),(26,26,'DEFAULT',2,True),(1,1,'GENRE',0,False)],
+            'sub_column':1,'colors':[(i,str(i)) for i in range(1,9)]})
+        self.snapshot=UsbSnapshot(Path('/generated/no-device-io'),7,
+            DeviceFacts(volume_uuid='generated'),native=self.native)
+        self.device=SimpleNamespace(kind='generic_usb',label='USB',cdj_export=True)
+
+    def dispose(self):
+        self.pages.close();self.pages.deleteLater();self.app.processEvents()
+
+    def publish(self,snapshot):
+        self.pages.set_snapshot(snapshot,name='Generated',profile=self.device,free=400,drift=None)
+
+    def test_each_preference_tab_is_complete_before_its_first_visible_frame(self):
+        self.publish(self.snapshot)
+        ready=[]
+        def revealed(index):
+            widget=self.pages.stack.currentWidget()
+            if index in (2,3):
+                ready.append((index,widget.active.count(),widget.inactive.count()))
+            elif index==4:ready.append((index,widget.column.currentData()))
+            elif index==5:ready.append((index,[edit.text() for edit in widget.controls.values()]))
+            elif index==6:ready.append((index,len(widget.controls),widget.profile))
+        self.pages.stack.currentChanged.connect(revealed)
+        self.pages.resize(900,600);self.pages.show();self.app.processEvents()
+        for index in range(2,7):self.pages.set_page(index)
+        self.assertEqual(ready,[(2,1,1),(3,2,1),(4,1),(5,[str(i) for i in range(1,9)]),
+                                (6,44,self.profile)])
+        self.assertEqual(self.pages.stack.count(),7)
+        saves=[];self.pages.auto_settings_requested.connect(lambda binding,changes:saves.append((binding,changes)))
+        self.pages.set_page(5)
+        edit=self.pages.colors.controls['8'];edit.setFocus();edit.selectAll()
+        QTest.keyClicks(edit,'Energy')
+        QTest.keyClick(edit,Qt.Key_Tab)
+        self.assertEqual(saves,[((self.snapshot,'generic_usb'),{'colors':{'8':'Energy'}})])
+
+    def test_saved_settings_tab_is_hydrated_before_snapshot_reveal(self):
+        self.pages._states={'generated':{'page':6}}
+        self.pages.set_global_profile(self.profile)
+        self.publish(self.snapshot)
+        self.assertEqual(self.pages.stack.currentIndex(),6)
+        self.assertIs(self.pages.stack.currentWidget(),self.pages.my_settings)
+        self.assertEqual(len(self.pages.my_settings.controls),44)
+        self.assertEqual(self.pages.my_settings.profile,self.profile)
+        self.assertFalse(self.pages.my_settings.save.isEnabled())
+        for name in ('categories','sorts','column','colors'):
+            self.assertNotIn(name,vars(self.pages))
+
+    def test_unopened_tabs_keep_latest_valid_data_through_notice_and_global_update(self):
+        from soundbox import my_settings
+        self.publish(self.snapshot)
+        files=my_settings.new_files({'MYSETTING.DAT':{'tempo_range':'wide'}})
+        updated=replace(self.snapshot,native=replace(self.native,files=tuple(files.items())))
+        self.publish(updated)
+        self.publish(replace(updated,native=None,notice='Select a tab to read the USB'))
+        self.pages.set_global_profile(self.profile)
+        for name in ('categories','sorts','column','colors','my_settings'):
+            self.assertNotIn(name,vars(self.pages))
+        self.pages.set_page(6)
+        self.assertEqual(self.pages.my_settings.profile,my_settings.values(files.items()))
+        self.assertEqual(self.pages.my_settings.global_profile,self.profile)
+        self.pages.set_page(2)
+        self.assertEqual(self.pages.categories.order(),[4])
+
+    def test_settings_draft_survives_same_device_refresh_but_never_another_device(self):
+        self.publish(self.snapshot);self.pages.set_page(6)
+        editor=self.pages.my_settings
+        control=editor.controls['MYSETTING.DAT','tempo_range']
+        control.setCurrentIndex(control.findData('wide'))
+        self.assertTrue(editor.save.isEnabled())
+        self.publish(replace(self.snapshot))
+        self.assertEqual(editor.current()['MYSETTING.DAT']['tempo_range'],'wide')
+        other=replace(self.snapshot,target=Path('/generated/other-device'),
+                      facts=replace(self.snapshot.facts,volume_uuid='other'))
+        self.publish(other)
+        self.assertEqual(editor.current(),self.profile)
+        self.assertFalse(editor.save.isEnabled())
+
+    def test_equal_device_preferences_keep_own_drafts_and_reset_on_device_switch(self):
+        self.publish(self.snapshot)
+        self.pages.controls['device_name'].setText('Own unsaved name')
+        categories=self.pages.categories
+        categories.inactive.setCurrentRow(0);categories._move(categories.inactive,categories.active)
+        self.pages.colors.controls['8'].setText('Own color')
+        self.publish(replace(self.snapshot))
+        self.assertEqual(self.pages.controls['device_name'].text(),'Own unsaved name')
+        self.assertEqual(categories.order(),[4,1])
+        self.assertEqual(self.pages.colors.controls['8'].text(),'Own color')
+        self.publish(replace(self.snapshot,target=Path('/generated/other-device'),
+                             facts=replace(self.snapshot.facts,volume_uuid='other')))
+        self.assertEqual(self.pages.controls['device_name'].text(),'Generated')
+        self.assertEqual(categories.order(),[4])
+        self.assertEqual(self.pages.colors.controls['8'].text(),'8')
+
+    def test_text_auto_apply_keeps_original_attachment_and_latest_name_through_older_ack(self):
+        self.publish(self.snapshot);self.pages.show();self.app.processEvents()
+        edits=[]
+        self.pages.auto_settings_requested.connect(lambda binding,changes:edits.append((binding,changes)))
+        name=self.pages.controls['device_name'];name.setFocus();name.selectAll();QTest.keyClicks(name,'First')
+        self.pages.flush_auto_settings()
+        QTest.keyClick(name,Qt.Key_A,Qt.ControlModifier);name.selectAll();QTest.keyClicks(name,'Latest')
+        acknowledged=replace(self.snapshot,native=replace(self.native,name='First'))
+        self.publish(acknowledged)
+        self.assertEqual(self.pages.controls['device_name'].text(),'Latest')
+        self.assertEqual(edits[0],((self.snapshot,'generic_usb'),{'device_name':'First'}))
+        self.assertEqual(edits[1],((self.snapshot,'generic_usb'),{'device_name':'Latest'}))
+        other=replace(self.snapshot,target=Path('/generated/another'),
+                      facts=replace(self.snapshot.facts,volume_uuid='another'))
+        self.publish(other)
+        self.assertEqual(self.pages.controls['device_name'].text(),'Generated')
+        self.assertEqual(len(edits),2)
+
+    def test_auto_choice_can_undo_a_queued_choice_without_hydration_emitting_edits(self):
+        self.publish(self.snapshot);self.pages.set_page(6)
+        edits=[];self.pages.auto_settings_requested.connect(lambda binding,changes:edits.append(changes))
+        control=self.pages.my_settings.controls['MYSETTING.DAT','tempo_range']
+        original=control.currentData()
+        control.setCurrentIndex(control.findData('wide'));control.activated.emit(control.currentIndex())
+        control.setCurrentIndex(control.findData(original));control.activated.emit(control.currentIndex())
+        self.publish(replace(self.snapshot))
+        self.assertEqual(edits,[{'my_settings':{'MYSETTING.DAT':{'tempo_range':'wide'}}},
+                                {'my_settings':{'MYSETTING.DAT':{'tempo_range':original}}}])
+
+
 class DeviceDemand(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
-    def window(self, *, providers=None):
+    def window(self, *, providers=None, initial_state=None):
         area = tempfile.TemporaryDirectory(); self.addCleanup(area.cleanup)
         # Suppress even the constructor's discovery request; every target below
         # is a synthetic profile and no native source/provider is admitted.
         self.enterContext(mock.patch.object(MainWindow, '_refresh_devices'))
         self.enterContext(mock.patch('soundbox.rekordbox_db.load_live', side_effect=AssertionError('live source')))
-        win = MainWindow(providers=providers, isolated_dir=Path(area.name))
+        win = MainWindow(providers=providers, isolated_dir=Path(area.name),initial_state=initial_state)
         self.addCleanup(win.deleteLater)
         self.addCleanup(win.shutdown)
         return win
@@ -81,6 +219,8 @@ class DeviceDemand(unittest.TestCase):
         self.assertNotIn('stock_ipod_pages', vars(win))
         self.assertIs(win.usb_device_pages, pages)
         self.assertEqual(win.device_content_stack.count(), 3)
+        for name in ('categories','sorts','column','colors','my_settings'):
+            self.assertNotIn(name,vars(pages))
 
     def test_ipod_view_constructs_only_ipod_before_queued_read(self):
         win = self.window()
@@ -91,6 +231,52 @@ class DeviceDemand(unittest.TestCase):
         self.assertIs(win.device_content_stack.widget(1), win.stock_ipod_pages)
         self.assertEqual(win.device_content_stack.currentIndex(), 1)
         self.assertNotIn('usb_device_pages', vars(win))
+
+    def test_first_device_visit_ignores_last_launch_tab_but_later_visits_keep_current_tab(self):
+        from desktop.usb_device_view import UsbSnapshot
+        from desktop.devices import DeviceFacts
+        from soundbox.stock_ipod_info import StockIpodSnapshot
+        for stock in (False,True):
+            with self.subTest(stock=stock):
+                remembered={'page':2 if stock else 6,'views':{},'expanded':[],'checked':[],
+                            'selected':'','scroll':0,'overview_scroll':0}
+                saved={'device_views':{'stock' if stock else 'usb':{'generated':remembered}}}
+                win=self.window(initial_state={'settings':saved})
+                item=self.select(win,SimpleNamespace(kind='stock_ipod' if stock else 'generic_usb',
+                                                     has_stock_ipod=stock))
+                path=item.data(0,DEVPATH_ROLE)
+                if stock:
+                    snapshot=StockIpodSnapshot(Path(path),'Generated','generated','FAT32','USB','fixture',
+                        True,1000,500,'','','iPod','Unknown','generated',1,2,0x19,0,'hash',0,0,'',0,(),())
+                    win._stock_view_cache[path]=(snapshot,None)
+                else:
+                    win._usb_view_cache[path]=UsbSnapshot(Path(path),7,DeviceFacts(volume_uuid='generated'))
+                with mock.patch.object(win,'_schedule_stock_artwork'):
+                    win._on_device_click(item,0)
+                    pages=win.stock_ipod_pages if stock else win.usb_device_pages
+                    self.assertEqual(pages.stack.currentIndex(),0)
+                    win._set_device_tab(2 if stock else 1)
+                    win.stack.setCurrentIndex(0)
+                    win._on_device_click(item,0)
+                    self.assertEqual(pages.stack.currentIndex(),2 if stock else 1)
+
+    def test_explicit_device_open_prepares_settings_without_revealing_it_or_building_stock(self):
+        from desktop.usb_device_view import UsbSnapshot
+        from desktop.devices import DeviceFacts
+        from soundbox.cdj_usb import CdjLibrary
+        from soundbox import my_settings
+        win=self.window();item=self.select(win,SimpleNamespace(kind='generic_usb',has_stock_ipod=False))
+        path=item.data(0,DEVPATH_ROLE);files=my_settings.new_files({})
+        native=CdjLibrary((),'Generated',0,0,(),0,tuple(files.items()))
+        win._usb_view_cache[path]=UsbSnapshot(Path(path),7,DeviceFacts(volume_uuid='generated'),native=native)
+        win._on_device_click(item,0)
+        pages=win.usb_device_pages
+        self.assertEqual(pages.stack.currentIndex(),0)
+        self.wait_for(lambda:bool(getattr(vars(pages).get('_preparing_my_settings'),'prepared',False)))
+        self.assertEqual(pages.stack.currentIndex(),0)
+        self.assertEqual(pages.my_settings.profile,my_settings.values(files.items()))
+        self.assertEqual(len(pages.my_settings.controls),44)
+        self.assertNotIn('stock_ipod_pages',vars(win))
 
     def test_settings_ready_before_show_first_open_uses_current_preferences_and_preserves_view(self):
         win = self.window()
@@ -190,6 +376,42 @@ class DeviceDemand(unittest.TestCase):
         self.assertEqual(win.settings['cdj_my_settings'], profile)
         self.assertEqual(win._global_my_settings.profile, profile)
         self.assertNotIn('usb_device_pages', vars(win))
+
+    def test_global_usb_profile_updates_do_not_build_hidden_device_editor(self):
+        from desktop.usb_device_view import UsbSnapshot
+        from desktop.devices import DeviceFacts
+        from soundbox.cdj_usb import CdjLibrary
+        from soundbox import my_settings
+        win=self.window()
+        item=self.select(win,SimpleNamespace(kind='generic_usb',has_stock_ipod=False))
+        path=item.data(0,DEVPATH_ROLE)
+        files=my_settings.new_files({})
+        profile=my_settings.values(files.items())
+        native=CdjLibrary((),'Generated',0,0,(),0,tuple(files.items()))
+        snapshot=UsbSnapshot(Path(path),7,DeviceFacts(volume_uuid='generated'),native=native)
+        win.settings['cdj_my_settings']=profile
+        win._usb_view_cache[path]=snapshot
+        win._on_device_click(item,0)
+        pages=win.usb_device_pages
+        self.assertNotIn('my_settings',vars(pages))
+        fresh={name:dict(values) for name,values in profile.items()}
+        fresh['MYSETTING.DAT']['tempo_range']='wide'
+        win._save_global_my_settings(fresh)
+        self.assertNotIn('my_settings',vars(pages))
+        failed={name:dict(values) for name,values in fresh.items()}
+        failed['MYSETTING.DAT']['tempo_range']='six'
+        with mock.patch.object(win,'_save_state',return_value=False):
+            win._save_global_my_settings(failed)
+        self.assertEqual(win.settings['cdj_my_settings'],fresh)
+        self.assertEqual(pages.global_profile,fresh)
+        self.assertNotIn('my_settings',vars(pages))
+        observed=[]
+        pages.stack.currentChanged.connect(lambda index:observed.append(
+            (index,len(pages.my_settings.controls),pages.my_settings.global_profile)) if index==6 else None)
+        win._set_device_tab(6)
+        self.assertEqual(observed,[(6,44,fresh)])
+        self.assertEqual(pages.my_settings.profile,profile)
+        self.assertIs(pages.stack.currentWidget(),pages.my_settings)
 
     def start_connection(self, win, service):
         factory = win.providers.connections

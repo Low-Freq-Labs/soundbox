@@ -5,18 +5,25 @@ from pathlib import Path
 from copy import deepcopy
 from dataclasses import dataclass, replace
 import threading
+import time
 
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtWidgets import QDialog, QDialogButtonBox, QLabel, QMessageBox, QTreeWidget, QTreeWidgetItem, QVBoxLayout
 
-from .devices import device_facts, device_target_profile, human
+from .devices import device_facts, device_target_profile
+from .device_progress import CopyAverage
 
 
-def _cdj_publication_value(state, completed, fraction=0):
-    index=min(max(0,completed),len(state['weights']))
-    written=state['prefix'][index]
-    if index<len(state['weights']):written+=state['weights'][index]*fraction
-    return 750+round(220*written/max(1,state['prefix'][-1]))
+def _cdj_progress_bar(host, done=None, total=0):
+    """Show known song-copy work; other CDJ phases have no overall percentage."""
+    host.progress.setTextVisible(False)
+    if done is None or total <= 0:
+        host.progress.setRange(0, 0)
+    else:
+        host.progress.setRange(0, 1000)
+        # The final endpoint belongs to joined successful completion, not copy.
+        host.progress.setValue(min(999, max(0, done) * 1000 // total))
+    host.progress.setVisible(True)
 
 
 def _cdj_progress(host, worker, state, stage, done, total, label):
@@ -25,34 +32,63 @@ def _cdj_progress(host, worker, state, stage, done, total, label):
             or getattr(host,'_cancelling',False)):
         return
     if type(done)is not int or type(total)is not int or done<0 or total<0:return
-    fraction=min(done,total)/total if total else 0
-    byte_counts=False
     if stage=='CDJ checking':
-        message='Checking USB files';value=650+round(100*fraction)
+        message='Checking USB files'
     elif stage=='CDJ saving':
-        message='Saving USB update';value=750
+        message='Saving USB update'
     elif stage=='CDJ publishing':
-        state['published']=done;state['publication_total']=total
-        message='Updating USB';value=_cdj_publication_value(state,done)
+        message='Updating USB'
     elif stage=='CDJ copying':
         song=label.startswith('Contents/')
-        message=('Copying '+Path(label).name) if song else 'Writing USB library'
-        value=_cdj_publication_value(state,state['published'],fraction)
-        byte_counts=True
+        message='Copying songs' if song else 'Writing USB library'
     elif stage=='CDJ finalizing':
-        message='Saving USB library';value=970
+        message='Saving USB library'
     elif stage=='CDJ cleanup':
-        message='Finishing USB update';value=980+round(10*fraction)
+        message='Finishing USB update'
     elif stage=='CDJ finished':
-        message='Finishing USB update';value=990
+        message='Finishing USB update'
     else:return
-    state['value']=max(state['value'],min(990,value))
-    host._set_device_progress(state['value'])
+    if stage=='CDJ copying' or stage=='CDJ publishing' and 'copy_average' in state:
+        now=time.monotonic()
+        average=state.get('copy_average')
+        if average is None:average=state['copy_average']=CopyAverage()
+        if stage=='CDJ copying':
+            previous=average.copied
+            average.observe(label,done,now)
+            if song:
+                state['song_copied']=state.get('song_copied',0)+average.copied-previous
+                if state.get('song_path') != label:
+                    state['song_path']=label;state['song_complete']=False
+                if total>0 and done>=total and not state['song_complete']:
+                    state['songs_completed']=state.get('songs_completed',0)+1
+                    state['song_complete']=True
+                if state.get('song_count',0)>0:
+                    unit='song' if state['song_count']==1 else 'songs'
+                    message=f'Copying {state.get("songs_completed",0):,} of {state["song_count"]:,} {unit}'
+            state['copy_detail']=(message,label,done,total)
+            state['copy_family']='songs' if song else 'library'
+        if label.startswith('Contents/'):
+            _cdj_progress_bar(host,state.get('song_copied',0),state.get('song_total',0))
+        else:
+            _cdj_progress_bar(host)
+        message,label,copied,total=state['copy_detail']
+        sample=average.sample(now,force=state.get('footer_family')!=state['copy_family'])
+        if sample is None:return
+        state['footer_family']=state['copy_family']
+        host._start_pulse(message,keep_count=True)
+        count=state.get('song_count',0)
+        unit='song' if count==1 else 'songs'
+        caption=f'Copying {count:,} of {count:,} {unit}...' if count else 'Copying songs...'
+        host._set_status_rate(sample.bytes_per_second,caption=caption)
+        host.status_label.setToolTip(message+'\n'+label+
+            f'\nCurrent file: {copied:,} / {total:,} bytes\nCopied: {sample.copied:,} bytes'+
+            (f'\nAverage: {sample.bytes_per_second:,.0f} bytes/s' if sample.bytes_per_second is not None else ''))
+        return
+    _cdj_progress_bar(host)
+    state['footer_family']=stage
     host._start_pulse(message,keep_count=True)
-    host._set_status_count(done,total,byte_counts=byte_counts)
-    units=(human(done)+' / '+human(total)) if byte_counts else (str(done)+' / '+str(total))
-    host.status_label.setToolTip(message+('\n'+Path(label).name if label.startswith('Contents/') else '')
-                                 +('\n'+units if total else ''))
+    host._set_status_count()
+    host.status_label.setToolTip(message)
 
 
 def _source_edits_pending(host):
@@ -142,21 +178,21 @@ def _delete_playlists(native):
         rows[identity]=row
     result={}
     for identity,row in rows.items():
-        if row.folder or identity in {'','0','root'}:continue
+        if identity in {'','0','root'}:continue
         names=[row.title];parent=str(row.parent);seen={identity}
         while parent not in {'','0','root'}:
             if parent in seen or parent not in rows or not rows[parent].folder:
                 raise ValueError('USB playlist folders are ambiguous; refresh the USB')
             seen.add(parent);names.insert(0,rows[parent].title);parent=str(rows[parent].parent)
-        result[identity]=' / '.join(names)
+        result[identity]=' / '.join(names)+(' (folder)' if row.folder else '')
     return result
 
 
 class CdjDeleteChoices(QDialog):
     def __init__(self, rows, parent=None):
         super().__init__(parent)
-        self.setWindowTitle('Delete USB playlists');self.resize(440,360)
-        layout=QVBoxLayout(self);layout.addWidget(QLabel('Choose playlists to delete from the USB.'))
+        self.setWindowTitle('Delete USB playlists and folders');self.resize(440,360)
+        layout=QVBoxLayout(self);layout.addWidget(QLabel('Choose playlists or folders to delete from the USB.'))
         self.tree=QTreeWidget();self.tree.setHeaderLabel('Playlist');layout.addWidget(self.tree)
         for identity,title in rows.items():
             item=QTreeWidgetItem([title]);item.setData(0,Qt.UserRole,identity)
@@ -182,6 +218,15 @@ def _delete_scope(host):
     generation=(repository,repository.generation,repository.area.generation) if repository is not None else None
     return ((str(library.source),library.source_kind,library.source_library_id),
             frozenset(source_paths(library)),generation)
+
+
+def _format_paths_owned(host):
+    """Path-changing import/relink results remain owned until retirement."""
+    search=getattr(host,'_relink_search',None)
+    worker=search.get('worker') if isinstance(search,dict) else None
+    return bool(getattr(host,'_import_location_worker',None) is not None
+        or getattr(getattr(host,'_import_tasks',None),'pending',0)
+        or worker is not None and worker in getattr(host,'_oneshots',()))
 
 
 @dataclass(frozen=True)
@@ -276,11 +321,10 @@ class CdjDeviceMixin:
                 recovery_root=self._data_file.parent/'cdj-recovery',should_cancel=cancel)
         self._release_eject_ready();self._exporting=True;self._cdj_plan=None
         worker=CdjWorker(prepare);self._cdj_worker=worker
-        worker.progress.connect(lambda done,total,_label:self._set_device_progress(round(650*done/max(1,total))))
         worker.finished.connect(lambda w=worker:self._finish_device_result_worker('_cdj_worker',w,
             lambda result:self._review_cdj_plan(dev,result,w.stop.is_set(),intent='initialize',
                                                request_current=lambda:request.current(self))))
-        self._set_device_progress(0);self.progress.setVisible(True);self.cancel_btn.setVisible(True)
+        _cdj_progress_bar(self);self.progress.setVisible(True);self.cancel_btn.setVisible(True)
         self._start_pulse('Preparing CDJ USB configuration')
         self._start_device_worker(worker,dev,'plan-cdj-initialize');self._sync_cue_editing()
 
@@ -343,8 +387,9 @@ class CdjDeviceMixin:
                 if not current():finish(stale());return
                 names='\n'.join(rows[identity] for identity in ids[:12])
                 if len(ids)>12:names+=f'\n…and {len(ids)-12} more'
-                answer=QMessageBox.question(self,'Delete USB playlists?',
-                    'Delete these playlists from the USB?\n\n'+names,
+                answer=QMessageBox.question(self,'Delete USB playlists and folders?',
+                    'Delete these playlists and folders from the USB?\n'
+                    'Selected folders include their playlists and subfolders.\n\n'+names,
                     QMessageBox.Yes|QMessageBox.Cancel,QMessageBox.Cancel)
                 if answer!=QMessageBox.Yes:finish(OperationCancelled('USB playlist delete cancelled'));return
                 if not current():finish(stale());return
@@ -360,12 +405,11 @@ class CdjDeviceMixin:
             except Exception as exc:finish(exc)
         def start(operation,complete,label,intent):
             worker=CdjWorker(operation);self._cdj_worker=worker
-            worker.progress.connect(lambda done,total,_label:self._set_device_progress(round(650*done/max(1,total))))
             worker.finished.connect(lambda w=worker:self._finish_device_result_worker('_cdj_worker',w,
                 lambda value:complete(value,w.stop.is_set())))
             self._start_pulse(label);self._start_device_worker(worker,dev,intent)
         self._release_eject_ready();self._exporting=True;self._cdj_plan=None
-        self._set_device_progress(0);self.progress.setVisible(True);self.cancel_btn.setVisible(True)
+        _cdj_progress_bar(self);self.progress.setVisible(True);self.cancel_btn.setVisible(True)
         start(read,lambda value,cancelled:finish(OperationCancelled('USB playlist delete cancelled'))
               if cancelled else reviewed(value),'Reading USB playlists','inspect-cdj-delete')
         self._sync_cue_editing()
@@ -422,7 +466,9 @@ class CdjDeviceMixin:
                 if (source_binding is not None and source_binding!=(str(self.lib.source),self.lib.source_library_id)
                         or selected_native-fresh.keys() or any(identity not in fresh_nodes
                             or fresh_nodes[identity].get('UUID')!=uuid or fresh_nodes[identity].get('rb_local_deleted')!=0
-                            for identity,uuid in selected_uuids.items())):
+                            for identity,uuid in selected_uuids.items())
+                        or any(p.export_folder_path is not None and fresh[p.pid].folder_path!=p.folder_path
+                               for p in playlists if p.pid in selected_native)):
                     self._stop_pulse();self.cancel_btn.setVisible(False)
                     self._flash_status('Library or selected playlist changed; choose the playlist again',15)
                     if getattr(self,'_export_batch',None):
@@ -430,7 +476,10 @@ class CdjDeviceMixin:
                         self._maybe_finish_export_target()
                     return
                 if selected_native:
-                    selected=[replace(fresh[p.pid],export_key=p.export_key) if p.pid in selected_native else p
+                    selected=[replace(fresh[p.pid],export_key=p.export_key,
+                                      export_folder_path=list(p.destination_folder_path)
+                                      if p.export_folder_path is not None else None)
+                              if p.pid in selected_native else p
                               for p in playlists]
                 self._begin_cdj_export(dev, selected, settings=settings, from_drop=from_drop,drop_target=drop_target,standalone=standalone,target_role=target_role)
                 if getattr(self,'_export_batch',None):self._maybe_finish_export_target()
@@ -481,11 +530,9 @@ class CdjDeviceMixin:
                 **({'target_role':target_role} if target_role!='generic_usb' else {}))
         worker = CdjWorker(operation)
         self._cdj_worker = worker
-        worker.progress.connect(lambda done, total, label: self._set_device_progress(
-            round(650*done/max(1, total))))
         worker.finished.connect(lambda w=worker: self._finish_device_result_worker(
             '_cdj_worker', w, lambda result: self._review_cdj_plan(dev, result, w.stop.is_set(), from_drop=from_drop)))
-        self._set_device_progress(0)
+        _cdj_progress_bar(self)
         self.progress.setVisible(True)
         self._start_pulse('Preparing USB settings' if settings is not None else 'Preparing CDJ export')
         self._start_device_worker(worker, dev, 'plan-cdj')
@@ -531,23 +578,18 @@ class CdjDeviceMixin:
                 plan.close()
         worker = CdjWorker(publish)
         self._cdj_worker = worker
-        weights=tuple(max(1,getattr(change,'size',0)) for change in plan.changes)
-        prefix=[0]
-        for weight in weights:prefix.append(prefix[-1]+weight)
-        state={'value':650,'published':0,'publication_total':len(plan.changes),
-               'weights':weights,'prefix':tuple(prefix)}
-        def file_progress(done,total,_label):
-            if self._cdj_worker is not worker or getattr(self,'_cancelling',False):return
-            state['value']=max(state['value'],_cdj_publication_value(state,done))
-            self._set_device_progress(state['value'])
-        worker.progress.connect(file_progress)
+        state={'song_total':sum(max(0,change.size) for change in plan.changes
+                               if change.new_sha256 and change.path.startswith('Contents/')),
+               'song_count':sum(1 for change in plan.changes
+                                if change.new_sha256 and change.path.startswith('Contents/')),
+               'song_copied':0}
         worker.detail_progress.connect(lambda stage,done,total,label:
             _cdj_progress(self,worker,state,stage,done,total,label))
         worker.finished.connect(lambda w=worker: self._finish_device_result_worker(
             '_cdj_worker', w, finish))
         self._start_pulse('Deleting USB playlists' if intent=='delete' else
                           'Configuring CDJ USB' if intent=='initialize' else 'Exporting CDJ USB')
-        self._set_device_progress(650)
+        _cdj_progress_bar(self)
         self._start_device_worker(worker, dev, 'commit-cdj-delete' if intent=='delete' else
                                   'commit-cdj-initialize' if intent=='initialize' else 'commit-cdj')
 
@@ -561,6 +603,8 @@ class CdjDeviceMixin:
         self._cancelling = False
         self._stop_pulse()
         self.cancel_btn.setVisible(False)
+        self.progress.setRange(0,1000)
+        self.progress.setTextVisible(True)
         if not cancelled and not isinstance(result,Exception):self.progress.setValue(1000)
         self.progress.setVisible(False)
         self._sync_cue_editing()
@@ -610,10 +654,8 @@ class CdjDeviceMixin:
             self._show_usb_format_status()
 
     def _apply_usb_settings(self, changes):
-        dev = self._current_device_path
-        if dev:
-            self._begin_cdj_export(dev, settings=changes,
-                target_role=getattr(self,'_current_device_role','') or 'generic_usb')
+        pages=vars(self).get('usb_device_pages')
+        if pages is not None:self.usb_settings_controller.enqueue(pages.settings_binding,changes)
 
     def _sync_usb_my_settings(self, snapshot):
         from soundbox import my_settings
@@ -629,10 +671,7 @@ class CdjDeviceMixin:
         profile = self.settings.get('cdj_my_settings',{})
         pages = vars(self).get('usb_device_pages')
         if pages is not None:
-            pages.global_profile = deepcopy(profile)
-            editor = pages.my_settings
-            if editor.profile!=current or editor.global_profile!=profile:
-                editor.set_profile(current,profile,preserve_edits=True)
+            pages.set_global_profile(profile)
         editor = getattr(self, '_global_my_settings', None)
         if editor is not None and editor.profile!=profile:
             editor.set_profile(profile)
@@ -650,9 +689,7 @@ class CdjDeviceMixin:
             editor.set_profile(profile)
         pages = vars(self).get('usb_device_pages')
         if pages is not None:
-            pages.global_profile = deepcopy(profile)
-            native = getattr(pages._snapshot,'native',None)
-            pages.my_settings.set_profile(my_settings.values(native.files) if native else {},profile)
+            pages.set_global_profile(profile,preserve_edits=False)
         self._flash_status('Global My Settings saved')
 
     def _promote_usb_settings(self, profile):
@@ -690,22 +727,64 @@ class CdjDeviceMixin:
 
     def _reformat_usb(self, dev):
         from soundbox import cdj_export, cdj_transaction
-        if self._defer_device_operation_until_scan_finishes(lambda:self._reformat_usb(dev)):return
+        from soundbox.export_snapshot import source_paths
+        if (self._shutting_down or getattr(self,'_state_maintenance',False)
+                or getattr(self,'_refresh_worker',None) is not None
+                or getattr(getattr(self,'tag_controller',None),'owned',False)
+                or _format_paths_owned(self)):
+            self._flash_status('Finish the current library operation before reformatting',15);return
+        library=self.lib
+        def source_scope():
+            current=self.lib;repository=getattr(self,'_state_repository',None)
+            paths=set(source_paths(current)) if current is not None else set()
+            imported=getattr(self,'imported',{})
+            if not isinstance(imported,dict):raise ValueError('Invalid saved import locations')
+            for record in imported.values():
+                raw=record.get('path') if isinstance(record,dict) else None
+                if (not isinstance(raw,str) or not raw or not Path(raw).is_absolute()
+                        or '..' in Path(raw).parts):raise ValueError('Invalid saved import location')
+                paths.add(Path(raw))
+            return (((str(current.source),current.source_kind,current.source_library_id)
+                     if current is not None else None),
+                    frozenset(paths),
+                    (repository,repository.area.generation) if repository is not None else None)
+        try:scope=source_scope()
+        except (AttributeError,OSError,ValueError,TypeError):
+            self._flash_status('Saved import locations need attention before reformatting',15);return
+        def source_current():
+            try:
+                return (self.lib is library and not self._shutting_down
+                    and not getattr(self,'_state_maintenance',False)
+                    and getattr(self,'_refresh_worker',None) is None
+                    and not getattr(getattr(self,'tag_controller',None),'owned',False)
+                    and not _format_paths_owned(self)
+                    and source_scope()==scope)
+            except (AttributeError,OSError,ValueError,TypeError):return False
+        def stale():return RuntimeError('Library changed; nothing erased. Choose Reformat USB again.')
+        def deferred():
+            if source_current():self._reformat_usb(dev)
+            else:self._flash_status(str(stale()),15)
+        if self._defer_device_operation_until_scan_finishes(deferred):return
         if self._device_operation_owned():return
         from soundbox import usb_format
         profile=self._device_profiles.get(dev)
         if profile is None or profile.kind!='generic_usb':return
         facts=device_facts(dev,cached_only=True);token=self._device_mount_tokens.get(dev,0)
-        sources=[Path(self.lib.source),*[t.path for t in self.lib.tracks_by_id.values()]] if self.lib else []
-        if self.lib:sources.extend(Path(t.source_analysis_path) for t in self.lib.tracks_by_id.values() if t.source_analysis_path)
+        sources=sorted(scope[1])
         self._usb_format_device=dev
         self._usb_format_volumes=(dev,)
         self._usb_format_started=False
         self._usb_format_original_text=''
         self._release_eject_ready()
-        worker=CdjWorker(lambda _cancel,_progress:usb_format.capture(dev,token=token,volume_uuid=facts.volume_uuid,sources=sources))
+        def capture(cancel,_progress):
+            if cancel() or not source_current():raise stale()
+            result=usb_format.capture(dev,token=token,volume_uuid=facts.volume_uuid,sources=sources)
+            if cancel() or not source_current():raise stale()
+            return result
+        worker=CdjWorker(capture)
         def show(result):
             if isinstance(result,Exception):self._finish_usb_format(dev,result);return
+            if not source_current():self._finish_usb_format(dev,stale());return
             self._stop_pulse()
             self._usb_format_volumes=result.volumes
             from .usb_preferences import FormatUsbDialog
@@ -717,12 +796,17 @@ class CdjDeviceMixin:
                 dialog.deleteLater()
             if not accepted or self._shutting_down:
                 self._finish_usb_format(dev,None,cancelled=True);return
+            if not source_current():self._finish_usb_format(dev,stale());return
             global_profile=deepcopy(self.settings.get('cdj_my_settings',{}))
             format_name,format_filesystem=choice
             recovery=self._data_file.parent/'cdj-recovery'
             def format_and_initialize(cancel,progress):
+                if not source_current():raise stale()
+                # A source read may finish during native disk capture. Check
+                # again at format_usb's final cancellation fence before erase.
+                def cancelled():return cancel() or not source_current()
                 info=usb_format.format_usb(result,format_name,format_filesystem,sources=sources,
-                    should_cancel=cancel,on_progress=progress)
+                    should_cancel=cancelled,on_progress=progress)
                 path=Path(info['MountPoint'])
                 progress(0,0,'Initializing USB')
                 plan=cdj_export.plan_initialize(path,token=path.stat().st_dev,volume_uuid=info['VolumeUUID'],
@@ -837,6 +921,16 @@ class CdjDeviceMixin:
         self._update_device_action_state()
         self._sync_cue_editing()
         if getattr(self,'_device_mount_refresh_pending',False):QTimer.singleShot(0,self._refresh_devices)
+        refresh_path=getattr(self,'_usb_format_refresh_path',None)
+        if (refresh_path is not None or getattr(self,'_refresh_pending',False)) and not self._shutting_down:
+            self._refresh_pending=False
+            # finished() joined and released this formatter before invoking
+            # us. Resume the exact deferred source, after all erase cleanup.
+            QTimer.singleShot(0,self,lambda:self._start_rekordbox_refresh(refresh_path)
+                              if refresh_path is not None else self._refresh_rekordbox())
+        if getattr(self,'_usb_format_import_repair_pending',False) and not self._shutting_down:
+            self._usb_format_import_repair_pending=False
+            QTimer.singleShot(0,self,self._repair_import_locations)
 
     def _recover_cdj(self, dev, *, target_role='generic_usb'):
         from soundbox import cdj_transaction
@@ -933,6 +1027,8 @@ class CdjDeviceMixin:
         saved = dict(self.settings.get('device_views',{}))
         stock = dict(saved.get('stock',{}))
         stock[snapshot.identity_key or dev] = dict(page=self.stock_ipod_pages.stack.currentIndex(),views=states)
+        pages = vars(self).setdefault('_stock_session_pages',{})
+        pages[snapshot.identity_key or dev] = self.stock_ipod_pages.stack.currentIndex()
         saved['stock'] = stock
         self.settings['device_views'] = saved
         if not self._shutting_down:
@@ -947,7 +1043,8 @@ class CdjDeviceMixin:
             return
         from PySide6.QtWidgets import QAbstractItemView, QTableView, QTreeWidget, QTreeWidgetItemIterator
         from PySide6.QtCore import Qt, QModelIndex
-        self._set_stock_device_tab(max(0,min(2,int(state.get('page',0)))))
+        page = getattr(self,'_stock_session_pages',{}).get(snapshot.identity_key or str(snapshot.target),0)
+        self._set_stock_device_tab(max(0,min(2,int(page))))
         for view in self.stock_ipod_pages.findChildren(QAbstractItemView):
             if not isinstance(view,(QTableView,QTreeWidget)):
                 continue

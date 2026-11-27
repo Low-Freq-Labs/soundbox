@@ -9,6 +9,9 @@
 - [First launch](first-launch.md): library selection, cleanup/artwork choices and curation rules.
 - [macOS installer](macos-installer.md): app-only beta installation, upgrades and signing scope.
 - [Personal beta RC checklist](rc-beta-checklist.md): full-feature shakedown plan, RB6/7 matrix and clean-user acceptance.
+- [RC execution](rc-beta-results-2026-11-26.md): dated results, confirmed blockers and action/write inventories.
+- [Physical USB execution](usb-physical-results-2026-11-26.md): authorized TEST-2 evidence and separate manual/firmware boundaries.
+- [RC write ledger](rc-write-ledger.md): partial native/device ownership map and current GAP-001/002 reproductions.
 - [Roadmap](ROADMAP.md): committed sequence; [Ideas](IDEAS.md): uncommitted UX proposals.
 - [Project layout](PROJECT_LAYOUT.md): fixtures, generated output and protected retention.
 - [Performance evidence](performance-audit.md): dated measurements and remaining costs.

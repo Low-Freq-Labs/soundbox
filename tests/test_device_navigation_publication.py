@@ -6,17 +6,21 @@ import tempfile
 import unittest
 from unittest import mock
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QTreeWidgetItem
+from PySide6.QtCore import QPoint,QPointF,Qt
+from PySide6.QtGui import QContextMenuEvent,QDragEnterEvent,QDropEvent
+from PySide6.QtTest import QSignalSpy,QTest
+from PySide6.QtWidgets import QAbstractItemView, QApplication, QTreeWidgetItem
 
 from desktop.app import MainWindow
 from desktop.devices import DeviceFacts
-from desktop.trees import ARTISTS_ROLE, COLLECTION_ROLE, DEVPATH_ROLE
+from desktop.trees import (ARTISTS_ROLE, COLLECTION_ROLE, CUSTOM_ROLE, DEVPATH_ROLE,DEVROLE_ROLE,
+                           NATIVE_TREE_ROLE,PATH_ROLE,RB_NODE_ROLE)
 from desktop.usb_device_view import UsbSnapshot
 from soundbox.cdj_usb import CdjLibrary, CdjPlaylist, CdjSong
 from soundbox import engine, playlist_unification
 from soundbox.library import Library, Playlist, Track
 from soundbox.providers import Providers
+from soundbox.device_profile import DeviceProfile
 from soundbox.stock_ipod_info import (StockIpodPlaylistEntry, StockIpodPlaylistSnapshot,
                                      StockIpodSnapshot, StockIpodTrackSnapshot)
 
@@ -103,12 +107,295 @@ class DeviceNavigationPublication(unittest.TestCase):
             tree.currentItem(), tuple(tree.selectedItems()), tree.topLevelItem(0).isExpanded(),
             tree.verticalScrollBar().value())
 
+    def sidebar_playlist(self):
+        self.window.custom['Generated drag set'] = ['1', '2']
+        item = QTreeWidgetItem(['Generated drag set'])
+        item.setData(0, CUSTOM_ROLE, 'Generated drag set')
+        self.window.tree.addTopLevelItem(item)
+        return item
+
+    def test_sidebar_playlist_mouse_drag_keeps_device_navigation_and_selection(self):
+        self._assert_sidebar_drag_keeps_device('generic_usb',native=False)
+
+    def test_browser_models_retire_with_their_views_despite_retained_python_references(self):
+        from PySide6.QtCore import QCoreApplication,QEvent,QThread
+        from shiboken6 import isValid
+
+        w=self.window
+        models=(w.model,w.fs_model);views=(w.table,w.fs_view)
+        self.assertEqual(w.model.rowCount(),3)
+        self.assertTrue(w.fs_model.isReadOnly())
+        destroyed=[]
+        for name,model in zip(('tracks','files'),models):
+            self.assertTrue(isValid(model))
+            self.assertIs(model.thread(),self.app.thread())
+            model.destroyed.connect(lambda _obj=None,name=name:
+                destroyed.append((name,QThread.isMainThread())),Qt.DirectConnection)
+
+        # Exercise the fixture's ordinary joined shutdown and queued deletion,
+        # retaining the same Python wrappers as unittest does during cleanup.
+        self.assertTrue(self.doCleanups())
+        QCoreApplication.sendPostedEvents(None,QEvent.DeferredDelete)
+        self.assertFalse(isValid(w))
+        self.assertTrue(all(not isValid(view) for view in views))
+        self.assertTrue(all(not isValid(model) for model in models))
+        self.assertEqual(sorted(destroyed),[('files',True),('tracks',True)])
+
+    def test_native_sidebar_playlist_drag_keeps_stock_device_navigation(self):
+        self._assert_sidebar_drag_keeps_device('stock_ipod',native=True)
+
+    def _assert_sidebar_drag_keeps_device(self,kind,*,native):
+        w = self.window
+        source = self.sidebar_playlist()
+        if native:
+            source.setData(0,CUSTOM_ROLE,None)
+            source.setData(0,NATIVE_TREE_ROLE,True)
+            source.setData(0,PATH_ROLE,'Generated native set')
+            source.setData(0,RB_NODE_ROLE,'99')
+        target,pages,tree = self.select_device(kind)
+        w.resize(1100,900);w.show();self.app.processEvents()
+        before = self.seat(pages,tree)
+        source_current = w.tree.currentItem()
+        source_selected = w.tree.selectedItems()
+        view_key = w._view_key
+        flips = QSignalSpy(w.stack.currentChanged)
+        drops = []
+        # Exercise Qt mouse gesture, real MIME production and DeviceTree drop
+        # parsing; replace only the native drag transport and export consumer.
+        w.device_tree.dropped.disconnect()
+        w.device_tree.dropped.connect(lambda dev,items:drops.append((dev,items)))
+        point = w.tree.visualItemRect(source).center()
+        def transport(view,md,_label,_actions):
+            self.assertIs(view,w.tree)
+            destination = w.device_tree.visualItemRect(target).center()
+            enter = QDragEnterEvent(destination,Qt.CopyAction,md,Qt.LeftButton,Qt.NoModifier)
+            self.app.sendEvent(w.device_tree.viewport(),enter)
+            drop = QDropEvent(QPointF(destination),Qt.CopyAction,md,Qt.LeftButton,Qt.NoModifier)
+            self.app.sendEvent(w.device_tree.viewport(),drop)
+            self.assertTrue(drop.isAccepted())
+        with mock.patch('desktop.trees._start_chip_drag',side_effect=transport) as drag:
+            QTest.mousePress(w.tree.viewport(),Qt.LeftButton,Qt.NoModifier,point)
+            self.assertEqual(self.seat(pages,tree),before)
+            QTest.mouseMove(w.tree.viewport(),point+QPoint(40,0),20)
+            QTest.mouseRelease(w.tree.viewport(),Qt.LeftButton,Qt.NoModifier,point+QPoint(40,0))
+        self.app.processEvents()
+        drag.assert_called_once()
+        expected = ('rb','Generated native set') if native else ('cust','Generated drag set')
+        self.assertEqual(drops,[(w._current_device_path,[expected])])
+        self.assertEqual(self.seat(pages,tree),before)
+        self.assertEqual(w._view_key,view_key)
+        self.assertIs(w.tree.currentItem(),source_current)
+        self.assertEqual(w.tree.selectedItems(),source_selected)
+        self.assertEqual(flips.count(),0)
+
+    def test_sidebar_playlist_click_and_keyboard_still_navigate(self):
+        w = self.window
+        source = self.sidebar_playlist()
+        self.select_device('generic_usb')
+        w.resize(1100,900);w.show();self.app.processEvents()
+        point = w.tree.visualItemRect(source).center()
+        QTest.mouseClick(w.tree.viewport(),Qt.LeftButton,Qt.NoModifier,point)
+        self.assertEqual(w.stack.currentIndex(),0)
+        self.assertEqual(w._view_key,'sb:Generated drag set')
+        self.assertIs(w.tree.currentItem(),source)
+        self.assertEqual(w.tree.selectedItems(),[source])
+        self.select_device('generic_usb')
+        QTest.keyClick(w.tree,Qt.Key_Home)
+        self.assertEqual(w.stack.currentIndex(),0)
+        self.assertEqual(w._view_key,'sb:Collection')
+        self.assertTrue(w.tree.currentItem().data(0,COLLECTION_ROLE))
+
+    def test_canceled_drag_and_removed_pressed_row_cannot_navigate(self):
+        w = self.window
+        source = self.sidebar_playlist()
+        _target,pages,tree = self.select_device('generic_usb')
+        w.resize(1100,900);w.show();self.app.processEvents()
+        before = self.seat(pages,tree)
+        point = w.tree.visualItemRect(source).center()
+        with mock.patch('desktop.trees._start_chip_drag') as canceled:
+            QTest.mousePress(w.tree.viewport(),Qt.LeftButton,Qt.NoModifier,point)
+            QTest.mouseMove(w.tree.viewport(),point+QPoint(40,0),20)
+            QTest.mouseRelease(w.tree.viewport(),Qt.LeftButton,Qt.NoModifier,point)
+        canceled.assert_called_once()
+        self.assertEqual(self.seat(pages,tree),before)
+        QTest.mousePress(w.tree.viewport(),Qt.LeftButton,Qt.NoModifier,point)
+        w.tree.takeTopLevelItem(w.tree.indexOfTopLevelItem(source))
+        QTest.mouseRelease(w.tree.viewport(),Qt.LeftButton,Qt.NoModifier,point)
+        self.assertEqual(self.seat(pages,tree),before)
+
+    def test_modifier_click_and_selected_playlist_drag_keep_the_selected_set(self):
+        w = self.window
+        first = self.sidebar_playlist()
+        w.custom['Second generated set'] = ['3']
+        second = QTreeWidgetItem(['Second generated set'])
+        second.setData(0,CUSTOM_ROLE,'Second generated set')
+        w.tree.addTopLevelItem(second)
+        w.tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        w.resize(1100,900);w.show();self.app.processEvents()
+        QTest.mouseClick(w.tree.viewport(),Qt.LeftButton,Qt.NoModifier,
+                         w.tree.visualItemRect(first).center())
+        QTest.mouseClick(w.tree.viewport(),Qt.LeftButton,Qt.ControlModifier,
+                         w.tree.visualItemRect(second).center())
+        self.assertEqual(set(w.tree.selectedItems()),{first,second})
+        current = w.tree.currentItem()
+        captured = []
+        point = w.tree.visualItemRect(first).center()
+        with mock.patch('desktop.trees._start_chip_drag',
+                        side_effect=lambda _view,md,_label,_actions:captured.append(md.text())):
+            QTest.mousePress(w.tree.viewport(),Qt.LeftButton,Qt.NoModifier,point)
+            QTest.mouseMove(w.tree.viewport(),point+QPoint(40,0),20)
+            QTest.mouseRelease(w.tree.viewport(),Qt.LeftButton,Qt.NoModifier,point)
+        self.assertEqual(len(captured),1)
+        self.assertEqual(set(captured[0].splitlines()),
+                         {'cust\tGenerated drag set','cust\tSecond generated set'})
+        self.assertEqual(set(w.tree.selectedItems()),{first,second})
+        self.assertIs(w.tree.currentItem(),current)
+
     def fresh(self, *, structural=False):
         w = self.window
         return replace(w.lib, tracks_by_id={**w.lib.tracks_by_id,
             '2': replace(w.lib.tracks_by_id['2'], name='Fresh saved title',
                 bpm=('142' if w.lib.tracks_by_id['2'].bpm == '141' else '141')
                     if structural else w.lib.tracks_by_id['2'].bpm)})
+
+    def context_devices(self):
+        w=self.window;active,_,_=self.select_device('generic_usb','/synthetic/ACTIVE')
+        rows=[]
+        for kind in ('stock_ipod','dual_boot','rockbox','generic_usb'):
+            path='/synthetic/'+kind.upper();item,_,_=self.select_device(kind,path)
+            stock=kind in ('stock_ipod','dual_boot');rockbox=kind in ('rockbox','dual_boot')
+            profile=DeviceProfile(kind,kind,'msdos',rockbox,stock,rockbox,stock,False)
+            w._device_profiles[path]=profile;rows.append((kind,item))
+            if stock:
+                companion=QTreeWidgetItem([kind+' USB']);companion.setData(0,DEVPATH_ROLE,path)
+                companion.setData(0,DEVROLE_ROLE,'ipod_usb');w.device_tree.addTopLevelItem(companion)
+                w._usb_view_cache[path]=replace(w._usb_view_cache['/synthetic/ACTIVE'],target=Path(path))
+                w._usb_device_rows[path]=(kind,500,None,profile);rows.append((kind+' USB',companion))
+        w.resize(1240,1100);w.show();w._sidebar_split.setSizes([180,500]);self.app.processEvents()
+        self.addCleanup(w.hide)
+        return active,rows
+
+    def context_collection(self):
+        w=self.window
+        item=next(w.sb_tree.topLevelItem(i) for i in range(w.sb_tree.topLevelItemCount())
+                  if w.sb_tree.topLevelItem(i).data(0,COLLECTION_ROLE))
+        w.sb_tree.setCurrentItem(item);w._on_custom_select(item,None);self.app.processEvents()
+        return item
+
+    def context_seat(self):
+        w=self.window
+        return (w.stack.currentIndex(),w.body_stack.currentIndex(),w.device_content_stack.currentIndex(),
+            w._current_device_path,w._current_device_role,w.device_tree.currentItem(),
+            tuple(w.device_tree.selectedItems()),w.sb_tree.currentItem(),tuple(w.sb_tree.selectedItems()),
+            w.usb_device_pages.stack.currentIndex(),w.stock_ipod_pages.stack.currentIndex(),w._view_key)
+
+    def test_real_right_context_preserves_browser_location_for_every_device_role(self):
+        w=self.window;active,rows=self.context_devices();tree=w.device_tree
+        for kind,item in rows:
+            other=next((sibling for _kind,sibling in rows
+                        if sibling.data(0,DEVPATH_ROLE)==item.data(0,DEVPATH_ROLE)
+                        and (sibling.data(0,DEVROLE_ROLE) or '')!=(item.data(0,DEVROLE_ROLE) or '')),None)
+            origins=[None,active,item]+([other] if other is not None else [])
+            for origin in origins:
+                with self.subTest(kind=kind,origin=None if origin is None else origin.text(0)):
+                    if origin is None:self.context_collection()
+                    else:w._on_device_click(origin,0)
+                    tree.scrollToItem(item);self.app.processEvents();before=self.context_seat()
+                    point=tree.visualItemRect(item).center();menus=[]
+                    def menu(popup,*_):
+                        self.assertEqual(self.context_seat(),before)
+                        menus.append([action.text() for action in popup.actions()])
+                        next(action for action in popup.actions() if action.text().startswith('Export')).trigger()
+                        self.assertEqual(self.context_seat(),before);popup.deleteLater()
+                    with mock.patch('desktop.app.exec_transient_menu',side_effect=menu), \
+                            mock.patch.object(w,'_show_export_dialog') as export:
+                        QTest.mousePress(tree.viewport(),Qt.RightButton,Qt.NoModifier,point)
+                        self.app.processEvents();self.assertEqual(self.context_seat(),before)
+                        QTest.mouseRelease(tree.viewport(),Qt.RightButton,Qt.NoModifier,point)
+                        self.app.processEvents();self.assertEqual(self.context_seat(),before)
+                        QTest.mouseDClick(tree.viewport(),Qt.RightButton,Qt.NoModifier,point)
+                        self.app.processEvents();self.assertEqual(self.context_seat(),before)
+                        event=QContextMenuEvent(QContextMenuEvent.Mouse,point,tree.viewport().mapToGlobal(point))
+                        QApplication.sendEvent(tree.viewport(),event);self.app.processEvents()
+                    self.assertEqual(len(menus),1);self.assertEqual(self.context_seat(),before)
+                    path=item.data(0,DEVPATH_ROLE);role=item.data(0,DEVROLE_ROLE) or ''
+                    export.assert_called_once_with((path,role) if role else path)
+        w._on_device_click(active,0);self.app.processEvents()
+        point=QPoint(5,tree.viewport().height()-4);self.assertIsNone(tree.itemAt(point));before=self.context_seat()
+        with mock.patch('desktop.app.exec_transient_menu') as menu:
+            QTest.mouseClick(tree.viewport(),Qt.RightButton,Qt.NoModifier,point)
+            QApplication.sendEvent(tree.viewport(),QContextMenuEvent(QContextMenuEvent.Mouse,point,tree.viewport().mapToGlobal(point)))
+            self.app.processEvents()
+        menu.assert_not_called();self.assertEqual(self.context_seat(),before)
+
+    def test_context_browse_publishes_exact_attached_role_after_rebuild_and_ignores_disconnection(self):
+        w=self.window;active,rows=self.context_devices();tree=w.device_tree
+        target=next(item for kind,item in rows if kind=='stock_ipod')
+        sibling=next(item for kind,item in rows if kind=='stock_ipod USB')
+        for origin in (None,active,sibling):
+            if origin is None:self.context_collection()
+            else:w._on_device_click(origin,0)
+            tree.scrollToItem(target);self.app.processEvents();before=self.context_seat();replacement=[]
+            point=tree.visualItemRect(target).center()
+            def menu(popup,*_):
+                self.assertEqual(self.context_seat(),before)
+                path=target.data(0,DEVPATH_ROLE);role=target.data(0,DEVROLE_ROLE) or ''
+                detached=tree.takeTopLevelItem(tree.indexOfTopLevelItem(target))
+                item=QTreeWidgetItem(['Rebuilt stock row']);item.setData(0,DEVPATH_ROLE,path)
+                item.setData(0,DEVROLE_ROLE,role);tree.addTopLevelItem(item);replacement.append(item)
+                del detached
+                next(action for action in popup.actions() if action.text()=='Browse').trigger();popup.deleteLater()
+            with mock.patch('desktop.app.exec_transient_menu',side_effect=menu):
+                QTest.mouseClick(tree.viewport(),Qt.RightButton,Qt.NoModifier,point)
+                QApplication.sendEvent(tree.viewport(),QContextMenuEvent(QContextMenuEvent.Mouse,point,tree.viewport().mapToGlobal(point)))
+                self.app.processEvents()
+            target=replacement[0];self.assertIs(tree.currentItem(),target)
+            self.assertEqual(tree.selectedItems(),[target]);self.assertEqual(w.stack.currentIndex(),1)
+            self.assertEqual((w._current_device_path,w._current_device_role),(target.data(0,DEVPATH_ROLE),''))
+            self.assertEqual(w.device_content_stack.currentIndex(),1)
+        w._on_device_click(active,0);tree.scrollToItem(target);self.app.processEvents()
+        before=self.context_seat();point=tree.visualItemRect(target).center()
+        def disconnected(popup,*_):
+            tree.takeTopLevelItem(tree.indexOfTopLevelItem(target))
+            next(action for action in popup.actions() if action.text()=='Browse').trigger();popup.deleteLater()
+        with mock.patch('desktop.app.exec_transient_menu',side_effect=disconnected):
+            QApplication.sendEvent(tree.viewport(),QContextMenuEvent(QContextMenuEvent.Mouse,point,tree.viewport().mapToGlobal(point)))
+            self.app.processEvents()
+        self.assertEqual(self.context_seat(),before);self.assertIsNotNone(sibling.treeWidget())
+
+    def test_user_keyboard_navigation_matches_page_while_tab_and_context_key_preserve_location(self):
+        w=self.window;active,rows=self.context_devices();tree=w.device_tree
+        collection=self.context_collection();w.sb_tree.setFocus();self.app.processEvents();before=self.context_seat()
+        QTest.keyClick(w.sb_tree,Qt.Key_Tab);self.app.processEvents()
+        self.assertTrue(tree.hasFocus());self.assertTrue(collection.isSelected())
+        self.assertEqual(self.context_seat(),before)
+        w._on_device_click(active,0);tree.setFocus();self.app.processEvents();requests=[]
+        tree.navigation_requested.connect(requests.append)
+        for key in (Qt.Key_Down,Qt.Key_Up,Qt.Key_End,Qt.Key_Home,Qt.Key_PageDown,Qt.Key_PageUp):
+            with self.subTest(key=key):
+                previous=tuple(tree.selectedItems());count=len(requests)
+                QTest.keyClick(tree,key);self.app.processEvents();item=tree.currentItem()
+                self.assertEqual(tree.selectedItems(),[item])
+                self.assertEqual((w._current_device_path,w._current_device_role),
+                                 (item.data(0,DEVPATH_ROLE),item.data(0,DEVROLE_ROLE) or ''))
+                self.assertEqual(w.stack.currentIndex(),1)
+                self.assertEqual(len(requests),count+(tuple(tree.selectedItems())!=previous))
+        before=self.context_seat();count=len(requests);point=tree.visualItemRect(tree.currentItem()).center()
+        with mock.patch('desktop.app.exec_transient_menu',side_effect=lambda menu,*_:menu.deleteLater()):
+            QTest.keyClick(tree,Qt.Key_Menu)
+            QApplication.sendEvent(tree.viewport(),QContextMenuEvent(QContextMenuEvent.Keyboard,point,tree.viewport().mapToGlobal(point)))
+            self.app.processEvents()
+        self.assertEqual(self.context_seat(),before);self.assertEqual(len(requests),count)
+        # Discovery can change current programmatically without opening a page.
+        for key,item in ((Qt.Key_Return,rows[0][1]),(Qt.Key_Enter,rows[1][1])):
+            self.context_collection();count=len(requests);tree.setCurrentItem(item);self.app.processEvents()
+            self.assertEqual(w.stack.currentIndex(),0);self.assertEqual(len(requests),count)
+            tree.clearSelection();self.assertIs(tree.currentItem(),item);self.assertEqual(tree.selectedItems(),[])
+            QTest.keyClick(tree,key);self.app.processEvents()
+            self.assertEqual(w.stack.currentIndex(),1);self.assertIs(tree.currentItem(),item)
+            self.assertEqual(tree.selectedItems(),[item]);self.assertEqual(len(requests),count+1)
+            self.assertEqual((w._current_device_path,w._current_device_role),
+                             (item.data(0,DEVPATH_ROLE),item.data(0,DEVROLE_ROLE) or ''))
 
     def test_finished_scan_retires_remounted_ipod_even_when_drag_skipped_preview(self):
         w=self.window;dev='/synthetic/DEVICE'

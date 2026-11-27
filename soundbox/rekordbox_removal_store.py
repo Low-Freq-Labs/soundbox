@@ -6,6 +6,9 @@ whole plan hash; each file goes through the OS Trash with an interruption tag.
 """
 from dataclasses import dataclass,asdict
 from collections import Counter
+from contextlib import contextmanager
+import ctypes
+import errno
 import base64
 import hashlib
 import json
@@ -29,6 +32,7 @@ from .rekordbox_write import (_connect,_identity,_rows,_quote,_json,_digest,_cel
 from .source_acquisition import acquire_source,SourceContract,SourceAcquisitionError
 from .state_io import atomic_bytes,sync_dir
 from .native_transaction import hash_evidence
+from .device_staging import exclusive_rename, exclusive_rename_from_path
 
 FORMAT='soundbox-native-removal-v1'
 AUTHORITY_FORMAT='soundbox-removal-authority-v1'
@@ -71,6 +75,157 @@ def load_authority(path,source,library_id):
 
 def _sha(path):
     with Path(path).open('rb') as stream:return hashlib.file_digest(stream,'sha256').hexdigest()
+
+
+def _entity(info):return info.st_dev,info.st_ino,stat.S_IFMT(info.st_mode)
+
+
+def _fd_sha(handle):
+    os.lseek(handle,0,os.SEEK_SET);digest=hashlib.sha256()
+    while block:=os.read(handle,1024*1024):digest.update(block)
+    return digest.hexdigest()
+
+
+@contextmanager
+def _restore_parent(path, expected=None):
+    """Pin every existing destination ancestor; recovery never recreates one."""
+    path=Path(path)
+    if not path.is_absolute() or '..' in path.parts:raise RecoveryRequired('Recovery path is not absolute')
+    handle=os.open('/',os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+    try:
+        for part in path.parent.parts[1:]:
+            child=os.open(part,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=handle)
+            os.close(handle);handle=child
+        current=_entity(os.fstat(handle))
+        if expected is not None and tuple(expected)!=current:
+            raise RecoveryRequired('Recovery parent changed since confirmation; originals and journal retained')
+        expected=current
+        def guard():
+            if path.parent.resolve(strict=True)!=path.parent or _entity(path.parent.lstat())!=expected:
+                raise RecoveryRequired('Recovery parent changed; originals and journal retained')
+        guard();yield handle,path.name,guard
+        guard()
+    finally:os.close(handle)
+
+
+def _capture_recovery_parent(path,epoch):
+    """Bind the selected leaf's existing parent into the immutable review."""
+    with _restore_parent(path) as (parent,name,guard):
+        if _entity(os.stat(name,dir_fd=parent,follow_symlinks=False))!=(*epoch[:2],stat.S_IFREG):
+            raise ConflictError('Removal file changed while capturing its recovery parent')
+        guard();return list(_entity(os.fstat(parent)))
+
+
+def _recovery_parent(plan,path):
+    # A fresh directory observation cannot renew an interrupted operation's
+    # original parent authority, including when the replacement is empty.
+    parents=plan.get('recovery_parents')
+    if parents is None:
+        raise RecoveryRequired('Legacy removal recovery has no recorded original parent; preserve originals and journal for review')
+    return parents[str(path)]
+
+
+def _require_recovery_parents(plan,xml):
+    paths=[*(audio['path'] for audio in plan['audio']),
+           *(resource['path'] for resource in plan['resources']),str(xml)]
+    for path in paths:
+        expected=_recovery_parent(plan,path)
+        try:
+            with _restore_parent(path,expected):pass
+        except OSError as exc:
+            raise RecoveryRequired('Recorded removal recovery parent is unavailable; originals and journal retained') from exc
+
+
+def _exclusive_restore(source,handle,name):
+    if isinstance(source,tuple):
+        exclusive_rename(source[0],source[1],handle,name);return
+    # Trash may permit exact-file access while refusing a directory descriptor.
+    # Keep that source's open file identity; destination remains descriptor-bound.
+    exclusive_rename_from_path(Path(source),handle,name)
+
+
+def _fd_tag(handle):
+    call=ctypes.CDLL(None,use_errno=True).fgetxattr
+    call.argtypes=[ctypes.c_int,ctypes.c_char_p,ctypes.c_void_p,ctypes.c_size_t,ctypes.c_uint32,ctypes.c_int]
+    call.restype=ctypes.c_ssize_t
+    size=call(handle,TAG.encode(),None,0,0,0)
+    if size<0:
+        code=ctypes.get_errno()
+        if code==getattr(errno,'ENOATTR',93):return None
+        raise OSError(code,os.strerror(code))
+    if size>4096:raise RecoveryRequired('Recovery attribute exceeds its bound')
+    buffer=ctypes.create_string_buffer(size)
+    if call(handle,TAG.encode(),buffer,size,0,0)!=size:raise RecoveryRequired('Recovery attribute changed during read')
+    return buffer.raw[:size]
+
+
+def _restore_fd_tag(handle,old):
+    library=ctypes.CDLL(None,use_errno=True)
+    if old is None:
+        remove=library.fremovexattr;remove.argtypes=[ctypes.c_int,ctypes.c_char_p,ctypes.c_int];remove.restype=ctypes.c_int
+        result=remove(handle,TAG.encode(),0)
+        if result and ctypes.get_errno()==getattr(errno,'ENOATTR',93):return
+    else:
+        raw=base64.b64decode(old,validate=True);buffer=ctypes.create_string_buffer(raw)
+        write=library.fsetxattr
+        write.argtypes=[ctypes.c_int,ctypes.c_char_p,ctypes.c_void_p,ctypes.c_size_t,ctypes.c_uint32,ctypes.c_int];write.restype=ctypes.c_int
+        result=write(handle,TAG.encode(),buffer,len(raw),0,0)
+    if result:
+        code=ctypes.get_errno();raise OSError(code,os.strerror(code))
+
+
+def _restore_audio(audio,trashed,*,parent_identity):
+    path=Path(audio['path']);handle=os.open(trashed if trashed is not None else path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+    try:
+        original=os.fstat(handle);old_tag=base64.b64decode(audio['original_tag'],validate=True) if audio['original_tag'] is not None else None
+        tag=_fd_tag(handle)
+        if (not stat.S_ISREG(original.st_mode) or original.st_nlink!=1 or original.st_uid!=os.getuid()
+                or (original.st_dev,original.st_ino)!=tuple(audio['epoch'][:2])
+                or _fd_sha(handle)!=audio['sha256'] or identity(original)!=identity(os.fstat(handle))
+                or tag not in ((audio['tag'].encode(),) if trashed is not None else (audio['tag'].encode(),old_tag))):
+            raise RecoveryRequired('Trashed audio changed before restoration')
+        with _restore_parent(path,parent_identity) as (parent,name,guard):
+            guard()
+            if trashed is not None:
+                _fault('audio-restore-ready');guard()
+                try:_exclusive_restore(trashed,parent,name)
+                except OSError as exc:
+                    raise RecoveryRequired('Audio recovery destination is occupied or unavailable; original Trash file and journal retained') from exc
+            guard();named=os.stat(name,dir_fd=parent,follow_symlinks=False)
+            if _entity(named)!=_entity(original) or _fd_sha(handle)!=audio['sha256']:
+                raise RecoveryRequired('Audio recovery publication changed; all occupants and journal retained')
+            if tag!=old_tag:_restore_fd_tag(handle,audio['original_tag'])
+            os.fsync(handle);os.fsync(parent)
+            if _entity(os.stat(name,dir_fd=parent,follow_symlinks=False))!=_entity(os.fstat(handle)):
+                raise RecoveryRequired('Restored audio was replaced; journal retained')
+    finally:os.close(handle)
+
+
+def _restore_absent_bytes(path,raw,*,parent_identity):
+    """Only fill a proved vacancy; a later external occupant always wins."""
+    with _restore_parent(path,parent_identity) as (parent,name,guard):
+        temporary='.soundbox-removal-'+uuid4().hex+'.tmp'
+        handle=os.open(temporary,os.O_RDWR|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=parent)
+        try:
+            view=memoryview(raw)
+            while view:
+                count=os.write(handle,view)
+                if count<=0:raise OSError('Recovery write made no progress')
+                view=view[count:]
+            os.fsync(handle);guard();_fault('resource-restore-ready');guard()
+            try:_exclusive_restore((parent,temporary),parent,name)
+            except OSError as exc:raise RecoveryRequired('Resource recovery destination changed; backup and journal retained') from exc
+            guard()
+            if (_entity(os.stat(name,dir_fd=parent,follow_symlinks=False))!=_entity(os.fstat(handle))
+                    or _fd_sha(handle)!=hashlib.sha256(raw).hexdigest()):
+                raise RecoveryRequired('Resource recovery publication changed; journal retained')
+            os.fsync(parent)
+        finally:
+            try:
+                if _entity(os.stat(temporary,dir_fd=parent,follow_symlinks=False))==_entity(os.fstat(handle)):
+                    os.unlink(temporary,dir_fd=parent)
+            except FileNotFoundError:pass
+            os.close(handle)
 
 
 def _encode(row):return {k:_cell(v) for k,v in row.items()} if row is not None else None
@@ -168,7 +323,14 @@ class _Lease(PilotCueStore):
     def _guard(self):
         super()._guard();s=self.database.stat()
         if (s.st_dev,s.st_ino)!=self.store.file_id:raise ConflictError('Native removal database was replaced')
-        _regular(self.store.xml)
+        if not self.store.xml.exists() and self.store.journal.exists():
+            _record,plan,folder=self.store._record()
+            marker=self.store._xml_marker(folder,plan)
+            if marker is None:raise RecoveryRequired('Missing playlist XML has no owned removal claim')
+            with _restore_parent(self.store.xml,_recovery_parent(plan,self.store.xml)) as (parent,_name,_guard):
+                locations=self.store._xml_view(parent,plan,marker)
+                if not locations:raise RecoveryRequired('Missing playlist XML has no preserved owned entity')
+        else:_regular(self.store.xml)
         if self.store.xml.resolve()!=self.store.xml:raise WriteProofError('Native removal XML redirects')
 
 
@@ -230,6 +392,15 @@ class RemovalStore:
                         !=(selected['native_id'],selected['uuid'],selected['path'],str(self.database),self.authority.library_id)
                         or not isinstance(row.get('display'),dict) or type(row['display'].get('title')) is not str):
                     raise RecoveryRequired('Native-only removal history differs from its exact selection')
+        parents=plan.get('recovery_parents')
+        if parents is not None:
+            paths={*(audio['path'] for audio in plan['audio']),
+                   *(resource['path'] for resource in plan['resources']),str(self.xml)}
+            if (not isinstance(parents,dict) or set(parents)!=paths
+                    or any(not isinstance(token,list) or len(token)!=3
+                           or any(type(value) is not int for value in token)
+                           or token[2]!=stat.S_IFDIR for token in parents.values())):
+                raise RecoveryRequired('Removal recovery parent evidence differs from its exact files')
         names=('before.db','after.db','before.xml','after.xml')
         for name in names:_regular(folder/name)
         if hash_evidence((folder/name for name in names),_sha)!=[plan['payloads'][name] for name in names]:
@@ -398,12 +569,15 @@ class RemovalStore:
                         finally:after.close()
                         shutil.copyfile(candidate,folder/'after.db')
                     atomic_bytes(folder/'before.xml',before_xml);atomic_bytes(folder/'after.xml',built['after_xml'])
+                    recovery_parents={entry['path']:_capture_recovery_parent(entry['path'],entry['epoch'])
+                                      for entry in (*audio,*resources)}
+                    recovery_parents[str(self.xml)]=_capture_recovery_parent(self.xml,identity(self.xml.stat()))
                     plan=dict(format=FORMAT,operation_id=op,authority=asdict(self.authority),source_file_id=list(self.file_id),
                         changes=changes,compacted=True,audio=audio,missing=missing,missing_proofs=missing_proofs,retained=list(retained_by_path.values()),
                         resources=resources,selections=selections,playlists=built['playlists'],
                         targets=targets,timestamp=built['timestamp'],xml_clocks=built['xml_clocks'],
                         playlist_labels=[next((r['Name'] for r in tables['djmdPlaylist'] if r['ID']==pid),pid) for pid in built['playlists']],
-                        database_epoch=database_epoch,wal_epoch=wal_epoch,
+                        database_epoch=database_epoch,wal_epoch=wal_epoch,recovery_parents=recovery_parents,
                         payloads=dict(zip(('before.db','after.db','before.xml','after.xml'),
                             hash_evidence((folder/name for name in ('before.db','after.db','before.xml','after.xml')),_sha),strict=True)))
                     if native_only:
@@ -429,15 +603,6 @@ class RemovalStore:
             import errno
             if exc.errno in (getattr(errno,'ENOATTR',93),getattr(errno,'ENODATA',61)):return None
             raise
-
-    @staticmethod
-    def _restore_tag(path,old):
-        if old is None:
-            try:xattrs.remove(path,TAG)
-            except OSError as exc:
-                import errno
-                if exc.errno not in (getattr(errno,'ENOATTR',93),getattr(errno,'ENODATA',61)):raise
-        else:xattrs.set(path,TAG,base64.b64decode(old,validate=True))
 
     def _trash_location(self,audio,known=None,*,verify_bytes=True):
         expected=audio['tag'].encode();source=Path(audio['path'])
@@ -467,7 +632,7 @@ class RemovalStore:
                 if tag==expected:
                     if verify_bytes and _sha(path)!=audio['sha256']:raise RecoveryRequired('Trashed audio bytes changed')
                     return path
-        if source.is_file() and not known:return None
+        if source.is_file():return None
         # An OS move can finish immediately before process loss. Recover only
         # the exact interruption tag, bounded by the selected original basename.
         if self.trash_root.is_dir():
@@ -500,9 +665,173 @@ class RemovalStore:
         if not set(value['trash'])<=allowed:raise RecoveryRequired('Disposal progress changed its target files')
         return value
 
+    @staticmethod
+    def _resource_claim(resource,plan):
+        name='.soundbox-removal-'+plan['operation_id']+'-'+hashlib.sha256(resource['path'].encode()).hexdigest()[:16]+'.resource'
+        token=dict(entity=[*resource['epoch'][:2],stat.S_IFREG],sha256=resource['sha256'])
+        return name,token
+
+    def _resource_claim_present(self,resource,plan):
+        name,token=self._resource_claim(resource,plan);path=Path(resource['path'])
+        with _restore_parent(path,_recovery_parent(plan,path)) as (parent,_leaf,_guard):
+            try:os.stat(name,dir_fd=parent,follow_symlinks=False)
+            except FileNotFoundError:return False
+            self._verify_recovery_leaf(parent,name,token);return True
+
+    def _retire_resource_claim(self,resource,plan):
+        name,token=self._resource_claim(resource,plan)
+        with _restore_parent(Path(resource['path']),_recovery_parent(plan,resource['path'])) as (parent,leaf,guard):
+            try:os.stat(name,dir_fd=parent,follow_symlinks=False)
+            except FileNotFoundError:return
+            self._verify_recovery_leaf(parent,name,token);guard()
+            try:os.stat(leaf,dir_fd=parent,follow_symlinks=False)
+            except FileNotFoundError:pass
+            else:raise RecoveryRequired('Native resource recovery has a newer live occupant; original claim and journal retained')
+            os.unlink(name,dir_fd=parent);os.fsync(parent)
+
+    def _remove_resource(self,resource,plan):
+        path=Path(resource['path']);name,token=self._resource_claim(resource,plan)
+        with _restore_parent(path,_recovery_parent(plan,path)) as (parent,leaf,guard):
+            self._move_recovery_leaf(parent,leaf,name,token,guard,'resource-removal-claimed')
+            self._verify_recovery_leaf(parent,name,token);guard()
+            try:os.stat(leaf,dir_fd=parent,follow_symlinks=False)
+            except FileNotFoundError:pass
+            else:raise RecoveryRequired('Native resource reappeared during removal; original claim and journal retained')
+            os.unlink(name,dir_fd=parent);os.fsync(parent)
+
+    def _xml_names(self,plan):
+        prefix='.'+self.xml.name+'.removal-'+plan['operation_id']
+        return {'original':prefix+'.old','replacement':prefix+'.new'}
+
+    def _xml_marker(self,folder,plan):
+        path=folder/'xml-recovery.json'
+        if not path.exists() and not path.is_symlink():return None
+        _regular(path);marker=json.loads(path.read_bytes())
+        if (not isinstance(marker,dict) or set(marker)!={'format','operation_id','source','parent','tokens'}
+                or marker['format']!='soundbox-removal-xml-claim-v1'
+                or marker['operation_id']!=plan['operation_id'] or marker['source']!=str(self.xml)
+                or not isinstance(marker['tokens'],dict) or set(marker['tokens'])!={'original','replacement'}):
+            raise RecoveryRequired('Unknown removal XML claim; preserve every occupant')
+        with _restore_parent(self.xml,_recovery_parent(plan,self.xml)) as (parent,_name,_guard):
+            if marker['parent']!=list(_entity(os.fstat(parent))):raise RecoveryRequired('Removal XML parent was replaced')
+        payloads={plan['payloads']['before.xml'],plan['payloads']['after.xml']}
+        for token in marker['tokens'].values():
+            if (not isinstance(token,dict) or set(token)!={'entity','sha256'} or type(token['sha256']) is not str or token['sha256'] not in payloads
+                    or not isinstance(token['entity'],list) or len(token['entity'])!=3
+                    or any(type(v) is not int for v in token['entity']) or token['entity'][2]!=stat.S_IFREG
+                    or token['entity'][0]!=marker['parent'][0]):
+                raise RecoveryRequired('Removal XML claim changes its exact entity or accepted bytes')
+        if len({tuple(token['entity']) for token in marker['tokens'].values()})!=2:
+            raise RecoveryRequired('Removal XML claims alias each other')
+        return marker
+
+    @staticmethod
+    def _verify_recovery_leaf(parent,name,token):
+        handle=os.open(name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=parent)
+        try:
+            before=os.fstat(handle)
+            if (list(_entity(before))!=token['entity'] or before.st_nlink!=1 or before.st_uid!=os.getuid()
+                    or _fd_sha(handle)!=token['sha256']
+                    or identity(before)!=identity(os.fstat(handle))
+                    or _entity(os.stat(name,dir_fd=parent,follow_symlinks=False))!=_entity(before)):
+                raise RecoveryRequired('Removal recovery occupant changed; preserve the claim and journal')
+        finally:os.close(handle)
+
+    def _xml_view(self,parent,plan,marker):
+        names=self._xml_names(plan);locations={}
+        for token_key,name in ((None,self.xml.name),*((key,name+suffix) for key,name in names.items() for suffix in ('','.retired'))):
+            try:info=os.stat(name,dir_fd=parent,follow_symlinks=False)
+            except FileNotFoundError:continue
+            candidates=[token_key] if token_key else list(marker['tokens'])
+            key=next((key for key in candidates if list(_entity(info))==marker['tokens'][key]['entity']),None)
+            if key is None or key in locations:raise RecoveryRequired('Foreign or duplicate removal XML occupant; journal retained')
+            self._verify_recovery_leaf(parent,name,marker['tokens'][key]);locations[key]=name
+        return locations
+
+    def _begin_xml_change(self,folder,plan,current,desired):
+        names=self._xml_names(plan)
+        with _restore_parent(self.xml,_recovery_parent(plan,self.xml)) as (parent,name,guard):
+            if any((self.xml.parent/(leaf+suffix)).exists() or (self.xml.parent/(leaf+suffix)).is_symlink()
+                   for leaf in names.values() for suffix in ('','.retired')):
+                raise RecoveryRequired('Unowned removal XML sidecar is retained')
+            original=os.open(name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=parent)
+            replacement=-1;marked=False
+            try:
+                old=os.fstat(original)
+                if (not stat.S_ISREG(old.st_mode) or old.st_nlink!=1 or old.st_uid!=os.getuid()
+                        or _fd_sha(original)!=hashlib.sha256(current).hexdigest()
+                        or _entity(os.stat(name,dir_fd=parent,follow_symlinks=False))!=_entity(old)):
+                    raise RecoveryRequired('Playlist XML changed before its owned claim')
+                replacement=os.open(names['replacement'],os.O_RDWR|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=parent)
+                view=memoryview(desired)
+                while view:
+                    count=os.write(replacement,view)
+                    if count<=0:raise OSError('XML recovery write made no progress')
+                    view=view[count:]
+                os.fsync(replacement);os.fsync(parent);guard()
+                marker=dict(format='soundbox-removal-xml-claim-v1',operation_id=plan['operation_id'],source=str(self.xml),
+                    parent=list(_entity(os.fstat(parent))),tokens={
+                        'original':dict(entity=list(_entity(old)),sha256=hashlib.sha256(current).hexdigest()),
+                        'replacement':dict(entity=list(_entity(os.fstat(replacement))),sha256=hashlib.sha256(desired).hexdigest())})
+                atomic_bytes(folder/'xml-recovery.json',_json(marker));marked=True
+                _fault('xml-claim-recorded');return marker
+            finally:
+                if replacement>=0:
+                    if not marked:
+                        try:
+                            if _entity(os.stat(names['replacement'],dir_fd=parent,follow_symlinks=False))==_entity(os.fstat(replacement)):
+                                os.unlink(names['replacement'],dir_fd=parent)
+                        except FileNotFoundError:pass
+                    os.close(replacement)
+                os.close(original)
+
+    def _move_recovery_leaf(self,parent,source,destination,token,guard,phase):
+        self._verify_recovery_leaf(parent,source,token);guard();_fault(phase+'-ready');guard()
+        try:exclusive_rename(parent,source,parent,destination)
+        except OSError as exc:raise RecoveryRequired('Removal recovery destination is occupied; claims and journal retained') from exc
+        try:self._verify_recovery_leaf(parent,destination,token);guard()
+        except (OSError,WriteProofError):
+            # A foreign leaf arriving after verification is claimed, never
+            # discarded. Return it only into an unoccupied original slot.
+            try:exclusive_rename(parent,destination,parent,source)
+            except OSError:pass
+            raise RecoveryRequired('Removal recovery changed during claim; all occupants and journal retained')
+        os.fsync(parent);_fault(phase)
+
+    def _settle_xml(self,folder,plan,desired,*,retain_other=False):
+        marker=self._xml_marker(folder,plan)
+        if marker is None:
+            current=self.xml.read_bytes()
+            if current not in ((folder/'before.xml').read_bytes(),(folder/'after.xml').read_bytes()):
+                raise RecoveryRequired('Native playlist XML changed during disposal recovery')
+            if current==desired:return
+            marker=self._begin_xml_change(folder,plan,current,desired)
+        wanted=hashlib.sha256(desired).hexdigest();names=self._xml_names(plan)
+        with _restore_parent(self.xml,_recovery_parent(plan,self.xml)) as (parent,name,guard):
+            locations=self._xml_view(parent,plan,marker)
+            target=next((key for key,token in marker['tokens'].items() if token['sha256']==wanted),None)
+            if target is None:raise RecoveryRequired('Removal XML recovery requests unaccepted bytes')
+            current_key=next((key for key,leaf in locations.items() if leaf==name),None)
+            if current_key!=target:
+                if current_key is not None:
+                    self._move_recovery_leaf(parent,name,names[current_key],marker['tokens'][current_key],guard,'xml-original-claimed')
+                    locations[current_key]=names[current_key]
+                if target not in locations:raise RecoveryRequired('Desired removal XML entity is missing; journal retained')
+                self._move_recovery_leaf(parent,locations[target],name,marker['tokens'][target],guard,'xml-replacement-published')
+            self._verify_recovery_leaf(parent,name,marker['tokens'][target])
+            if retain_other:return
+            locations=self._xml_view(parent,plan,marker)
+            for key,leaf in locations.items():
+                if leaf==name:continue
+                retired=names[key]+'.retired'
+                if leaf!=retired:self._move_recovery_leaf(parent,leaf,retired,marker['tokens'][key],guard,'xml-retirement-claimed')
+                self._verify_recovery_leaf(parent,retired,marker['tokens'][key]);guard();os.unlink(retired,dir_fd=parent);os.fsync(parent)
+            guard();self._verify_recovery_leaf(parent,name,marker['tokens'][target])
+
     def _recover_locked(self):
         if not self.journal.exists():return None
         record,plan,folder=self._record();progress=self._progress(folder,plan)
+        _require_recovery_parents(plan,self.xml)
         if not plan.get('native_only'):self._guard_trash()
         # Only this already-validated owned journal admits SQLite's own hot
         # rollback. A read-copy cannot recover spilled uncommitted source pages.
@@ -517,11 +846,20 @@ class RemovalStore:
         if committed:
             for audio in plan['audio']:
                 location=locations[audio['path']]
-                if location is not None and _sha(location)!=audio['sha256']:raise RecoveryRequired('Committed disposal audio changed')
+                if location is not None and (tuple(identity(location.lstat())[:2])!=tuple(audio['epoch'][:2])
+                        or _sha(location)!=audio['sha256']):raise RecoveryRequired('Committed disposal audio changed')
         expected_xml=folder/('after.xml' if committed else 'before.xml')
-        current_xml=self.xml.read_bytes()
-        if current_xml not in ((folder/'before.xml').read_bytes(),(folder/'after.xml').read_bytes()):
-            raise RecoveryRequired('Native playlist XML changed during disposal recovery')
+        marker=self._xml_marker(folder,plan)
+        if marker is None:
+            current_xml=self.xml.read_bytes()
+            if current_xml not in ((folder/'before.xml').read_bytes(),(folder/'after.xml').read_bytes()):
+                raise RecoveryRequired('Native playlist XML changed during disposal recovery')
+        else:
+            with _restore_parent(self.xml,_recovery_parent(plan,self.xml)) as (parent,_name,_guard):self._xml_view(parent,plan,marker)
+        for resource in plan['resources']:
+            claimed=self._resource_claim_present(resource,plan)
+            if claimed and (Path(resource['path']).exists() or Path(resource['path']).is_symlink()):
+                raise RecoveryRequired('Native resource recovery has a newer live occupant; original claim and journal retained')
         if committed:
             if not all_trashed:raise RecoveryRequired('Native removal committed but audio was restored or moved; preserve the newer file state')
             for resource in plan['resources']:
@@ -533,21 +871,29 @@ class RemovalStore:
                 path=Path(audio['path']);trashed=locations[audio['path']]
                 if path.is_symlink():raise RecoveryRequired('Audio recovery path redirects')
                 if path.exists():
-                    if trashed or _sha(path)!=audio['sha256']:raise RecoveryRequired('Audio recovery occupant changed')
+                    if (trashed or tuple(identity(path.lstat())[:2])!=tuple(audio['epoch'][:2])
+                            or _sha(path)!=audio['sha256']):raise RecoveryRequired('Audio recovery occupant changed')
                 elif not trashed:raise RecoveryRequired('Interrupted disposal file cannot be located exactly')
+                elif tuple(identity(trashed.lstat())[:2])!=tuple(audio['epoch'][:2]):
+                    raise RecoveryRequired('Trashed audio is no longer the confirmed original entity')
             for resource in plan['resources']:
                 path=Path(resource['path']);backup=Path(resource['backup']);_regular(backup)
                 if _sha(backup)!=resource['sha256'] or path.is_symlink() or path.exists() and _sha(path)!=resource['sha256']:
                     raise RecoveryRequired('Native resource recovery differs')
             for audio in plan['audio']:
                 path=Path(audio['path']);trashed=locations[audio['path']]
-                if trashed is not None:os.rename(trashed,path);sync_dir(path.parent)
-                self._restore_tag(path,audio['original_tag'])
+                _restore_audio(audio,trashed,parent_identity=_recovery_parent(plan,path))
             for resource in plan['resources']:
                 path=Path(resource['path'])
                 if not path.exists():
-                    path.parent.mkdir(parents=True,exist_ok=True);atomic_bytes(path,Path(resource['backup']).read_bytes())
-        if current_xml!=expected_xml.read_bytes():atomic_bytes(self.xml,expected_xml.read_bytes())
+                    if self._resource_claim_present(resource,plan):
+                        claim,token=self._resource_claim(resource,plan)
+                        with _restore_parent(path,_recovery_parent(plan,path)) as (parent,name,guard):
+                            self._move_recovery_leaf(parent,claim,name,token,guard,'resource-original-restored')
+                    else:_restore_absent_bytes(path,Path(resource['backup']).read_bytes(),
+                                              parent_identity=_recovery_parent(plan,path))
+        for resource in plan['resources']:self._retire_resource_claim(resource,plan)
+        self._settle_xml(folder,plan,expected_xml.read_bytes())
         result=dict(format=FORMAT,source=str(self.database),library_id=self.authority.library_id,
             source_file_id=list(self.file_id),operation_id=plan['operation_id'],plan_sha256=record['plan_sha256'],
             selection_sha256=confirmation(plan),outcome='committed' if committed else 'rolled-back',
@@ -579,6 +925,7 @@ class RemovalStore:
                 if saved['plan_sha256']!=confirmed_sha256:raise RecoveryRequired('Removal result belongs to another confirmation')
                 if saved['outcome']=='committed':return saved
                 raise ConflictError('The previous disposal rolled back; prepare and confirm a fresh selection')
+            _require_recovery_parents(plan,self.xml)
             if not plan.get('native_only'):
                 self._guard_trash()
                 if self.trash is None:raise WriteProofError('A recoverable OS Trash adapter is required')
@@ -625,20 +972,22 @@ class RemovalStore:
                 progress: dict[str,Any]=dict(trash={},committed=False)
                 for index,audio in enumerate(plan['audio']):
                     self.lease._guard();path=Path(audio['path'])
-                    if identity(_audio_regular(path))!=verified_epochs[audio['path']]:raise ConflictError('Audio changed immediately before disposal')
-                    xattrs.set(path,TAG,audio['tag'].encode())
-                    _fault('tagged-'+str(index))
-                    destination=Path(self.trash(path))
-                    _fault('trashed-'+str(index))
+                    with _restore_parent(path,_recovery_parent(plan,path)) as (_parent,_name,parent_guard):
+                        if identity(_audio_regular(path))!=verified_epochs[audio['path']]:raise ConflictError('Audio changed immediately before disposal')
+                        xattrs.set(path,TAG,audio['tag'].encode())
+                        _fault('tagged-'+str(index));parent_guard()
+                        destination=Path(self.trash(path));parent_guard()
+                        _fault('trashed-'+str(index))
                     progress['trash'][audio['path']]=str(destination);atomic_bytes(folder/'progress.json',_json(progress))
                     if self._trash_location(audio,str(destination))!=destination:raise RecoveryRequired('OS Trash did not return the exact tagged file')
                 for index,resource in enumerate(plan['resources']):
                     self.lease._guard();path=Path(resource['path'])
                     if (path.resolve()!=path or _sha(path)!=resource['sha256'] or
                             _sha(Path(resource['backup']))!=resource['sha256']):raise ConflictError('Native resource or recovery changed before removal')
-                    # Verified exact backup already exists; preserve it permanently.
-                    path.unlink();sync_dir(path.parent);_fault('resource-'+str(index))
-                atomic_bytes(self.xml,(folder/'after.xml').read_bytes());_fault('xml')
+                    # Claim first: an external leaf arriving after verification
+                    # is returned/preserved, never unlinked as our resource.
+                    self._remove_resource(resource,plan);_fault('resource-'+str(index))
+                self._settle_xml(folder,plan,(folder/'after.xml').read_bytes(),retain_other=True);_fault('xml')
                 self.lease._guard();conn.set_authorizer(_authorizer);_apply(conn,plan['changes']);_fault('sql')
                 if not _matches(conn,_edges(plan['changes'])[1]):raise WriteProofError('Native removal final rows differ')
                 self.lease._guard();conn.commit();conn.close();conn=None;_fault('commit')

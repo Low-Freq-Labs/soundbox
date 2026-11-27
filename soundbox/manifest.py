@@ -347,7 +347,9 @@ def managed_current_playlists(manifest: dict, library, extra=None) -> list:
     order = manifest.get("playlist_order")
     if not isinstance(order, list):
         order = list(manifest.get("playlists") or {})
-    return [by_key[str(key)] for key in order if str(key) in by_key]
+    from .export_selection import retain_projection
+    return [retain_projection(by_key[str(key)],manifest.get('playlists',{}).get(str(key),{}))
+            for key in order if str(key) in by_key]
 
 
 def _excluded(playlist, hidden, removals) -> set:
@@ -384,6 +386,8 @@ def entry_for(playlist, hidden=frozenset(), removals=None, *,
     }
     if export_profile is not None:
         entry["export_profile"] = export_profile
+    if playlist.export_folder_path is not None:
+        entry['export_folder_path'] = list(playlist.destination_folder_path)
     return entry
 
 

@@ -25,7 +25,7 @@ _category = attrgetter(*CATEGORY_FIELDS)
 _COLLECTIONS = frozenset(('tracks_by_id', 'playlists', 'source_tags', 'source_tag_categories',
     'source_playlist_catalog', 'source_binding_issues', 'hidden_ids', 'removed_by_playlist', 'title_junk'))
 _SCALARS = tuple(field.name for field in fields(Library)
-                 if field.name not in _COLLECTIONS | {'artist_registry', 'source'})
+                 if field.name not in _COLLECTIONS | {'artist_registry', 'metadata_context', 'source'})
 SCHEMA = ('library-v1-keyed', TRACK_FIELDS, PLAYLIST_FIELDS, TAG_FIELDS, CATEGORY_FIELDS, _SCALARS)
 
 

@@ -13,6 +13,42 @@ from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QApplication
 
 from desktop import app_icon, theme
+from scripts.check_tests import qt_test_python_command
+
+
+_NATIVE_ICON_PROBE='''import ctypes,sys,traceback
+from pathlib import Path
+from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QTimer
+from soundbox.mac_icon import refresh_running_icon,_native_image
+app=QApplication([]);png=Path(sys.argv[1]).read_bytes();failed=False
+def capture():
+ refresh_running_icon(png)
+ with _native_image(png) as (send,cls,image):
+  nsapp=send(cls('NSApplication'),'sharedApplication');actual=send(nsapp,'applicationIconImage')
+  data=send(actual,'TIFFRepresentation')
+  path=send(cls('NSString'),'stringWithUTF8String:',types=(ctypes.c_char_p,),args=(sys.argv[2].encode(),))
+  assert send(data,'writeToFile:atomically:',ctypes.c_bool,(ctypes.c_void_p,ctypes.c_bool),(path,True))
+def guarded(callback,finish=False):
+ global failed
+ try:
+  callback()
+ except BaseException:
+  failed=True;traceback.print_exc()
+ finally:
+  if failed or finish:app.quit()
+QTimer.singleShot(0,lambda:guarded(lambda:refresh_running_icon(png)))
+QTimer.singleShot(750,lambda:guarded(capture,finish=True))
+result=app.exec();sys.exit(1 if failed else result)
+'''
+
+
+def native_icon_probe(png,tiff):
+    """A callback failure or hung owned probe must fail the test, not the gate."""
+    import os
+    return subprocess.run(qt_test_python_command(_NATIVE_ICON_PROBE,png,tiff,platform='cocoa'),
+                          capture_output=True,text=True,timeout=20,
+                          env={**os.environ,'QT_QPA_PLATFORM':'cocoa'})
 
 
 def pixels(image):
@@ -87,9 +123,10 @@ class ApplicationIcon(unittest.TestCase):
             self.assertTrue(app_icon.accented_image('#ffffff',256).save(buffer,'PNG'));buffer.close()
             # A separate process proves metadata survives the caller's lifetime.
             png=Path(area)/'icon.png';png.write_bytes(bytes(encoded))
-            subprocess.run([__import__('sys').executable,'-c',
+            subprocess.run(qt_test_python_command(
                 'from pathlib import Path; import sys; from soundbox.mac_icon import set_custom_icon; '
-                'set_custom_icon(Path(sys.argv[1]),Path(sys.argv[2]).read_bytes())',str(bundle),str(png)],check=True)
+                'set_custom_icon(Path(sys.argv[1]),Path(sys.argv[2]).read_bytes())',
+                bundle,png,platform='cocoa'),check=True,timeout=20)
             self.assertTrue((bundle/'Icon\r').is_file())
             self.assertEqual((contents/'Info.plist').read_bytes(),original)
             self.assertEqual(list(contents.iterdir()),[contents/'Info.plist'])
@@ -126,31 +163,13 @@ class ApplicationIcon(unittest.TestCase):
             self.assertEqual(app._soundbox_icon_persisted,'#ffffff')
 
     def test_native_running_image_changes_on_first_commit_in_a_fresh_process(self):
-        import sys
-        import os
         from io import BytesIO
         from PIL import Image,ImageCms
         with tempfile.TemporaryDirectory(prefix='soundbox-native-icon-') as area:
             root=Path(area).resolve();png=root/'saved.png';tiff=root/'native.tiff'
             self.assertTrue(app_icon.accented_image('#168fc0',256).save(str(png)))
-            code='''import ctypes,sys
-from pathlib import Path
-from PySide6.QtWidgets import QApplication
-from PySide6.QtCore import QTimer
-from soundbox.mac_icon import refresh_running_icon,_native_image
-app=QApplication([]);png=Path(sys.argv[1]).read_bytes()
-def capture():
- refresh_running_icon(png)
- with _native_image(png) as (send,cls,image):
-  nsapp=send(cls('NSApplication'),'sharedApplication');actual=send(nsapp,'applicationIconImage')
-  data=send(actual,'TIFFRepresentation')
-  path=send(cls('NSString'),'stringWithUTF8String:',types=(ctypes.c_char_p,),args=(sys.argv[2].encode(),))
-  assert send(data,'writeToFile:atomically:',ctypes.c_bool,(ctypes.c_void_p,ctypes.c_bool),(path,True))
- app.quit()
-QTimer.singleShot(0,lambda:refresh_running_icon(png));QTimer.singleShot(750,capture);app.exec()
-'''
-            subprocess.run([sys.executable,'-c',code,str(png),str(tiff)],check=True,capture_output=True,
-                           env={**os.environ,'QT_QPA_PLATFORM':'cocoa'})
+            completed=native_icon_probe(png,tiff)
+            self.assertEqual(completed.returncode,0,completed.stdout+completed.stderr)
             # macOS26 returns a Retina, half-float display-space snapshot. Use
             # native ImageIO and normalize its ICC profile for a real RGB check.
             native=root/'native.png'
@@ -162,3 +181,19 @@ QTimer.singleShot(0,lambda:refresh_running_icon(png));QTimer.singleShot(750,capt
             solid=(a[:,:,3]==255)&(a[:,:,0]==0x16)&(a[:,:,1]==0x8f)&(a[:,:,2]==0xc0)
             self.assertGreater(int(solid.sum()),1000)
             self.assertLess(float(np.abs(a[solid,:3].astype(float)-b[solid,:3]).mean()),2)
+
+    def test_native_callback_failure_exits_nonzero_with_its_traceback(self):
+        for phase in ('first-refresh','capture'):
+            with self.subTest(phase=phase),tempfile.TemporaryDirectory(
+                    prefix='soundbox-native-icon-failure-') as area:
+                png=Path(area)/'saved.png';tiff=Path(area)/'absent-parent'/'never-created.tiff'
+                if phase=='first-refresh':
+                    png.write_bytes(b'owned invalid PNG fixture')
+                    expected='ValueError: Persistent application icon requires bounded PNG data'
+                else:
+                    self.assertTrue(app_icon.accented_image('#168fc0',256).save(str(png)))
+                    expected='AssertionError'
+                completed=native_icon_probe(png,tiff)
+                self.assertNotEqual(completed.returncode,0)
+                self.assertIn(expected,completed.stderr)
+                self.assertFalse(tiff.exists())

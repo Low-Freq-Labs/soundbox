@@ -273,6 +273,68 @@ class PreferenceUiTests(unittest.TestCase):
         from PySide6.QtWidgets import QApplication
         cls.app=QApplication.instance() or QApplication([])
 
+    def test_deferred_device_profile_is_complete_on_demand_and_only_user_activation_applies(self):
+        from copy import deepcopy
+        from unittest import mock
+        from PySide6.QtCore import QEvent,QObject,Qt
+        from PySide6.QtTest import QTest
+        from PySide6.QtWidgets import QPushButton
+        from desktop.usb_preferences import MySettingsEditor
+        profile=my_settings.values(my_settings.new_files({}).items())
+        class Shows(QObject):
+            def __init__(self):super().__init__();self.unparented=[]
+            def eventFilter(self,obj,event):
+                if event.type()==QEvent.Show and isinstance(obj,QPushButton) and obj.isWindow():
+                    self.unparented.append(obj.text())
+                return False
+        shows=Shows();self.app.installEventFilter(shows)
+        self.addCleanup(lambda:self.app.removeEventFilter(shows))
+        editor=MySettingsEditor(deferred=True,auto_apply=True)
+        self.addCleanup(editor.deleteLater)
+        applied=[];editor.auto_apply_requested.connect(applied.append)
+        editor.set_profile(profile,profile)
+        self.assertFalse(editor.prepared);self.assertEqual(editor.controls,{})
+        clock=iter(i*.01 for i in range(1000))
+        with mock.patch('desktop.usb_preferences.perf_counter',side_effect=lambda:next(clock)):
+            while len(editor.controls)<2:
+                self.assertFalse(editor.prepare_step(6))
+            self.assertLess(len(editor.controls),44)
+            fresh=deepcopy(profile);fresh['MYSETTING.DAT']['tempo_range']='wide'
+            editor.set_profile(fresh,profile)
+            while not editor.prepare_step(6):pass
+        self.assertEqual(len(editor.controls),44)
+        self.assertEqual(shows.unparented,[])
+        self.assertEqual(editor.current(),fresh)
+        self.assertEqual(applied,[])
+        self.assertTrue(editor.save.isHidden())
+        control=editor.controls['MYSETTING.DAT','tempo_range']
+        control.setCurrentIndex(control.findData('six'))
+        self.assertEqual(applied,[])  # Programmatic hydration is never a write.
+        editor.set_profile(fresh,profile)
+        editor.resize(900,600);editor.show();self.app.processEvents()
+        control.setFocus();QTest.keyClick(control,Qt.Key_Home)
+        self.assertEqual(applied,[{'MYSETTING.DAT':{'tempo_range':'six'}}])
+        # A public read during a second partial build must finish, never leak a
+        # partial profile into promotion/save callbacks.
+        pending=MySettingsEditor(deferred=True);self.addCleanup(pending.deleteLater)
+        pending.set_profile(profile,profile);pending.prepare_step(0)
+        self.assertFalse(pending.prepared)
+        self.assertEqual(pending.current(),profile)
+        self.assertTrue(pending.prepared);self.assertEqual(len(pending.controls),44)
+        revealed=MySettingsEditor(deferred=True,auto_apply=True)
+        self.addCleanup(revealed.deleteLater)
+        revealed.set_profile(profile,profile);revealed.show()
+        self.assertTrue(revealed.prepared);self.assertEqual(len(revealed.controls),44)
+        self.assertEqual(revealed.current(),profile)
+
+    def test_global_profile_remains_eager_with_explicit_save(self):
+        from desktop.usb_preferences import MySettingsEditor
+        editor=MySettingsEditor(global_page=True)
+        self.addCleanup(editor.deleteLater)
+        self.assertTrue(editor.prepared);self.assertEqual(len(editor.controls),44)
+        self.assertFalse(editor.save.isHidden())
+        self.assertEqual(editor.save.text(),'Save Global My Settings')
+
     def test_usb_profile_save_emits_only_edited_fields_and_keeps_a_draft_on_refresh(self):
         from desktop.usb_preferences import MySettingsEditor
         profile=my_settings.values(my_settings.new_files({}).items())

@@ -64,6 +64,7 @@ def _read_rockbox_manifest(dev):
 
 
 def _resolve(host,request):
+    from soundbox.export_selection import retain_projection
     available=_available(host);nodes=_native_nodes(host)
     pins=request.get('selection')
     if pins is None:
@@ -98,6 +99,13 @@ def _resolve(host,request):
             node=nodes.get(native)
             if (str(row.pid)!=native or node is None or node.get('UUID')!=uuid or node.get('rb_local_deleted',0)):
                 raise SelectedExportError('Selected native playlist identity changed; choose it again')
+        projection = request.get('export_folders',{}).get(key)
+        if projection is None and request.get('selection') is None and request['kind']=='rockbox':
+            observed=request.get('managed_manifest')
+            projection=(observed[0].get('playlists',{}).get(key,{}) if observed is not None else {})
+        if projection is not None:
+            try:row=retain_projection(row,projection)
+            except ValueError as exc:raise SelectedExportError(str(exc)) from exc
         selected.append(row)
     if request.get('options',{}).get('action') in {'delete','order'} and any(
             tid not in host.lib.tracks_by_id for playlist in selected for tid in playlist.effective_keys):
@@ -113,7 +121,9 @@ def _projection_selection(host,request,selected):
         if cached and cached[1] is not None:
             baseline=deepcopy(cached[1].manifest);available=_available(host)
             for key in (baseline.get('playlists',{}) if request.get('options',{}).get('action') not in {'delete','order'} else ()):
-                if str(key) in available:output[str(key)]=available[str(key)]
+                if str(key) in available and str(key) not in output:
+                    from soundbox.export_selection import retain_projection
+                    output[str(key)]=retain_projection(available[str(key)],baseline['playlists'][key])
     return list(output.values()),baseline
 
 
@@ -299,7 +309,8 @@ def _build(host,request):
     native=tuple((str(p.pid),nodes[str(p.pid)]['UUID']) for p in projected
         if p.pid and str(p.pid) in nodes and host.lib.source_kind=='rekordbox-db')
     selected_payload=json.dumps([dict(name=p.name,folder_path=p.folder_path,keys=list(p.effective_keys),
-        pid=p.pid,export_key=p.export_key) for p in selected],allow_nan=False).encode()
+        pid=p.pid,export_key=p.export_key,export_folder_path=p.export_folder_path)
+        for p in selected],allow_nan=False).encode()
     capture=IpodExportCapture(frozen,json.dumps(rows,allow_nan=False).encode(),selected_payload,
         sum(len(host.lib.resolve(p)) for p in selected),request['source'],request['repository'],request['target'],
         request['dev'],bindings,native,json.dumps(data,allow_nan=False).encode(),
@@ -345,7 +356,10 @@ def request_ipod_export(host,kind,dev,playlists,*,options=None,ready,failed):
         pins=tuple((key,'','') if key in device_selection else (key,native,uuid) for key,native,uuid in pins)
     request=dict(kind=kind,dev=dev,source=_source(host),repository=_repository(host),target=_mount(host,dev),
         selection=pins,options=deepcopy(options or {}),batch=batch,batch_target=target,cancelled=False,
-        checkpoint=None,terminal=False,device_selection=device_selection)
+        checkpoint=None,terminal=False,device_selection=device_selection,
+        export_folders={manifest.playlist_key(p):dict(folder_path=list(p.folder_path),
+            export_folder_path=list(p.destination_folder_path))
+            for p in (playlists or ()) if p.export_folder_path is not None})
     waiting=getattr(host,'_source_sync_waiting',None)
     if waiting is None:waiting=[];host._source_sync_waiting=waiting
     waiting.append(request)

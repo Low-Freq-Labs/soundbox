@@ -131,7 +131,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QLineEdit,
-    QFileDialog, QFileSystemModel, QGridLayout, QHBoxLayout,
+    QFileDialog, QGridLayout, QHBoxLayout,
     QHeaderView, QInputDialog, QLabel, QMainWindow, QMessageBox,
     QPushButton, QSizePolicy, QSplitter, QStackedWidget,
     QTableView, QTreeView, QTreeWidgetItem, QVBoxLayout, QWidget,
@@ -190,7 +190,7 @@ from .model import (
 )
 from .player import PlayerBar
 
-from .device_browser import DeviceBrowserMixin
+from .device_browser import DeviceBrowserMixin, DeviceFileModel
 from .devices import device_facts, device_fs, human
 from .settings_page import SettingsPageMixin
 from .rekordbox_playlists import NativePlaylistsMixin, PlaylistEditController
@@ -379,7 +379,7 @@ def _artist_source_scope(library):
 from .analysis import AnalysisMixin
 from .analysis_priority import AnalysisPriorityMixin
 from .playlist_folders import PlaylistFoldersMixin
-from .cdj import CdjDeviceMixin
+from .cdj import CdjDeviceMixin, _format_paths_owned
 from .export_dialog import ExportSelectionMixin
 from .track_menu import TrackMenuButton, TrackMenuMixin, capture_tracks, source_scope
 
@@ -748,21 +748,97 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         return StockCatalogWitnessStore(self._data_file.parent / 'stock_catalog_state')
 
     @cached_property
+    def usb_settings_controller(self):
+        from .usb_settings import UsbSettingsController
+        return UsbSettingsController(self)
+
+    @cached_property
     def usb_device_pages(self):
         pages = UsbDevicePages()
         pages.stack.currentChanged.connect(lambda index:self._sync_device_tab_header(index,surface=2))
         pages.settings_requested.connect(self._apply_usb_settings)
+        pages.auto_settings_requested.connect(self._on_auto_usb_settings)
+        pages.settings_retry_requested.connect(self._retry_usb_settings)
+        pages.settings_discard_requested.connect(self._discard_unadmitted_usb_settings)
         pages.global_requested.connect(self._promote_usb_settings)
         pages.global_load_requested.connect(self._load_global_usb_settings)
         pages.song_requested.connect(self._load_usb_song)
         pages.delete_requested.connect(self._on_usb_playlist_delete)
         pages.primary_action_requested.connect(self._device_primary_action)
+        pages.reformat_requested.connect(self._on_usb_reformat_requested)
         saved_views = self.settings.get('device_views', {})
         pages._states = deepcopy(saved_views.get('usb', {})) if isinstance(saved_views, dict) else {}
+        for state in pages._states.values():
+            if isinstance(state,dict):state['page']=0
         pages.view_changed.connect(self._save_device_views)
         pages.row_enricher = self._enrich_usb_row
         self._replace_device_page(2, pages)
         return pages
+
+    def _usb_settings_scope(self):
+        lib=self.lib;repository=self._state_repository
+        return ((str(lib.source),lib.source_kind,lib.source_library_id) if lib else None,
+                repository,repository.generation,repository.area.generation)
+
+    def _on_auto_usb_settings(self,binding,changes):
+        scope=self._usb_settings_scope()
+        if not self.usb_settings_controller.enqueue(binding,changes):
+            self.usb_device_pages.retain_unadmitted_settings(binding,changes,scope)
+
+    def _retry_usb_settings(self,binding):
+        pages=self.usb_device_pages;controller=self.usb_settings_controller
+        pages._retry_unadmitted=(binding,self._usb_settings_scope(),pages._presentation_attachment)
+        controller.retry(binding)
+        self._retry_unadmitted_usb_settings()
+
+    def _retry_unadmitted_usb_settings(self):
+        pages=vars(self).get('usb_device_pages');controller=vars(self).get('usb_settings_controller')
+        if pages is None or controller is None or controller.admission_error:return
+        retry=pages._retry_unadmitted;pages._retry_unadmitted=None
+        if retry is not None:
+            binding,scope,attachment=retry
+            current=pages._settings_binding()
+            if self._usb_settings_scope()!=scope or pages._presentation_attachment!=attachment:
+                pages.set_settings_error('USB or library changed. Review the pending changes and retry again.',current)
+                return
+            if (current[1]==binding[1]
+                    and getattr(getattr(current[0],'facts',None),'volume_uuid',None)
+                    ==getattr(getattr(binding[0],'facts',None),'volume_uuid',None)):
+                binding=current
+            pages.retry_unadmitted_settings(binding,scope)
+
+    def _discard_unadmitted_usb_settings(self):
+        self.usb_device_pages.discard_unadmitted_settings()
+        self.usb_settings_controller.schedule();self._update_device_action_state()
+
+    def _prepare_device_tabs(self,pages,dev,role):
+        owner=object();self._device_preparation_owner=owner
+        mount=self._device_coordinator.mounts.get(dev)
+        def current():
+            return (getattr(self,'_device_preparation_owner',None) is owner and not self._shutting_down
+                    and not self._state_maintenance and self._device_coordinator.mounts.get(dev)==mount
+                    and self._current_device_path==dev and getattr(self,'_current_device_role','')==role)
+        def step():
+            if not current():return
+            prepare=getattr(pages,'prepare_preferences_step',None)
+            if prepare is not None and not prepare(6):QTimer.singleShot(0,self,step)
+        def begin():
+            if not current():return
+            if not getattr(pages,'_playlist_polished',False):
+                index=1 if isinstance(pages,UsbDevicePages) else 2
+                page=pages.stack.widget(index);tree=pages.playlist_tree;bar=tree.verticalScrollBar()
+                blocked=tree.blockSignals(True);scroll_blocked=bar.blockSignals(True)
+                position=bar.value()
+                try:
+                    page.ensurePolished();page.resize(pages.stack.contentsRect().size())
+                    if page.layout() is not None:page.layout().activate()
+                    tree.ensurePolished();tree.doItemsLayout();tree.viewport().ensurePolished()
+                    bar.setValue(position)
+                    pages._playlist_polished=True
+                finally:
+                    tree.blockSignals(blocked);bar.blockSignals(scroll_blocked)
+            QTimer.singleShot(0,self,step)
+        QTimer.singleShot(0,self,begin)
 
     def _replace_device_page(self, index, page):
         placeholder = self.device_content_stack.widget(index)
@@ -1019,6 +1095,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         r = self._row_cache.get(t.track_id)
         if r is None:
             r = engine.track_row(t, self.overrides, self.titles,
+                                 library=self.lib,
                                  registry=self.lib.artist_registry if self.lib else None,
                                  junk=self._title_junk(),
                                  cleanup=self.lib.metadata_cleanup_enabled if self.lib else True)
@@ -1163,7 +1240,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
 
         def build():
             return {t.track_id: engine.track_row(t, ov, ti, registry=reg, junk=junk,
-                                               cleanup=lib.metadata_cleanup_enabled)
+                                               cleanup=lib.metadata_cleanup_enabled,library=lib)
                     for t in tracks}
 
         w = OneShotTask(build)
@@ -1256,6 +1333,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             return
         cur = self.tree.currentItem()
         if cur is not None and cur.data(0, PATH_ROLE):
+            self._activate_browser_columns('rb:'+cur.data(0,PATH_ROLE))
             self._set_refreshed_rows(self._annotate_art(
                 self._playlist_rows(cur.data(0, PATH_ROLE))))
             return
@@ -1267,6 +1345,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             self._show_artists(preserve=True)
             return
         if cur is not None and cur.data(0, CUSTOM_ROLE):
+            self._activate_browser_columns('sb:'+cur.data(0,CUSTOM_ROLE))
             tracks = [t for i in self.custom.get(cur.data(0, CUSTOM_ROLE), [])
                       if i not in self.hidden
                       and (t := self.lib.tracks_by_id.get(i))]
@@ -1276,6 +1355,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         # showing its previous playlist. Refresh that actual active view.
         key = getattr(self, '_view_key', '') or ''
         if key.startswith('rb:'):
+            self._activate_browser_columns(key)
             self._set_refreshed_rows(self._annotate_art(self._playlist_rows(key[3:])))
         elif key == 'sb:Collection':self._show_collection()
         elif key == 'sb:Artists':self._show_artists(preserve=True)
@@ -1322,7 +1402,9 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             # Hidden pages can retain their old geometry until Show. Refit
             # before the browser is painted after returning from Settings.
             width = ev.size().width() if event_type == QEvent.Resize else obj.width()
-            self._fit_browser_columns(fill=True, available=width)
+            columns=getattr(self,'_browser_columns',None)
+            fill=event_type==QEvent.Resize or columns is None or not columns.has_saved_widths()
+            self._fit_browser_columns(fill=fill, available=width)
         if (getattr(self, "now_playing", None) is obj
                 and event_type == QEvent.MouseButtonRelease
                 and ev.button() == Qt.LeftButton):
@@ -1870,13 +1952,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         def cancelled():
             if navigation.cancel(sequence):
                 self._update_player_navigation()
-        src = self.titles.get(t.track_id) or t.name
-        artist = metadata.effective_artist(t.track_id, src, t.artist, self.overrides,
-                                           True, self.lib.artist_registry if self.lib else None,
-                                           stem=t.path.stem, cleanup=self.lib.metadata_cleanup_enabled if self.lib else True)
-        title = metadata.effective_title(t.track_id, t.name, artist, self.titles,
-                                         self._title_junk(), cleanup=self.lib.metadata_cleanup_enabled if self.lib else True,
-                                         source_artist=t.artist, registry=self.lib.artist_registry if self.lib else None)
+        title,artist=engine.effective_pair(t,self.overrides,self.titles,library=self.lib,junk=self._title_junk())
         label = f"{artist} — {title}" if artist and artist != "Unknown Artist" else title
         self.player_bar.play_track(
             t.track_id, t.path, title=label, bpm=t.bpm,
@@ -2900,6 +2976,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         self.device_tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.device_tree.customContextMenuRequested.connect(self._device_menu)
         self.device_tree.itemClicked.connect(self._on_device_click)
+        self.device_tree.navigation_requested.connect(lambda item:self._on_device_click(item,0))
         self.device_tree.dropped.connect(self._on_device_drop)
         self.device_tree.dropped_role.connect(
             lambda dev,items,role:self._on_device_drop(dev,items,role=role))
@@ -2956,6 +3033,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         self.table = TrackTable()
         self.table.setObjectName("TrackTable")
         self.model = TrackModel()
+        self.model.setParent(self.table)
         self.table.setModel(self.model)
         self.model.modelReset.connect(self._update_player_navigation)
         self.model.layoutChanged.connect(self._update_player_navigation)
@@ -2997,6 +3075,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             lambda name, paths: self._import_files(paths, name or None))
         hh = self.table.horizontalHeader()
         hh.setSectionResizeMode(QHeaderView.Interactive)  # all columns drag-resizable
+        hh.setSectionsMovable(True)
         hh.setStretchLastSection(False)
         hh.setMinimumSectionSize(46)
         hh.setFixedHeight(26)  # match the sidebar section-header height so they line up
@@ -3060,11 +3139,12 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         self.eject_btn.setEnabled(False)
         dhh.addWidget(self.eject_btn)
         dl.addWidget(dhead)
-        self.fs_model = QFileSystemModel()
+        self.fs_model = DeviceFileModel()
         # Browser mutations use pinned DeviceSession operations in the context
         # menu. QFileSystemModel's direct rename path cannot revalidate mounts.
         self.fs_model.setReadOnly(True)
         self.fs_view = QTreeView()
+        self.fs_model.setParent(self.fs_view)
         self.fs_view.setObjectName("DeviceBrowser")
         self.fs_view.setModel(self.fs_model)
         # Edits only start via the Edit action (not double-click, which expands).
@@ -3076,6 +3156,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         self.fs_view.setContextMenuPolicy(Qt.CustomContextMenu)
         self.fs_view.customContextMenuRequested.connect(self._browser_menu)
         fh = self.fs_view.header()
+        fh.setDefaultAlignment(Qt.AlignCenter)
         fh.setStretchLastSection(False)
         fh.setSectionResizeMode(0, QHeaderView.Stretch)  # Name grows with the window
         for c in (1, 2, 3):  # Size / Kind / Date Modified stay put (resizable)
@@ -3104,6 +3185,10 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         self.artists_view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         ah = self.artists_view.header()
         ah.setSectionResizeMode(QHeaderView.Interactive)
+        ah.setSectionsMovable(True)
+        ah.setFirstSectionMovable(True)
+        ah.setContextMenuPolicy(Qt.CustomContextMenu)
+        ah.customContextMenuRequested.connect(lambda pos:self._header_menu(pos,header=ah))
         ah.setStretchLastSection(False)
         ah.setMinimumSectionSize(46)
         # Every column, including Artist/Track, mirrors the shared saved widths.
@@ -3132,6 +3217,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         self.table.horizontalHeader().sectionResized.connect(
             self._on_browser_column_resized)
         ah.sectionResized.connect(self._on_artist_column_resized)
+        hh.sectionMoved.connect(self._on_browser_column_moved)
+        ah.sectionMoved.connect(self._on_artist_column_moved)
         return self.stack
 
     def _bottom_bar(self) -> QWidget:
@@ -3173,6 +3260,9 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         h.addWidget(self.status_count_label)
         h.addWidget(self.status_label)
         h.addStretch(1)
+        self._status_footer_layout = h
+        self._status_rate_active = False
+        self._status_rate_caption = None
         return bar
 
     # ---------- open / load ----------
@@ -3372,6 +3462,9 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             self.player_bar.refresh_live_cues(
                 loaded.track_id, loaded.path, cue_rows)
         self._sync_prep_bpm()
+        # Fresh snapshots need their source-bound manual display context even
+        # when all scalar browser inputs reuse the previous prepared rows.
+        self._build_artist_registry(invalidate_rows=False)
         # Presentation reuse is independent of source authority. Cue/tag edit
         # identities are refreshed above even when every browser input matches.
         # Retain scalar native comparison inputs during the existing browser
@@ -3405,19 +3498,16 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                     scalar_inputs.add(display_input(track))
             scalar_inputs=frozenset(scalar_inputs)
         else:scalar_inputs=frozenset(display_input(t) for t in self.lib.tracks_by_id.values())
+        from soundbox.metadata_context import signature as metadata_context_signature
         display_inputs = (
             scalar_inputs,
             tuple(sorted(self.overrides.items())), tuple(sorted(self.titles.items())),
             tuple(sorted(self.aliases.items())), tuple(self._title_junk()),
             self.lib.metadata_cleanup_enabled,
+            metadata_context_signature(self.lib),
         )
         reuse = display_inputs == getattr(self, '_display_inputs', None)
         previous_registry=getattr(self,'_display_registry',None)
-        if reuse and not prepared_only:
-            self.lib.artist_registry = self._display_registry
-        else:
-            if prepared_only:self._build_artist_registry(invalidate_rows=False)
-            else:self._build_artist_registry()
         if prepared_only:
             # Source compatibility compares incoming/current Tracks. Retain
             # the detached painted baseline too: a mutable current Track may
@@ -3783,13 +3873,22 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             # so ownership—not isRunning()—is the serialization boundary.
             self._refresh_pending = True
             return
-        self._start_rekordbox_refresh(self._rekordbox_database_path())
+        self._start_rekordbox_refresh(getattr(self,'_usb_format_refresh_path',None)
+                                    or self._rekordbox_database_path())
 
     def _start_rekordbox_refresh(self, path: Path, *, selection=False):
         if selection and (reason := self._source_selection_reason(path)):
             self._flash_status(reason, 10)
             return
+        if getattr(self,'_usb_format_device',''):
+            # The accepted erase owns the complete source overlap boundary
+            # until its worker joins. A newer read must not publish USB paths
+            # after the formatter's last pre-erase check.
+            self._usb_format_refresh_path=Path(path)
+            self._refresh_pending=True
+            return
         if self._shutting_down or self._state_maintenance or self._refresh_worker is not None or self.tag_controller.owned:
+            if getattr(self,'_usb_format_refresh_path',None) is not None:self._refresh_pending=True
             return
         if not self._device_operation_owned():
             self._start_pulse("Loading")
@@ -3806,6 +3905,9 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         w.preflight = self.tag_controller.recover_before_read
         if selection:
             w.selection_path = str(path)
+        if selection or getattr(self,'_usb_format_refresh_path',None)==Path(path):
+            self._usb_format_refresh_path=None
+            self._refresh_pending=False
         self._refresh_worker = w
         w.finished.connect(lambda ww=w: self._finish_refresh_worker(ww))
         self._sync_rekordbox_connection()
@@ -3979,16 +4081,13 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             return
         from .suggest import SuggestDialog
         from soundbox import alias_intents
-        reg = self.lib.artist_registry
         items = []
         for t in self.lib.tracks_by_id.values():
             if t.track_id in self.hidden:
                 continue
-            a = metadata.effective_artist(t.track_id, t.name, t.artist,
-                                          self.overrides, True, reg,
-                                          stem=t.path.stem, cleanup=self.lib.metadata_cleanup_enabled)
+            title,a=engine.effective_pair(t,self.overrides,self.titles,library=self.lib)
             if a == "Unknown Artist":
-                items.append((t.track_id, self.titles.get(t.track_id) or t.name))
+                items.append((t.track_id,title))
         if not items:
             self._flash_status("No Unknowns ✓", 6)
             return
@@ -4037,14 +4136,11 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         tracks = list(self.lib.tracks_by_id.values())
         source_scope = _artist_source_scope(self.lib)
         overrides = dict(self.overrides)
-        reg = self.lib.artist_registry
-        cleanup = self.lib.metadata_cleanup_enabled
+        titles=dict(self.titles);lib=self.lib
 
         def scan():
             from collections import Counter
-            counts = Counter(metadata.effective_artist(
-                t.track_id, t.name, t.artist, overrides, True, reg,
-                stem=t.path.stem, cleanup=cleanup) for t in tracks)
+            counts = Counter(engine.effective_pair(t,overrides,titles,library=lib)[1] for t in tracks)
             return dict(counts), metadata.suggest_merges(dict(counts))
 
         w = OneShotTask(scan)
@@ -4184,6 +4280,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         if self.lib is None:
             return
         self._stash_view()
+        self._activate_browser_columns('rb:'+path)
         self._set_refreshed_rows(self._annotate_art(self._playlist_rows(path)))
         self.stack.setCurrentIndex(0)
         self._restore_view(f"rb:{path}")
@@ -4325,13 +4422,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         t = self.lib.tracks_by_id.get(tid) if self.lib else None
         if t is None:
             return tid
-        src = self.titles.get(tid) or t.name
-        artist = metadata.effective_artist(
-            tid, src, t.artist, self.overrides, True,
-            self.lib.artist_registry, stem=t.path.stem, cleanup=self.lib.metadata_cleanup_enabled)
-        return metadata.effective_title(tid, t.name, artist, self.titles,
-                                        self._title_junk(), cleanup=self.lib.metadata_cleanup_enabled,
-                                        source_artist=t.artist, registry=self.lib.artist_registry if self.lib else None)
+        return engine.effective_pair(t,self.overrides,self.titles,library=self.lib,junk=self._title_junk())[0]
 
     def _confirm_duplicate_add(self, name: str, dupes: list[str]) -> bool:
         """Ok/Skip prompt when a drop contains tracks already in the playlist.
@@ -4353,20 +4444,25 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
 
         This is intentionally not ``Fix Missing Links``: no directory is ever
         crawled automatically. Core Foundation bookmarks follow ordinary moves;
-        one batched exact-name+size Spotlight query migrates legacy records or
-        recovers a cross-volume copy. The explicit folder picker remains the
-        fallback for anything ambiguous or not indexed.
+        one batched exact-name+size Spotlight query may suggest legacy matches.
+        Suggestions remain unresolved without an independent audio identity.
         """
         if getattr(self, "_state_maintenance", False):
             return
+        if getattr(self,'_usb_format_device',''):
+            self._usb_format_import_repair_pending=True
+            return
+        self._usb_format_import_repair_pending=False
         if self._import_location_worker is not None or self._shutting_down:
             return
         targets = {
             track_id: dict(rec)
             for track_id, rec in self.imported.items()
-            if (not Path(str(rec.get("path", ""))).is_file()
-                or not rec.get(file_locations.BOOKMARK_KEY))
+            if self._local_relink_binding(track_id) is not None
+            and (not Path(str(rec.get("path", ""))).is_file()
+                 or not rec.get(file_locations.BOOKMARK_KEY))
         }
+        expected=self._capture_relink_scope(targets);targets=expected['records']
         if not targets:
             return
         from .workers import OneShotTask
@@ -4374,27 +4470,37 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             lambda: file_locations.repair_locations(targets),
             log_label="Imported-file location repair")
         self._import_location_worker = worker
-        worker.done.connect(self._on_import_locations_repaired)
+        worker.done.connect(lambda result,scope=expected,owner=worker:
+                            self._on_import_locations_repaired(result,expected=scope,worker=owner))
         worker.finished.connect(
             lambda ww=worker: self._finish_worker(
                 "_import_location_worker", ww))
         worker.start()
 
-    def _on_import_locations_repaired(self, result):
+    def _on_import_locations_repaired(self, result, *, expected=None,worker=None):
         if self._shutting_down or self._state_maintenance:
             return
         if isinstance(result, Exception):
             LOG.warning("Imported-file location repair failed: %s", result)
             return
-        changed = False
+        if (expected is None or not self._relink_scope_current(expected)
+                or worker is not None and self._import_location_worker is not worker):return
+        if not isinstance(result,file_locations.LocationRepair):return
+        previous=self.imported;staged=dict(previous);selected=[]
         moved = 0
         bookmarks = 0
         for track_id, update in result.updates.items():
-            rec = self.imported.get(track_id)
-            # An import/manual relink may have won while the worker ran. Never
-            # overwrite newer state with a result planned against the old path.
-            if rec is None or str(rec.get("path", "")) != update.expected_path:
-                continue
+            if track_id not in expected['records'] or not self._relink_scope_current(expected,track_id):continue
+            rec=deepcopy(previous[track_id])
+            if str(rec.get('path',''))!=update.expected_path:continue
+            path=update.path if update.path is not None else Path(update.expected_path)
+            identity='bookmark' if update.path is not None else 'existing-path'
+            if update.identity!=identity:continue
+            if update.path is not None and not rec.get(file_locations.BOOKMARK_KEY):continue
+            try:
+                if file_locations.file_epoch(path)!=update.file_epoch:continue
+            except OSError:continue
+            changed=False
             if update.path is not None:
                 rec["path"] = str(update.path)
                 moved += 1
@@ -4404,10 +4510,19 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 rec[file_locations.BOOKMARK_KEY] = update.bookmark
                 bookmarks += 1
                 changed = True
-        if changed:
-            self._save_state()
+            if changed:staged[track_id]=rec;selected.append((path,update.file_epoch))
+        if not selected:return
+        try:
+            if (not self._relink_scope_current(expected)
+                    or any(file_locations.file_epoch(path)!=epoch for path,epoch in selected)):return
+        except OSError:return
+        self.imported=staged
+        if not self._save_state():
+            if self.imported is staged:self.imported=previous
+            LOG.warning('Imported-file locations were not saved; previous records and display retained')
+            return
         if moved and self.lib is not None:
-            imports.inject(self.lib, self.imported)
+            imports.inject(self.lib, self.imported,repair_missing=False)
             self._build_artist_registry()
             self._refresh_custom()
             self._reload_current_view()
@@ -4421,6 +4536,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
     def _import_dialog(self, playlist: str | None):
         """File picker → import livesets etc. into SoundBox (and optionally
         straight into a SoundBox playlist)."""
+        if getattr(self,'_usb_format_device',''):
+            self._flash_status('Wait for USB formatting before importing audio',15);return
         if self.lib is None:
             QMessageBox.information(self, "Open a library first",
                                    "Load your rekordbox library first (↻ on the REKORDBOX header).")
@@ -4440,6 +4557,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             self._import_files(paths,_native_destination=dict(kind='native',id=identity,uuid=row['UUID']))
 
     def _queue_shared_import(self, tracks, destination):
+        if getattr(self,'_usb_format_device',''):
+            self._flash_status('Wait for USB formatting before importing audio',15);return False
         if self.lib is None or self._shutting_down or self._state_maintenance:return False
         before=self.settings.get(shared_imports.KEY,[])
         try:
@@ -4460,6 +4579,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         appear in Collection automatically; `playlist` also adds them to that
         SoundBox playlist. Re-importing a file reuses its existing id (so
         overrides/art/playlist entries stick)."""
+        if getattr(self,'_usb_format_device',''):
+            self._flash_status('Wait for USB formatting before importing audio',15);return
         if self.lib is None or self._shutting_down or self._state_maintenance:
             return
         source_identity=(str(self.lib.source),self.lib.source_library_id)
@@ -4471,6 +4592,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             from .workers import OneShotTask
             if not hasattr(self, '_import_tasks'):
                 self._import_tasks = TaskOwner(self)
+                self._import_tasks.drained.connect(self._update_device_action_state)
             worker = OneShotTask(lambda: imports.expand_paths(
                 paths, should_cancel=worker.cancellation.is_set), log_label='Folder import')
             def retired(job):
@@ -4482,6 +4604,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                     self._import_files(job.result, playlist, _expanded=True,
                         _native_destination=_native_destination,_source_identity=source_identity,_preferences=preferences)
             self._import_tasks.adopt(worker, retired)
+            self._update_device_action_state()
             worker.start()
             return
         before_imported = dict(self.imported)
@@ -4583,6 +4706,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         from .workers import OneShotTask
         if not hasattr(self, '_import_tasks'):
             self._import_tasks = TaskOwner(self)
+            self._import_tasks.drained.connect(self._update_device_action_state)
         expected = {tid:dict(self.imported[tid]) for tid in track_ids}
         def probe():
             result = {}
@@ -4612,16 +4736,22 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             self._invalidate_rows(list(job.result))
             self._reload_current_view()
         self._import_tasks.adopt(worker, retired)
+        self._update_device_action_state()
         worker.start()
 
     def _fix_links(self, roots: list | None = None):
-        """Find imported files the user moved on disk and re-point their
-        records (filename+size matching — see imports.find_moved). Startup has
-        already tried precise bookmark/index resolution; this fallback scans
-        only a folder the user explicitly chooses."""
+        """Explicit bounded search; only independently verified audio may relink."""
+        if getattr(self,'_usb_format_device',''):
+            self._flash_status('Wait for USB formatting before fixing audio links',15);return
+        if self._shutting_down or self._state_maintenance:return
         lost = imports.missing(self.imported)
         if not lost:
             self._flash_status("Links OK ✓", 5)
+            return
+        scope=self._capture_relink_scope(lost)
+        lost=scope['records']
+        if not lost:
+            self._flash_status('Missing native audio needs a rekordbox location repair',15)
             return
         if roots is None:
             folder = QFileDialog.getExistingDirectory(
@@ -4629,56 +4759,118 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             if not folder:
                 return
             roots = [Path(folder)]
-        search = roots
+        if not self._relink_scope_current(scope):return
+        previous=getattr(self,'_relink_search',None)
+        if previous is not None and previous.get('worker') is not None:previous['worker'].cancel()
+        search = tuple(Path(root) for root in roots)
         self._start_pulse("Searching")
         from .workers import OneShotTask
         w = OneShotTask(lambda: imports.find_moved(lost, search))
+        scope['worker']=w;self._relink_search=scope
         self._oneshots = getattr(self, "_oneshots", [])
         self._oneshots.append(w)
-        w.done.connect(self._on_links_found)
+        w.done.connect(lambda result,expected=scope:self._on_links_found(result,expected=expected))
         w.finished.connect(lambda ww=w: self._finish_oneshot(ww))
+        self._update_device_action_state()
         w.start()
 
-    def _on_links_found(self, result):
+    def _local_relink_binding(self, tid):
+        lib=self.lib;track=lib.tracks_by_id.get(tid) if lib is not None else None
+        if (lib is not None and tid in lib.source_binding_issues
+                or track is not None and (not track.imported or track.source_native_id)):return None
+        bindings=self.settings.get(shared_imports.BINDINGS,[])
+        if not isinstance(bindings,list):return None
+        selected=[deepcopy(binding) for binding in bindings if isinstance(binding,dict) and binding.get('local_id')==tid]
+        if (lib is not None and any((binding.get('source'),binding.get('library_id'))==
+                    (str(lib.source),lib.source_library_id) for binding in selected)):
+            return None
+        song=None if track is None else (track.track_id,track.imported,track.source_uuid,
+                                         track.source_native_id,str(track.path))
+        return song,selected
+
+    def _capture_relink_scope(self, lost):
+        repository=self._state_repository;lib=self.lib
+        bindings={tid:self._local_relink_binding(tid) for tid in lost}
+        records={tid:deepcopy(rec) for tid,rec in lost.items() if bindings[tid] is not None}
+        return dict(library=lib,source=(str(lib.source),lib.source_library_id) if lib is not None else None,
+                    repository=repository,generation=repository.generation,area_generation=repository.area.generation,
+                    records=records,bindings={tid:bindings[tid] for tid in records})
+
+    def _relink_scope_current(self, scope, tid=None):
+        if (self._shutting_down or self._state_maintenance or scope is None
+                or getattr(self,'_usb_format_device','')):return False
+        lib=self.lib;repository=self._state_repository
+        if (lib is not scope['library'] or repository is not scope['repository']
+                or repository.generation!=scope['generation'] or repository.area.generation!=scope['area_generation']
+                or ((str(lib.source),lib.source_library_id) if lib is not None else None)!=scope['source']):return False
+        return all(self.imported.get(key)==scope['records'][key]
+                   and self._local_relink_binding(key)==scope['bindings'][key]
+                   for key in (scope['records'] if tid is None else (tid,)))
+
+    def _on_links_found(self, result, *, expected=None):
         if self._shutting_down or self._state_maintenance:
             return
+        if expected is not None and getattr(self,'_relink_search',None) is not expected:return
         self._stop_pulse()
         if isinstance(result, Exception):
             QMessageBox.warning(self, "Fix Links failed", str(result))
             return
-        self._apply_relinks(result)
-        left = imports.missing(self.imported)
+        if expected is None or not self._relink_scope_current(expected):
+            self._flash_status('The library changed during the search; choose the files again',15);return
+        if not isinstance(result,imports.RelinkSearch) or not result.complete:
+            self._flash_status('Search could not finish; missing links were left unchanged',15);return
+        accepted=self._apply_relinks(result,expected=expected)
+        if accepted is None:return
+        left = imports.missing({tid:rec for tid,rec in self.imported.items() if self._local_relink_binding(tid) is not None})
         if not left:
-            self._flash_status(f"Relinked {len(result)} ✓", 15)
+            if accepted:self._flash_status(f"Relinked {accepted} ✓", 15)
             return
         names = [Path(str(r.get("path", ""))).name for r in left.values()][:6]
         listing = "\n".join(f"  •  {n}" for n in names) + (
             f"\n  …and {len(left) - 6} more" if len(left) > 6 else "")
         if QMessageBox.question(
                 self, "Some files still missing",
-                f"Relinked {len(result)}. {len(left)} still missing:\n\n{listing}\n\n"
+                f"Relinked {accepted}. {len(left)} still missing:\n\n{listing}\n\n"
+                + ('Matching names were found, but their audio identity could not be verified.\n\n'
+                   if result.suggestions else '') +
                 "Search a folder for them?") == QMessageBox.Yes:
             folder = QFileDialog.getExistingDirectory(self, "Search folder")
             if folder:
                 self._fix_links([Path(folder)])
 
-    def _apply_relinks(self, found: dict):
-        """Point the imported records at their new paths and refresh."""
+    def _apply_relinks(self, found: dict, *, expected=None):
+        """Publish verified direct-import locations only after their durable save."""
+        if not found:return 0
+        if (not isinstance(found,imports.RelinkSearch) or not found.complete
+                or expected is None or not self._relink_scope_current(expected)):return 0
+        previous=self.imported;staged=dict(previous);accepted=0;selected=[]
         for tid, p in found.items():
-            rec = self.imported.get(tid)
-            if rec is not None:
-                rec["path"] = str(p)
-                bookmark = file_locations.create_bookmark(p)
-                if bookmark:
-                    rec[file_locations.BOOKMARK_KEY] = bookmark
-        if found:
-            if self.lib is not None:
-                imports.inject(self.lib, self.imported)
-                self._refresh_custom()
-                self._reload_current_view()
-            self._save_state()
-            self._arm_waveform_rechecks()
-            QTimer.singleShot(500, self._maybe_fill_waveforms)
+            if tid not in expected['records'] or not self._relink_scope_current(expected,tid):continue
+            try:
+                if imports.relink_file_epoch(p)!=found.proofs.get(tid):continue
+            except OSError:continue
+            rec=deepcopy(previous[tid]);rec['path']=str(p)
+            bookmark=file_locations.create_bookmark(p)
+            if bookmark:rec[file_locations.BOOKMARK_KEY]=bookmark
+            else:rec.pop(file_locations.BOOKMARK_KEY,None)
+            staged[tid]=rec;accepted+=1;selected.append((tid,p))
+        if not accepted:return 0
+        try:
+            if (not self._relink_scope_current(expected)
+                    or any(imports.relink_file_epoch(path)!=found.proofs[tid] for tid,path in selected)):return 0
+        except OSError:return 0
+        self.imported=staged
+        if not self._save_state():
+            if self.imported is staged:self.imported=previous
+            self._flash_status('Relink NOT saved — files and library links were left unchanged',15)
+            return None
+        if self.lib is not None:
+            imports.inject(self.lib,self.imported,repair_missing=False)
+            self._refresh_custom()
+            self._reload_current_view()
+        self._arm_waveform_rechecks()
+        QTimer.singleShot(500,self,self._maybe_fill_waveforms)
+        return accepted
 
     def _move_custom(self, name: str, idx: int):
         """Drag-to-reorder: move a SoundBox playlist to position `idx` in the
@@ -4784,6 +4976,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
 
     def _show_artists(self, *, preserve=False):
         """Reveal the ready Artists tree; every song already has its row."""
+        self._activate_browser_columns('sb:Artists')
         if not preserve:
             self._artists_browser.reset_navigation()
         self.stack.setCurrentIndex(2)
@@ -4840,6 +5033,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             self._load_track(t)
 
     def _show_collection(self):
+        self._activate_browser_columns('sb:Collection')
         from .prepared_browser import clean_row, context as browser_context
         prepared=getattr(self,'_prepared_collection_refresh',None)
         baseline=getattr(self,'_collection_prepared',None)
@@ -4878,6 +5072,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         self.stack.setCurrentIndex(0)
 
     def _show_custom(self, name: str):
+        self._activate_browser_columns('sb:'+name)
         tracks = [t for i in self.custom.get(name, [])
                   if i not in self.hidden
                   and (t := self.lib.tracks_by_id.get(i) if self.lib else None)]
@@ -5115,6 +5310,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         ) + ("_eject_verify_worker",)
         coordinator = self._device_coordinator
         return bool(
+            getattr(vars(self).get('usb_settings_controller'),'busy',False)
+            or
             (getattr(self, '_usb_format_device', '')
              and (not getattr(self, '_usb_format_started', False)
                   or target is None
@@ -5224,6 +5421,16 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             delete_gate=getattr(usb_pages,'set_playlist_deletion_available',None)
             if delete_gate is not None:
                 delete_gate(ready and kind in {'generic_usb','ipod_usb'})
+            reformat_gate=getattr(usb_pages,'set_reformat_available',None)
+            if reformat_gate is not None:
+                reformat_gate(ready and kind=='generic_usb' and not self._shutting_down and not self._state_maintenance
+                    and self._refresh_worker is None and not self.tag_controller.owned
+                    and not _format_paths_owned(self),
+                    mount=self._device_coordinator.mounts.get(self._current_device_path),
+                    reason='Wait for the current device operation' if busy else
+                           'Wait for the current library operation'
+                           if self._refresh_worker is not None or self.tag_controller.owned
+                           or _format_paths_owned(self) else '')
 
         active = self._device_coordinator.active
         if (getattr(self, "eject_btn", None) is not None
@@ -5237,6 +5444,9 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             self.eject_btn.setToolTip("Eject after the current read finishes")
         setup=getattr(self,'usb_setup_controller',None)
         if setup is not None:setup.kick()
+        pages=vars(self).get('usb_device_pages')
+        if pages is not None and pages._retry_unadmitted is not None:
+            QTimer.singleShot(0,self,self._retry_unadmitted_usb_settings)
 
     def _release_eject_ready(self) -> None:
         """Release a completed operation's scan hold for new device work."""
@@ -5782,6 +5992,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             profile=device_target_profile(self._device_profiles.get(dev),role)
             if profile is None:return
             self._select_only(self.device_tree)
+            self.device_tree.setCurrentItem(item,0,QItemSelectionModel.ClearAndSelect)
             self._current_device_path = dev
             self._current_device_role = role
             self.dev_header.setText(f"Device:  {Path(dev).name}   ({dev})")
@@ -5823,6 +6034,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 self._set_device_tab(self.usb_device_pages.stack.currentIndex(), refresh=True)
             self.stack.setCurrentIndex(1)
             self._update_device_action_state()
+            self._prepare_device_tabs(self.stock_ipod_pages if stock else self.usb_device_pages,dev,role)
 
     def _present_usb_device(self, dev):
         row = self._usb_device_rows.get(dev)
@@ -5832,10 +6044,22 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         if dev==self._current_device_path and getattr(self,'_current_device_role','')=='ipod_usb':
             profile=MainWindow._current_device_profile(self)
             drift=0
-        self.usb_device_pages.set_snapshot(self._usb_view_cache.get(dev),
-                                          name=name, profile=profile, free=free, drift=drift)
+        snapshot=self._usb_view_cache.get(dev)
+        controller=vars(self).get('usb_settings_controller')
+        role=getattr(profile,'kind','')
+        self.usb_device_pages._hold_preference_drafts=bool(controller is not None and any(
+            isinstance(row,dict) and row.get('device')==dev and row.get('role')==role
+            and row.get('uuid')==getattr(getattr(snapshot,'facts',None),'volume_uuid',None)
+            and row.get('token')==getattr(snapshot,'mount_token',None)
+            and row.get('mount_epoch')==getattr(self._device_coordinator.mounts.get(dev),'mount_epoch',None)
+            for row in controller.pending))
+        self.usb_device_pages.set_snapshot(snapshot,
+                                          name=name, profile=profile, free=free, drift=drift,
+                                          attachment=self._device_coordinator.mounts.get(dev))
         MainWindow._sync_device_tab_header(self,self.usb_device_pages.stack.currentIndex(),surface=2)
         self._sync_usb_my_settings(self._usb_view_cache.get(dev))
+        if self.settings.get('usb_settings_edits') or 'usb_settings_controller' in vars(self):
+            self.usb_settings_controller.schedule()
 
     def _on_usb_playlist_delete(self,ids):
         profile=MainWindow._current_device_profile(self)
@@ -5847,6 +6071,27 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             return
         self._begin_cdj_delete(self._current_device_path,list(ids),
             target_role=getattr(self,'_current_device_role','') or 'generic_usb')
+
+    def _on_usb_reformat_requested(self,binding):
+        if (self._shutting_down or self._state_maintenance or self._refresh_worker is not None
+                or self.tag_controller.owned or _format_paths_owned(self)):return
+        if not isinstance(binding,tuple) or len(binding)!=2:return
+        snapshot,mount=binding;dev=self._current_device_path
+        profile=self._device_profiles.get(dev)
+        if (not dev or self.stack.currentIndex()!=1 or self.device_content_stack.currentIndex()!=2
+                or getattr(self,'_current_device_role','') not in ('','generic_usb')
+                or getattr(profile,'kind','')!='generic_usb' or getattr(profile,'has_stock_ipod',False)
+                or getattr(profile,'has_rockbox',False) or self._usb_view_cache.get(dev) is not snapshot
+                or self._device_coordinator.mounts.get(dev)!=mount
+                or mount is None or mount.path!=dev or mount.mount_token!=self._device_mount_tokens.get(dev)
+                or self._device_operation_owned() or getattr(self,'_export_batch',None)
+                or getattr(self,'_device_finalization_refreshing',False)):return
+        from .usb_device_view import UsbSnapshot
+        if not isinstance(snapshot,UsbSnapshot) or str(snapshot.target)!=dev:return
+        facts=device_facts(dev,cached_only=True)
+        if (facts.writable is not True or not facts.volume_uuid or facts.volume_uuid!=snapshot.facts.volume_uuid
+                or snapshot.mount_token!=mount.mount_token):return
+        self._reformat_usb(dev)
 
     def _set_device_tab(self, index, *, refresh=False):
         if self.device_content_stack.currentIndex() != 2:
@@ -6536,15 +6781,33 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         self._restoring_stock_view = True
         try:
             if not (playback_only and self.stock_ipod_pages.set_playback_snapshot(result)):
-                self.stock_ipod_pages.set_snapshot(result, composite_data)
-                self._restore_stock_device_view()
-                self.stock_ipod_pages.restore_playlist_order_seat()
+                reused = self.stock_ipod_pages.set_snapshot(result, composite_data)
+                if not reused:
+                    self._restore_stock_device_view()
+                    self.stock_ipod_pages.restore_playlist_order_seat()
         finally:
             self._restoring_stock_view = False
         profile = self._device_profiles.get(dev)
         self.stock_ipod_pages.set_playlist_deletion_available(
             getattr(profile, "kind", "") in {"stock_ipod", "dual_boot"})
         self._update_device_action_state()
+
+    def _usb_reformat_menu_current(self,dev,role,mount,volume_uuid):
+        """A menu belongs to its clicked mount session, never later selection."""
+        if (self._shutting_down or self._state_maintenance or self._refresh_worker is not None
+                or self.tag_controller.owned or _format_paths_owned(self)
+                or self._device_operation_owned() or getattr(self,'_export_batch',None)
+                or getattr(self,'_device_finalization_refreshing',False)):
+            return False
+        profile=self._device_profiles.get(dev)
+        if (role or getattr(profile,'kind','')!='generic_usb'
+                or getattr(profile,'has_stock_ipod',False) or getattr(profile,'has_rockbox',False)
+                or not isinstance(mount,DeviceSessionIdentity) or mount.path!=dev
+                or mount.mount_token<=0 or self._device_mount_tokens.get(dev)!=mount.mount_token
+                or self._device_coordinator.mounts.get(dev)!=mount
+                or not isinstance(volume_uuid,str) or not volume_uuid):return False
+        facts=device_facts(dev,cached_only=True)
+        return facts.writable is True and facts.volume_uuid==volume_uuid
 
     def _device_menu(self, pos):
         item = self.device_tree.itemAt(pos)
@@ -6557,15 +6820,34 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         profile = device_target_profile(self._device_profiles.get(dev),role)
         if profile is not None and profile.kind in {'generic_usb','ipod_usb'}:
             busy=self._device_operation_owned()
-            for title,callback in (
+            actions=[
                     ('Export…',lambda:self._show_export_dialog((dev,role) if role else dev)),
-                    ('Delete playlists…',lambda:self._begin_cdj_delete(dev,target_role=role or 'generic_usb')),
-                    ('Eject',lambda:self._eject(dev))):
+                    ('Delete playlists…',lambda:self._begin_cdj_delete(dev,target_role=role or 'generic_usb'))]
+            binding=None
+            if (profile.kind=='generic_usb' and not getattr(profile,'has_stock_ipod',False)
+                    and not getattr(profile,'has_rockbox',False)):
+                binding=(dev,role,self._device_coordinator.mounts.get(dev),
+                         device_facts(dev,cached_only=True).volume_uuid)
+                def reformat():
+                    if self._usb_reformat_menu_current(*binding):self._reformat_usb(dev)
+                actions.append(('Reformat USB…',reformat))
+            actions.append(('Eject',lambda:self._eject(dev)))
+            for title,callback in actions:
                 action=menu.addAction(title,callback)
-                action.setEnabled(not (self._device_operation_owned(dev) if title=='Export…' else busy))
+                action.setEnabled(self._usb_reformat_menu_current(*binding) if title=='Reformat USB…'
+                                  else not (self._device_operation_owned(dev) if title=='Export…' else busy))
             exec_transient_menu(menu, self.device_tree.mapToGlobal(pos))
             return
-        menu.addAction("Browse", lambda: self._on_device_click(item, 0))
+        def browse():
+            # Discovery can rebuild rows while the menu is open. Resolve the
+            # captured logical role without borrowing its same-mount sibling.
+            for index in range(self.device_tree.topLevelItemCount()):
+                current = self.device_tree.topLevelItem(index)
+                if (current.data(0,DEVPATH_ROLE)==dev
+                        and (current.data(0,DEVROLE_ROLE) or '')==role):
+                    self._on_device_click(current,0)
+                    return
+        menu.addAction("Browse", browse)
         busy = self._device_operation_owned()
         profile = self._device_profiles.get(dev)
         if getattr(profile, 'kind', '') in {'stock_ipod', 'dual_boot', 'rockbox'}:
@@ -8409,6 +8691,22 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         self._start_pulse("Syncing")
 
     # ---------- columns ----------
+    def _activate_browser_columns(self,view):
+        columns=getattr(self,'_browser_columns',None)
+        if columns is not None:columns.activate(view)
+
+    def _on_browser_column_moved(self,*_args):
+        if getattr(self,'_artist_column_sync',False):return
+        self._sync_artist_columns()
+
+    def _on_artist_column_moved(self,logical,_old,visual):
+        if getattr(self,'_artist_column_sync',False):return
+        self._artist_column_sync=True
+        try:
+            header=self.table.horizontalHeader()
+            header.moveSection(header.visualIndex(logical),visual)
+        finally:self._artist_column_sync=False
+
     def _apply_default_columns(self):
         self._browser_column_fit = True
         try:
@@ -8832,9 +9130,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         for tid in self.lib.tracks_by_id:
             if kinds[tid] == "avatar":
                 t = self.lib.tracks_by_id[tid]
-                artist = metadata.effective_artist(
-                    tid, t.name, t.artist, self.overrides, True,
-                    self.lib.artist_registry, stem=t.path.stem, cleanup=self.lib.metadata_cleanup_enabled)
+                _title,artist=engine.effective_pair(t,self.overrides,self.titles,library=self.lib)
                 groups.setdefault(artist, []).append(tid)
         out = []
         for artist in sorted(groups, key=str.casefold):
@@ -8875,10 +9171,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         for tid, track in self.lib.tracks_by_id.items():
             if tid in self.lib.hidden_ids or self.art_cache.status(tid) != "ok":
                 continue
-            title = self.titles.get(tid) or track.name
-            artist = metadata.effective_artist(
-                tid, title, track.artist, self.overrides, True,
-                self.lib.artist_registry, stem=track.path.stem, cleanup=self.lib.metadata_cleanup_enabled)
+            title,artist=engine.effective_pair(track,self.overrides,self.titles,library=self.lib)
             origin = self.art_cache.index[tid].get("origin")
             label = {"manual": "Manual", "auto": "Automatic"}.get(origin, "Unrecorded history")
             priority = 0 if origin == "auto" else 2 if origin == "manual" else 1
@@ -9036,9 +9329,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
 
         def current_artist(tid):
             track = self.lib.tracks_by_id.get(tid) if self.lib else None
-            return bool(track and metadata.effective_artist(tid, track.name, track.artist,
-                self.overrides, True, self.lib.artist_registry, stem=track.path.stem,
-                cleanup=self.lib.metadata_cleanup_enabled) == c["artist"])
+            return bool(track and engine.effective_pair(track,self.overrides,self.titles,library=self.lib)[1]==c['artist'])
 
         def landed(worker, current_ids):
             res = worker.result
@@ -9089,9 +9380,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             return
         from .artwork_requests import track_binding
         binding = track_binding(self, tid)
-        title = self.titles.get(tid) or t.name
-        artist = metadata.effective_artist(tid, title, t.artist, self.overrides, True,
-                                           self.lib.artist_registry, stem=t.path.stem, cleanup=self.lib.metadata_cleanup_enabled)
+        title,artist=engine.effective_pair(t,self.overrides,self.titles,library=self.lib)
         dlg = ArtPickerDialog(artist, title, self, provider=self.providers.artwork)
         try:
             dlg.exec()
@@ -9130,11 +9419,15 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             w.deleteLater()
 
     def _finish_oneshot(self, w, *, owned=False):
+        search=getattr(self,'_relink_search',None)
+        relink=isinstance(search,dict) and search.get('worker') is w
+        if relink and isinstance(w,QThread) and w.isFinished():w.wait()
         try:
             self._oneshots.remove(w)
         except ValueError:
             pass
         if not owned:w.deleteLater()
+        if relink:self._update_device_action_state()
 
     @_art_ui_action
     def _on_oneshot(self, tid, res, *, local=False):
@@ -9168,9 +9461,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         t = self.lib.tracks_by_id.get(tid) if self.lib else None
         if not t:
             return
-        title = self.titles.get(tid) or t.name
-        artist = metadata.effective_artist(tid, title, t.artist, self.overrides, True,
-                                           self.lib.artist_registry, stem=t.path.stem, cleanup=self.lib.metadata_cleanup_enabled)
+        title,artist=engine.effective_pair(t,self.overrides,self.titles,library=self.lib)
         self._run_oneshot(tid, lambda: self.providers.artwork.fetch_best(artist, title))
 
     @_provider_action('artwork.search')
@@ -9180,9 +9471,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         track=self.lib.tracks_by_id.get(tid) if self.lib else None
         if track is None or not callable(fetch):return
         def artist_for(current):
-            title=self.titles.get(tid) or current.name
-            return metadata.effective_artist(tid,title,current.artist,self.overrides,True,
-                self.lib.artist_registry,stem=current.path.stem,cleanup=self.lib.metadata_cleanup_enabled)
+            return engine.effective_pair(current,self.overrides,self.titles,library=self.lib)[1]
         artist=artist_for(track)
         if not artist or artist==metadata.UNKNOWN_ARTIST:
             self._flash_status('Set the track’s artist before choosing its profile picture',8);return
@@ -9584,16 +9873,22 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         else:
             self._refresh_model_art()
 
-    def _header_menu(self, pos):
+    def _header_menu(self, pos, *, header=None):
         menu = QMenu(self)
+        columns=getattr(self,'_browser_columns',None)
+        expected=columns.binding() if columns is not None else None
         for i, (_k, label, _h) in enumerate(COLUMNS):
             act = menu.addAction(label)
             act.setCheckable(True)
             act.setChecked(not self.table.isColumnHidden(i))
-            act.toggled.connect(lambda on, col=i: self._set_column_hidden(col, not on))
-        exec_transient_menu(menu, self.table.horizontalHeader().mapToGlobal(pos))
+            act.toggled.connect(lambda on,col=i,binding=expected:self._set_column_hidden(col,not on,expected=binding))
+        exec_transient_menu(menu, (header or self.table.horizontalHeader()).mapToGlobal(pos))
 
-    def _set_column_hidden(self, col: int, hidden: bool):
+    def _set_column_hidden(self, col: int, hidden: bool, *, expected=None):
+        columns=getattr(self,'_browser_columns',None)
+        if columns is not None:
+            columns.visibility(col,hidden,expected=expected)
+            return
         self.table.setColumnHidden(col, hidden)
         self._fit_browser_columns(fill=True)
         self._sync_artist_columns()
@@ -9606,8 +9901,14 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         restores the outer window first and the sidebar panes second.
         """
         hh = self.table.horizontalHeader()
-        self.settings["columns_state"] = bytes(hh.saveState().toBase64()).decode("ascii")
-        self.settings['columns_keys'] = [key for key,_label,_hidden in COLUMNS]
+        columns=getattr(self,'_browser_columns',None)
+        if columns is not None:
+            columns.remember()
+            self.settings['columns_state']=columns.default['state']
+            self.settings['columns_keys']=columns.default['keys']
+        else:
+            self.settings["columns_state"] = bytes(hh.saveState().toBase64()).decode("ascii")
+            self.settings['columns_keys'] = [key for key,_label,_hidden in COLUMNS]
         self.settings["sidebar_split"] = list(self._sidebar_split.sizes())
         self.settings['sidebar_width'] = self._browser_split.sizes()[0]
         self.settings["window_geometry"] = bytes(
@@ -9691,34 +9992,27 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
             self._sidebar_split.setSizes([sum(sizes[:2]),sizes[2]] if len(sizes)==3 else sizes)
         else:
             self._sidebar_split.setSizes([1000, 96])  # classic proportions
-        state = self.settings.get("columns_state")
-        if not state:
-            self._sync_artist_columns()
-            return
-        from PySide6.QtCore import QByteArray
-        hh = self.table.horizontalHeader()
-        self._browser_column_fit = True
-        try:
-            if hh.restoreState(QByteArray.fromBase64(state.encode("ascii"))):
-                # Qt restores an older header successfully but unhides every
-                # section added since it was saved. New fields are opt-in.
-                keys=self.settings.get('columns_keys')
-                if not isinstance(keys,list):keys=[key for key,_label,_hidden in COLUMNS[:10]]
-                for i,(key,_label,hidden) in enumerate(COLUMNS):
-                    if key not in keys:self.table.setColumnHidden(i,hidden)
-                hh.setSortIndicator(-1, Qt.AscendingOrder)
-                hh.setSectionResizeMode(QHeaderView.Interactive)
-                hh.setStretchLastSection(False)
-        finally:
-            self._browser_column_fit = False
-        self._fit_browser_columns()
-        self._sync_artist_columns()
+        from .browser_columns import BrowserColumns
+        previous=getattr(self,'_browser_columns',None)
+        if previous is not None:
+            for header in (self.table.horizontalHeader(),self.artists_view.header()):
+                header.viewport().removeEventFilter(previous)
+            previous.deleteLater()
+        self._browser_columns=BrowserColumns(self)
 
     # ---------- export (auto on drop) ----------
     def _resolve_jobs(self, items: list[tuple[str, str]]) -> list[Playlist]:
         pls: list[Playlist] = []
+        roots = []
         for kind, val in items:
-            if kind == 'rbid':
+            if kind == 'folder-roots':
+                try:
+                    selected_roots=json.loads(val)
+                    if not isinstance(selected_roots,list):raise ValueError('Invalid folder roots')
+                    roots.extend(selected_roots)
+                except (ValueError,TypeError,UnicodeError):
+                    self._flash_status('The selected folder changed; drag its current row again',15);return []
+            elif kind == 'rbid':
                 from .trees import native_playlist_binding
                 try:
                     binding=native_playlist_binding(json.loads(val))
@@ -9755,6 +10049,14 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 pl = self._view_playlist(val)
                 if pl is not None:
                     pls.append(pl)
+        if roots:
+            from soundbox.export_selection import project_folder_roots
+            try:
+                pls=project_folder_roots(self.lib,pls,roots,
+                    local_tree=self._local_playlist_tree() if any(root.get('kind')=='local'
+                        for root in roots if isinstance(root,dict)) else ())
+            except (ValueError,TypeError,KeyError):
+                self._flash_status('The selected folder changed; drag its current row again',15);return []
         return pls
 
     @staticmethod
@@ -9995,7 +10297,7 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
                 lambda stage, done, total, label, w=worker:
                 self._on_device_phase_progress(w, stage, done, total, label))
         worker.start()
-        if phase in {Phase.PLANNING, Phase.EXECUTING}:
+        if phase in {Phase.PLANNING, Phase.EXECUTING} and intent!='commit-usb-settings':
             self.cancel_btn.setVisible(True)
         self._update_device_action_state()
 
@@ -10241,6 +10543,10 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         the app quits while a worker thread is still running."""
         if getattr(self, "_shutdown_waiting", False):
             return
+        usb_pages=vars(self).get('usb_device_pages')
+        if usb_pages is not None:usb_pages.flush_auto_settings()
+        usb_settings=vars(self).get('usb_settings_controller')
+        if usb_settings is not None and not usb_settings.flush_admission():return False
         for name in ('playlist_controller','tag_definition_controller'):
             flush=getattr(getattr(self,name,None),'flush_admission',None)
             if flush is not None and not flush():
@@ -10261,6 +10567,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         if hasattr(self,'_remember_stock_device_view'):
             self._remember_stock_device_view()
         self._shutting_down = True
+        self._device_preparation_owner=None
+        if usb_settings is not None:usb_settings.stop()
         self.usb_setup_controller.stop()
         self._artists_refresh.stop()
         self._export_batch = None
@@ -10388,6 +10696,23 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         """Quit admission only: ordinary editing and source pumps stay open."""
         if getattr(self, '_shutting_down', False):
             return ''
+        pages=vars(self).get('usb_device_pages')
+        if pages is not None and pages._unadmitted_settings:
+            return 'USB changes need Retry or Discard before closing — SoundBox remains open'
+        usb_settings=vars(self).get('usb_settings_controller')
+        if usb_settings is not None:
+            ack=getattr(usb_settings,'ack',None)
+            retained_ack=bool(ack is not None and 'usb_settings_edits' in retained
+                              and ack.retention_capture() is not None and not usb_settings.admission.pending)
+            if usb_settings.admission_error and not retained_ack:
+                return 'USB settings need attention — '+str(usb_settings.admission_error)
+            if usb_settings.admission_pending and not retained_ack:
+                return 'Finishing USB settings — SoundBox remains open'
+            if 'usb_settings_edits' not in retained and usb_settings.pending:
+                usb_settings.schedule()
+                error=next((row.get('error') for row in usb_settings.pending if row.get('error')),'')
+                return ('USB settings need attention — '+str(error) if error else
+                        'Finishing USB settings — SoundBox remains open')
         if getattr(getattr(self, '_art_requests', None), 'manual_pending', lambda:False)():
             return 'Finishing artwork saves — SoundBox remains open'
         for name in ('playlist_controller', 'tag_definition_controller'):
@@ -10487,6 +10812,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
 
     def _defer_quit_for_saves(self, *, auto_close=False):
         if getattr(self,'_shutting_down',False):return False
+        usb_pages=vars(self).get('usb_device_pages')
+        if usb_pages is not None:usb_pages.flush_auto_settings()
         if not MainWindow._flush_settings_preferences(self):return True
         committer=getattr(self,'_state_committer',None)
         if (committer is not None and committer.preferences_error is not None
@@ -10538,6 +10865,14 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
 
     def _set_status_count(
             self, done: int | None = None, total: int | None = None, *, byte_counts: bool = False):
+        if getattr(self, '_status_rate_active', False):
+            layout = self._status_footer_layout
+            layout.removeWidget(self.status_count_label)
+            layout.insertWidget(layout.indexOf(self.status_label), self.status_count_label)
+            self._status_rate_active = False
+            self._status_rate_caption = None
+            self.status_count_label.setAlignment(Qt.AlignCenter)
+            self.status_label.reserve((self._pulse_word + '...') if self._pulse_word else self.status_label.text())
         if done is None or total is None or int(total)<=0:
             self.status_count_label.clear()
             self.status_count_label.setVisible(False)
@@ -10555,9 +10890,28 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         self.status_count_label.setText(text)
         self.status_count_label.setVisible(True)
 
+    def _set_status_rate(self, bytes_per_second, *, caption=None):
+        """Keep speed after a stable phase slot, independent of animated dots."""
+        label=self.status_count_label;fm=label.fontMetrics()
+        label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        if not self._status_rate_active:
+            layout = self._status_footer_layout
+            layout.removeWidget(label)
+            layout.insertWidget(layout.indexOf(self.status_label) + 1, label)
+            self._status_rate_active = True
+        self._status_rate_caption = max((caption or self._status_rate_caption or 'Copying songs...', 'Writing USB library...'),
+                                        key=self.status_label.fontMetrics().horizontalAdvance)
+        self.status_label.reserve(self._status_rate_caption)
+        placeholder='Measuring speed…'
+        label.setFixedWidth(max(fm.horizontalAdvance(text) for text in
+            (placeholder,*(f'1023.9 {unit}/s avg' for unit in ('B','KB','MB','GB','TB'))))+16)
+        label.setText(placeholder if bytes_per_second is None else human(bytes_per_second)+'/s avg')
+        label.setVisible(True)
+
     def _set_device_progress(self, value: int) -> None:
         """Publish truthful transaction progress; 1000 is terminal only."""
         self.progress.setRange(0, 1000)
+        self.progress.setTextVisible(True)
         self.progress.setValue(max(0, min(1000, int(value))))
         self.progress.setFormat("%p%")
         self.progress.setVisible(True)
@@ -10612,7 +10966,8 @@ class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, A
         self._pulse_word = word
         self._status_generation = getattr(self, "_status_generation", 0) + 1
         self._pulse_dots = 0
-        self.status_label.reserve(word + "...")
+        self.status_label.reserve(self._status_rate_caption
+            if getattr(self, '_status_rate_active', False) else word + "...")
         self.status_label.setText(word)
         self.status_label.setToolTip(word)
         self._pulse_timer.start()

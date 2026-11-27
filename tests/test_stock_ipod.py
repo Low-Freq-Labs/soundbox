@@ -813,6 +813,52 @@ class StockIpodSync(unittest.TestCase):
                 self.assertEqual(path.read_bytes(), contents, relative)
         self.assertFalse((self.ipod / plan.copies[0].relative_path).exists())
 
+    def test_fulfilled_manual_title_keeps_exact_case_in_stock_catalog_for_its_library(self):
+        from dataclasses import replace
+        from desktop import prepared_browser
+        from soundbox import metadata, metadata_provenance
+
+        title = 'Payday -Shadow Puppets (Yami Flip)'
+        track = Track('new', title, 'YAMI', self.new_source.as_uri(),
+            total_time=1, source_native_id='native-new', source_uuid='uuid-new',
+            source_native_path=str(self.new_source))
+        playlist = Playlist('Manual Title', [], ['new'])
+        library = Library({'new': track}, [playlist], self.sources / 'generated-master.db',
+            source_kind='rekordbox-db', source_library_id='generated-library')
+        origin = dict(scope=dict(source=str(library.source), kind=library.source_kind,
+                library_id=library.source_library_id),
+            local_id=track.track_id, native_id=track.native_id, uuid=track.source_uuid,
+            path=track.source_native_path, native_title=title, native_artist=track.artist)
+        origin = metadata_provenance.seed(origin, title=title,
+            artist=track.artist, display_artist=track.artist)
+        origin = metadata_provenance.edit(origin, {'title': title})
+        captured = metadata_provenance.snapshot(origin, 'title', {'new': title})
+        origin = metadata_provenance.acknowledge(origin, dict(
+            id='a' * 32, field='title', value=title, curation=captured))
+        prepared_browser.registry_inputs(library, {'new': origin}, {})
+        library.artist_registry = metadata.build_registry(['YAMI'], ['YAMI'])
+        ordinary = metadata.effective_title('new', title, 'YAMI',
+            source_artist='YAMI', registry=library.artist_registry)
+        self.assertNotEqual(ordinary, title)
+        before = self._snapshot(self.ipod)
+
+        for label, source_library, titles, expected in (
+            ('exact', library, {}, title),
+            ('physical', library, {'new': 'Fresh (Yami Flip)'}, 'Fresh (Yami Flip)'),
+            ('foreign', replace(library, source_library_id='other-library'), {}, ordinary),
+            ('unbound', replace(library, metadata_context=None), {}, ordinary),
+        ):
+            with self.subTest(context=label):
+                plan = plan_stock_ipod_sync(source_library, [playlist], self.ipod,
+                    model_number='MA446', filesystem='msdos', usb_family='iPod Video',
+                    title_overrides=titles)
+                self.assertEqual(len(plan.copies), 1)
+                staged = self.base / ('manual-' + label + '-iTunesDB')
+                staged.write_bytes(plan.rendered_database)
+                rows = get_ipod_tracks(stock_ipod.parse_itunesdb(str(staged)))
+                self.assertEqual([row['title'] for row in rows if row['dbid'] != 101], [expected])
+        self.assertEqual(self._snapshot(self.ipod), before)
+
     def test_selected_reused_track_gets_soundbox_title_and_artist_only(self):
         source_hash = _hash(self.existing_source)
         before = get_ipod_tracks(read_ipod(self.ipod))[0]
@@ -1949,6 +1995,321 @@ class StockIpodSync(unittest.TestCase):
         self.assertTrue((self.ipod / "iPod_Control/iTunes/Play Counts").is_file())
         self.assertFalse((self.ipod / plan.copies[0].relative_path).exists())
         self.assertTrue((self.ipod / ".soundbox/stock-ipod-recovery").is_dir())
+
+    def _copy_ownership_plan(self):
+        return plan_stock_ipod_sync(
+            self.library, [self.playlist], self.ipod,
+            model_number='MA446', filesystem='msdos', usb_family='iPod Video')
+
+    def _new_media_failure_receipt(self):
+        receipts = list((self.ipod / '.soundbox/stock-ipod-recovery').glob('*/plan.json'))
+        self.assertEqual(len(receipts), 1)
+        row = json.loads(receipts[0].read_bytes())
+        self.assertEqual(row['transaction_state'], 'recovery required')
+        self.assertTrue((receipts[0].parent / 'iTunesDB.before').is_file())
+        self.assertFalse((row.get('payload_retirement') or {}).get('complete'))
+        witness = json.loads((receipts[0].parent / 'new-media-conflict.json').read_bytes())
+        self.assertEqual(witness['format'], 'soundbox-stock-new-media-conflict-v1')
+        return receipts[0], witness
+
+    def _fail_new_media_catalog_write(self, session, destination, data):
+        if Path(destination).name == 'iTunesDB':
+            raise OSError('Generated database failure after media ACK')
+        return self._native_new_media_write(session, destination, data)
+
+    def test_acknowledged_copy_foreign_replacement_survives_failure_and_later_retry(self):
+        plan = self._copy_ownership_plan()
+        database = self.ipod / plan.database_relative_path
+        before = database.read_bytes()
+        destination = self.ipod / plan.copies[0].relative_path
+        foreign = b'unrelated recording arrived after ACK'
+        self._native_new_media_write = DeviceSession.atomic_write
+
+        def replace_acknowledged(relative):
+            path = self.ipod / relative
+            temporary = path.with_suffix('.foreign')
+            temporary.write_bytes(foreign)
+            temporary.replace(path)
+
+        with mock.patch.object(DeviceSession, 'atomic_write', autospec=True, side_effect=self._fail_new_media_catalog_write):
+            with self.assertRaisesRegex(StockIpodError, 'exact rollback was incomplete') as error:
+                commit_stock_ipod_sync(plan, on_track_committed=replace_acknowledged)
+        self.assertEqual(error.exception.recovery_status, 'recovery required')
+        self.assertEqual(destination.read_bytes(), foreign)
+        self.assertEqual(database.read_bytes(), before)
+        receipt, witness = self._new_media_failure_receipt()
+        self.assertEqual(witness['files'][0]['path'], str(plan.copies[0].relative_path))
+        self.assertIn('orphan media', receipt.read_text())
+        session = DeviceSession(self.ipod, [], create=False)
+        self.assertEqual(stock_ipod.resume_completed_payload_retirement(session, 'stock-ipod-recovery'), ())
+        with self.assertRaisesRegex(StockIpodError, 'no longer free'):
+            commit_stock_ipod_sync(plan)
+        self.assertEqual(destination.read_bytes(), foreign)
+        self.assertEqual(database.read_bytes(), before)
+        self.assertTrue(receipt.is_file())
+
+    def test_acknowledged_byte_identical_foreign_inode_is_not_deleted(self):
+        plan = self._copy_ownership_plan()
+        destination = self.ipod / plan.copies[0].relative_path
+        observations = []
+        self._native_new_media_write = DeviceSession.atomic_write
+
+        def replace_acknowledged(relative):
+            path = self.ipod / relative
+            old = path.stat()
+            temporary = path.with_suffix('.foreign')
+            temporary.write_bytes(path.read_bytes())
+            os.utime(temporary, ns=(old.st_atime_ns, old.st_mtime_ns))
+            temporary.replace(path)
+            observations.append((old.st_ino, path.stat().st_ino, path.read_bytes()))
+
+        with mock.patch.object(DeviceSession, 'atomic_write', autospec=True, side_effect=self._fail_new_media_catalog_write):
+            with self.assertRaises(StockIpodError) as error:
+                commit_stock_ipod_sync(plan, on_track_committed=replace_acknowledged)
+        self.assertEqual(error.exception.recovery_status, 'recovery required')
+        self.assertNotEqual(observations[0][0], observations[0][1])
+        self.assertEqual(destination.read_bytes(), observations[0][2])
+        self._new_media_failure_receipt()
+
+    def test_unknown_conflict_metadata_occupant_is_preserved_with_recovery_required(self):
+        plan = self._copy_ownership_plan()
+        destination = self.ipod / plan.copies[0].relative_path
+        self._native_new_media_write = DeviceSession.atomic_write
+        record = stock_ipod._record_new_media_conflict
+        foreign_metadata = []
+
+        def replace_acknowledged(relative):
+            path = self.ipod / relative
+            incoming = path.with_suffix('.foreign')
+            incoming.write_bytes(b'foreign payload'); incoming.replace(path)
+
+        def add_unknown_metadata(session, recovery, copied, database_sha256_before, failures):
+            path = session.guard(recovery / 'new-media-conflict.json')
+            path.write_bytes(b'unrelated recovery directory occupant')
+            foreign_metadata.append(path)
+            return record(session, recovery, copied, database_sha256_before, failures)
+
+        with mock.patch.object(DeviceSession, 'atomic_write', autospec=True, side_effect=self._fail_new_media_catalog_write), \
+                mock.patch.object(stock_ipod, '_record_new_media_conflict', add_unknown_metadata):
+            with self.assertRaises(StockIpodError) as error:
+                commit_stock_ipod_sync(plan, on_track_committed=replace_acknowledged)
+        self.assertEqual(error.exception.recovery_status, 'recovery required')
+        self.assertEqual(destination.read_bytes(), b'foreign payload')
+        self.assertEqual(len(foreign_metadata), 1)
+        self.assertEqual(foreign_metadata[0].read_bytes(), b'unrelated recovery directory occupant')
+        self.assertTrue((foreign_metadata[0].parent / 'iTunesDB.before').exists())
+        receipt = json.loads((foreign_metadata[0].parent / 'plan.json').read_bytes())
+        self.assertEqual(receipt['transaction_state'], 'recovery required')
+        self.assertIn('New media conflict evidence', receipt['error'])
+
+    def test_copy_witness_capture_cannot_acknowledge_a_replaced_live_publication(self):
+        plan = self._copy_ownership_plan()
+        wanted = plan.copies[0].relative_path
+        destination = self.ipod / wanted
+        capture = stock_ipod.stock_delete.capture
+        observations = []
+
+        def replace_after_capture(session, relative, **kwargs):
+            entity = capture(session, relative, **kwargs)
+            if relative == wanted and not observations:
+                temporary = destination.with_suffix('.foreign')
+                temporary.write_bytes(b'foreign after witness capture')
+                temporary.replace(destination)
+                observations.append(entity)
+            return entity
+
+        with mock.patch.object(stock_ipod.stock_delete, 'capture', replace_after_capture):
+            with self.assertRaises(StockIpodError) as error:
+                commit_stock_ipod_sync(plan)
+        self.assertEqual(error.exception.recovery_status, 'recovery required')
+        self.assertEqual(len(observations), 1)
+        self.assertEqual(destination.read_bytes(), b'foreign after witness capture')
+        receipts = list((self.ipod / '.soundbox/stock-ipod-recovery').glob('*/plan.json'))
+        self.assertEqual(len(receipts), 1)
+        receipt = json.loads(receipts[0].read_bytes())
+        self.assertEqual(receipt['transaction_state'], 'recovery required')
+        self.assertIn(str(wanted), receipt['error'])
+        self.assertFalse((receipts[0].parent / 'new-media-conflict.json').exists())
+
+    def test_foreign_media_arriving_at_cleanup_claim_is_restored_and_retained(self):
+        plan = self._copy_ownership_plan()
+        destination = self.ipod / plan.copies[0].relative_path
+        self._native_new_media_write = DeviceSession.atomic_write
+        rename = stock_ipod.stock_delete._exclusive_move
+        arrived = []
+        foreign = b'foreign file arrived after cleanup descriptor was opened'
+
+        def replace_before_claim(parent, name, target_parent, target_name):
+            if name == destination.name and not arrived:
+                temporary = destination.with_suffix('.foreign')
+                temporary.write_bytes(foreign)
+                temporary.replace(destination)
+                arrived.append(destination)
+            return rename(parent, name, target_parent, target_name)
+
+        with mock.patch.object(DeviceSession, 'atomic_write', autospec=True, side_effect=self._fail_new_media_catalog_write), \
+                mock.patch.object(stock_ipod.stock_delete, '_exclusive_move', replace_before_claim):
+            with self.assertRaises(StockIpodError) as error:
+                commit_stock_ipod_sync(plan)
+        self.assertEqual(error.exception.recovery_status, 'recovery required')
+        self.assertEqual(arrived, [destination])
+        self.assertEqual(destination.read_bytes(), foreign)
+        receipt, _ = self._new_media_failure_receipt()
+        self.assertFalse(list(receipt.parent.glob('.new-copy-*.pending')))
+
+    def test_claimed_media_replacement_during_catalog_check_is_never_unlinked(self):
+        plan = self._copy_ownership_plan()
+        destination = self.ipod / plan.copies[0].relative_path
+        self._native_new_media_write = DeviceSession.atomic_write
+        catalog_check = stock_ipod._require_copy_cleanup_catalog
+        arrivals = []
+        foreign = b'foreign replacement inside claimed recovery slot'
+
+        def replace_claim_after_check(session, relative, expected):
+            value = catalog_check(session, relative, expected)
+            claims = list((self.ipod / '.soundbox/stock-ipod-recovery').glob('*/.new-copy-*.pending'))
+            if claims and not arrivals:
+                incoming = claims[0].with_suffix('.foreign')
+                incoming.write_bytes(foreign)
+                incoming.replace(claims[0])
+                arrivals.append(claims[0])
+            return value
+
+        with mock.patch.object(DeviceSession, 'atomic_write', autospec=True, side_effect=self._fail_new_media_catalog_write), \
+                mock.patch.object(stock_ipod, '_require_copy_cleanup_catalog', replace_claim_after_check):
+            with self.assertRaises(StockIpodError) as error:
+                commit_stock_ipod_sync(plan)
+        self.assertEqual(error.exception.recovery_status, 'recovery required')
+        self.assertEqual(len(arrivals), 1)
+        self.assertEqual(destination.read_bytes(), foreign)
+        self.assertFalse(arrivals[0].exists())
+        self._new_media_failure_receipt()
+
+    def test_external_catalog_adopting_acknowledged_copy_is_preserved(self):
+        plan = self._copy_ownership_plan()
+        database = self.ipod / plan.database_relative_path
+        before = database.read_bytes()
+        destination = self.ipod / plan.copies[0].relative_path
+        arrivals = []
+
+        def adopt_copy(relative):
+            arrivals.append(relative)
+            database.write_bytes(plan.rendered_database)
+
+        with self.assertRaises(StockIpodError) as error:
+            commit_stock_ipod_sync(plan, on_track_committed=adopt_copy)
+        self.assertEqual(error.exception.recovery_status, 'recovery required')
+        self.assertEqual(len(arrivals), 1)
+        self.assertNotEqual(before, database.read_bytes())
+        self.assertEqual(database.read_bytes(), plan.rendered_database)
+        self.assertEqual(_hash(destination), plan.copies[0].sha256)
+        self._new_media_failure_receipt()
+        with self.assertRaisesRegex(StockIpodError, 'changed after dry-run'):
+            commit_stock_ipod_sync(plan)
+        self.assertEqual(database.read_bytes(), plan.rendered_database)
+        self.assertEqual(_hash(destination), plan.copies[0].sha256)
+
+    def test_external_catalog_adoption_after_media_claim_restores_copy(self):
+        plan = self._copy_ownership_plan()
+        database = self.ipod / plan.database_relative_path
+        destination = self.ipod / plan.copies[0].relative_path
+        self._native_new_media_write = DeviceSession.atomic_write
+        rename = stock_ipod.stock_delete._exclusive_move
+        adopted = []
+
+        def adopt_claimed(parent, name, target_parent, target_name):
+            value = rename(parent, name, target_parent, target_name)
+            if name == destination.name and not adopted:
+                database.write_bytes(plan.rendered_database)
+                adopted.append(name)
+            return value
+
+        with mock.patch.object(DeviceSession, 'atomic_write', autospec=True, side_effect=self._fail_new_media_catalog_write), \
+                mock.patch.object(stock_ipod.stock_delete, '_exclusive_move', adopt_claimed):
+            with self.assertRaises(StockIpodError) as error:
+                commit_stock_ipod_sync(plan)
+        self.assertEqual(error.exception.recovery_status, 'recovery required')
+        self.assertEqual(adopted, [destination.name])
+        self.assertEqual(database.read_bytes(), plan.rendered_database)
+        self.assertEqual(_hash(destination), plan.copies[0].sha256)
+        receipt, _ = self._new_media_failure_receipt()
+        self.assertFalse(list(receipt.parent.glob('.new-copy-*.pending')))
+
+    def test_late_foreign_catalog_after_publication_retains_copy_and_playback_recovery(self):
+        plan = self._copy_ownership_plan()
+        database = self.ipod / plan.database_relative_path
+        destination = self.ipod / plan.copies[0].relative_path
+        play_counts = database.with_name('Play Counts')
+        counts_before = play_counts.read_bytes()
+        rename = stock_ipod.os.replace
+        foreign = plan.rendered_database + b'unknown external catalog revision'
+        arrivals = []
+
+        def change_after_own_publication(source, target, *args, **kwargs):
+            value = rename(source, target, *args, **kwargs)
+            if Path(source).resolve() == play_counts.resolve():
+                database.write_bytes(foreign)
+                arrivals.append(Path(target))
+                raise OSError('Generated failure after native catalog publication')
+            return value
+
+        with mock.patch.object(stock_ipod.os, 'replace', side_effect=change_after_own_publication):
+            with self.assertRaises(StockIpodError) as error:
+                commit_stock_ipod_sync(plan)
+        self.assertEqual(error.exception.recovery_status, 'recovery required')
+        self.assertEqual(database.read_bytes(), foreign)
+        self.assertEqual(_hash(destination), plan.copies[0].sha256)
+        self.assertEqual(len(arrivals), 1)
+        self.assertEqual(arrivals[0].read_bytes(), counts_before)
+        self.assertFalse(play_counts.exists())
+        self._new_media_failure_receipt()
+
+    def test_committed_stock_rollback_refuses_foreign_copy_before_catalog_restore(self):
+        (self.ipod / '.rockbox').mkdir()
+        plan = plan_stock_ipod_sync(
+            self.library, [self.playlist], self.ipod,
+            model_number='MA446', filesystem='msdos', usb_family='iPod Video', allow_dual_boot=True)
+        result = commit_stock_ipod_sync(plan)
+        database = self.ipod / plan.database_relative_path
+        destination = self.ipod / plan.copies[0].relative_path
+        temporary = destination.with_suffix('.foreign')
+        temporary.write_bytes(b'foreign copy after inner commit')
+        temporary.replace(destination)
+        committed_database = database.read_bytes()
+        with self.assertRaisesRegex(StockIpodError, 'before composite rollback') as error:
+            rollback_committed_stock_ipod_sync(plan, result)
+        self.assertEqual(error.exception.recovery_status, 'recovery required')
+        self.assertEqual(database.read_bytes(), committed_database)
+        self.assertEqual(destination.read_bytes(), b'foreign copy after inner commit')
+        self.assertTrue((result.recovery_directory / 'iTunesDB.before').is_file())
+        self._new_media_failure_receipt()
+
+    def test_committed_stock_late_identical_foreign_inode_survives_cleanup(self):
+        (self.ipod / '.rockbox').mkdir()
+        plan = plan_stock_ipod_sync(
+            self.library, [self.playlist], self.ipod,
+            model_number='MA446', filesystem='msdos', usb_family='iPod Video', allow_dual_boot=True)
+        result = commit_stock_ipod_sync(plan)
+        destination = self.ipod / plan.copies[0].relative_path
+        copy = DeviceSession.atomic_copy
+        arrivals = []
+
+        def replace_after_catalog_restore(session, source, target, **kwargs):
+            value = copy(session, source, target, **kwargs)
+            if Path(target).name == 'iTunesDB':
+                temporary = destination.with_suffix('.foreign')
+                temporary.write_bytes(destination.read_bytes())
+                temporary.replace(destination)
+                arrivals.append(destination.stat().st_ino)
+            return value
+
+        with mock.patch.object(DeviceSession, 'atomic_copy', replace_after_catalog_restore):
+            with self.assertRaises(StockIpodError) as error:
+                rollback_committed_stock_ipod_sync(plan, result)
+        self.assertEqual(error.exception.recovery_status, 'recovery required')
+        self.assertEqual([destination.stat().st_ino], arrivals)
+        self.assertEqual(_hash(destination), plan.copies[0].sha256)
+        self._new_media_failure_receipt()
 
     def test_observed_format_allows_other_model_and_non_stock_new_audio_is_omitted(self):
         compatible = plan_stock_ipod_sync(

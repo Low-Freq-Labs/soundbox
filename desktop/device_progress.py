@@ -1,4 +1,4 @@
-"""Measured stock-iPod phases; final readback alone owns overall completion."""
+"""Measured device presentation; final readback alone owns completion."""
 from typing import NamedTuple
 
 
@@ -6,6 +6,35 @@ class PhaseProgress(NamedTuple):
     message: str
     value: int | None
     unit: str
+
+
+class CopySample(NamedTuple):
+    copied: int
+    bytes_per_second: float | None
+
+
+class CopyAverage:
+    """One worker's measured copy deltas and event-driven display cadence.
+
+    A CDJ plan publishes each path once in one ordered worker stream. Its
+    current-file counter can repeat or reset without recounting prior bytes.
+    Source acquisition, checks and publication acknowledgements are not bytes.
+    """
+    def __init__(self):
+        self.copied=0;self.started=None;self.last_sample=None
+        self._label=None;self._high_water=0
+
+    def observe(self,label,done,now):
+        if self.started is None:self.started=now
+        if label!=self._label:self._label=label;self._high_water=0
+        self.copied+=max(0,done-self._high_water)
+        self._high_water=max(self._high_water,done)
+
+    def sample(self,now,*,force=False):
+        if self.started is None:return None
+        if not force and self.last_sample is not None and now-self.last_sample<0.5:return None
+        self.last_sample=now;elapsed=now-self.started
+        return CopySample(self.copied,self.copied/elapsed if elapsed>=1 else None)
 
 
 _STOCK_PHASES = {

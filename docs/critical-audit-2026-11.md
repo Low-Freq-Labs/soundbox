@@ -10,6 +10,33 @@ path does not imply that its original full capture or private prototype still ex
 Keep uncertain leads distinct from confirmed findings. Focused releases need not
 wait for unrelated audits to finish; only validated changes join an update.
 
+## RC ownership recheck — November26
+
+After personal180 delivery, current production reproduced four open preservation
+failures on owned disposable fixtures: CDJ expected-absent publication and recovery
+overwrite late foreign files; removal rollback overwrites unrelated arriving audio;
+stock acknowledged-copy compensation deletes a foreign replacement. Six adjacent
+existing controls passed but omit those final-boundary arrivals. No real music,
+source database or device was used. Subsequent uncommitted source fixes cover
+stock copy compensation, removal recovery, ordinary-folder confirmation, relink
+safety, manual-value presentation and the installer zombie guard. Focused passes
+are separate from the integrated gate and installed/native acceptance.
+Independent follow-up reproduced cold removal-parent replacement and equal-byte
+resource adoption. Durable original-parent guards and original audio identity
+checks now pass51 affected cases, including five actual cold subprocess tests;
+equal-byte live resources cannot retire a retained original claim. Resource
+republication without an original claim and final claim retirement remain open
+boundaries, so the entire removal family is not certified. Manual relink refusal leaves legacy identity
+and native Locator functionality open. The CDJ prototype was rejected and removed
+from production; both CDJ P1 findings remain blocking, including on exFAT where
+tested atomic no-replace rename is unsupported. No filesystem success oracle was
+weakened and no replacing fallback was admitted.
+See the [current write ledger](rc-write-ledger.md#gap-001-and-gap-002--current-disposition-november26)
+for triggers, current boundaries, compact evidence and required regression oracles.
+The [RC results](rc-beta-results-2026-11-26.md) also record the generated manual-ACK
+browser display defect, installer zombie refusal and provider-cache proof gap.
+These current dispositions do not broaden the older acceptance or action grants.
+
 ## Omitted membership after a successful no-write Sync — November24 late evening
 
 Confirmed actual follow-up: DUBSTEP gained Turtle Club (237720321); its current

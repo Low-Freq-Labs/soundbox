@@ -6,8 +6,8 @@ file or one of its parent folders moves.  No directory walk is involved.
 
 Older ``library.json`` records predate bookmarks.  For those only, or when a
 bookmark cannot follow a cross-volume copy, one batched Spotlight metadata
-query asks for exact filename + recorded byte size.  Ambiguous results remain
-missing; the explicit folder-picker relinker is the final fallback.
+query suggests exact filename + recorded byte size. These suggestions remain
+missing without independent audio identity; metadata alone never relinks them.
 """
 
 from __future__ import annotations
@@ -16,8 +16,9 @@ import base64
 import ctypes
 import os
 import subprocess
+import stat
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 BOOKMARK_KEY = "file_bookmark"
@@ -149,10 +150,16 @@ def resolve_bookmark(encoded: object) -> Path | None:
         bridge.release(error.value)
 
 
+def file_epoch(path: Path) -> tuple:
+    value=path.lstat()
+    if not stat.S_ISREG(value.st_mode):raise OSError('Audio location is not a regular file')
+    return value.st_dev,value.st_ino,value.st_size,value.st_mtime_ns,value.st_ctime_ns
+
+
 def _valid_candidate(path: Path, recorded_size: int) -> bool:
     try:
-        return path.is_file() and (
-            recorded_size <= 0 or path.stat().st_size == recorded_size)
+        size=file_epoch(path)[2]
+        return recorded_size <= 0 or size == recorded_size
     except OSError:
         return False
 
@@ -196,7 +203,7 @@ def _chunk_terms(terms: list[tuple[str, str]]) -> list[str]:
 
 
 def spotlight_matches(records: dict[str, dict]) -> dict[str, Path]:
-    """Strict indexed migration/fallback lookup; never walks the filesystem.
+    """Metadata-only suggestions; never identity proof or an applied repair.
 
     Results require exact case-insensitive filename and recorded byte size, and
     exactly one live match.  A rename, unknown size, duplicate, stale index, or
@@ -215,8 +222,7 @@ def spotlight_matches(records: dict[str, dict]) -> dict[str, Path]:
                 check=False, timeout=_SPOTLIGHT_TIMEOUT_SECONDS)
         except (OSError, subprocess.TimeoutExpired):
             return {}
-        if result.returncode != 0:
-            continue
+        if result.returncode != 0:return {}
         for raw in result.stdout.split(b"\0"):
             if not raw:
                 continue
@@ -244,6 +250,8 @@ class LocationUpdate:
     expected_path: str
     path: Path | None = None
     bookmark: str | None = None
+    file_epoch: tuple | None = None
+    identity: str = ''
 
 
 @dataclass(frozen=True)
@@ -251,6 +259,7 @@ class LocationRepair:
     updates: dict[str, LocationUpdate]
     missing_count: int
     unresolved_count: int
+    suggestions: dict[str, Path] = field(default_factory=dict)
 
     @property
     def moved_count(self) -> int:
@@ -273,29 +282,30 @@ def repair_locations(imported: dict[str, dict]) -> LocationRepair:
         size = int(rec.get("size", 0) or 0)
         if _valid_candidate(old, size):
             if not rec.get(BOOKMARK_KEY):
-                bookmark = create_bookmark(old)
-                if bookmark:
-                    updates[track_id] = LocationUpdate(
-                        expected_path=expected, bookmark=bookmark)
+                try:
+                    epoch=file_epoch(old);bookmark=create_bookmark(old)
+                    if bookmark and file_epoch(old)==epoch:
+                        updates[track_id] = LocationUpdate(expected_path=expected,
+                            bookmark=bookmark,file_epoch=epoch,identity='existing-path')
+                except OSError:pass
             continue
 
         missing_count += 1
         candidate = resolve_bookmark(rec.get(BOOKMARK_KEY))
         if candidate is not None and _valid_candidate(candidate, size):
-            updates[track_id] = LocationUpdate(
-                expected_path=expected, path=candidate,
-                bookmark=create_bookmark(candidate))
+            try:
+                epoch=file_epoch(candidate);bookmark=create_bookmark(candidate)
+                if file_epoch(candidate)==epoch:
+                    updates[track_id] = LocationUpdate(expected_path=expected,path=candidate,
+                        bookmark=bookmark,file_epoch=epoch,identity='bookmark')
+                else:unresolved[track_id]=rec
+            except OSError:unresolved[track_id]=rec
         else:
             unresolved[track_id] = rec
 
     spotlight = spotlight_matches(unresolved) if unresolved else {}
-    for track_id, candidate in spotlight.items():
-        updates[track_id] = LocationUpdate(
-            expected_path=str(unresolved[track_id].get("path", "")),
-            path=candidate, bookmark=create_bookmark(candidate))
-
     return LocationRepair(
         updates=updates,
         missing_count=missing_count,
-        unresolved_count=len(unresolved) - len(spotlight),
+        unresolved_count=len(unresolved),suggestions=spotlight,
     )

@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QThread, Signal
 
-from soundbox import engine, metadata, rekordbox_db
+from soundbox import engine, rekordbox_db
 from soundbox.library import Playlist
 from soundbox.export_snapshot import ExportSnapshot, capture_export
 from soundbox.providers import ArtworkProvider, provider_operation
@@ -820,10 +820,7 @@ class ArtFillWorker(QThread):
                 entry = self.cache.index.get(tid) or {}
                 if tid not in excluded_ids and entry.get("fallback") != "excluded-source":
                     continue
-                title = (self.title_overrides or {}).get(tid) or track.name
-                artist = metadata.effective_artist(
-                    tid, title, track.artist, self.artist_overrides, True,
-                    self.lib.artist_registry, stem=track.path.stem, cleanup=self.lib.metadata_cleanup_enabled)
+                title,artist=engine.effective_pair(track,self.artist_overrides,self.title_overrides,library=self.lib)
                 if entry.get("fallback") == "excluded-source" and entry.get("fallback_artist") == artist:
                     continue
                 snapshot = self.cache.cover_snapshot(tid)
@@ -864,10 +861,7 @@ class ArtFillWorker(QThread):
             self._wait_for_playback()
             if self._stop:
                 break
-            title = (self.title_overrides or {}).get(t.track_id) or t.name
-            artist = metadata.effective_artist(
-                t.track_id, title, t.artist, self.artist_overrides, True,
-                self.lib.artist_registry, stem=t.path.stem, cleanup=self.lib.metadata_cleanup_enabled)
+            title,artist=engine.effective_pair(t,self.artist_overrides,self.title_overrides,library=self.lib)
             try:
                 with provider_operation(self.provider,lambda:self._stop):
                     res = self.provider.fetch_best(artist, title)

@@ -81,6 +81,18 @@ class SpotlightMigration(unittest.TestCase):
 
 
 class LocationRepair(unittest.TestCase):
+    def test_legacy_spotlight_match_is_only_an_unresolved_suggestion(self):
+        with tempfile.TemporaryDirectory() as td:
+            candidate=Path(td)/'set.m4a';candidate.write_bytes(b'wrong song')
+            record={'path':'/gone/set.m4a','size':candidate.stat().st_size}
+            with mock.patch.object(file_locations,'spotlight_matches',return_value={'sb-a':candidate}), \
+                    mock.patch.object(file_locations,'create_bookmark',side_effect=AssertionError('Unverified audio promoted')):
+                repaired=file_locations.repair_locations({'sb-a':record})
+            self.assertEqual(repaired.updates,{})
+            self.assertEqual(repaired.suggestions,{'sb-a':candidate})
+            self.assertEqual(repaired.unresolved_count,1)
+            self.assertEqual(repaired.moved_count,0)
+
     def test_bookmark_resolution_precedes_spotlight_and_refreshes_locator(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -106,6 +118,8 @@ class LocationRepair(unittest.TestCase):
             self.assertEqual(update.expected_path, str(old))
             self.assertEqual(update.path.resolve(), (new_dir / old.name).resolve())
             self.assertTrue(update.bookmark)
+            self.assertEqual(update.identity,'bookmark')
+            self.assertEqual(update.file_epoch,file_locations.file_epoch(update.path))
             self.assertEqual(repaired.missing_count, 1)
             self.assertEqual(repaired.unresolved_count, 0)
 

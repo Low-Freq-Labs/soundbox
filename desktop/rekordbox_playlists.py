@@ -613,6 +613,11 @@ class PlaylistEditController(QObject):
                 self.window._flash_status(str(exc),10);return False
         for command in command_requests(request):
             operation = command['operation']
+            if 'delete_scope_profile' in command:
+                from soundbox.rekordbox_playlist_store import require_ordinary_delete_scope
+                try:require_ordinary_delete_scope(command,presentation.source_playlist_catalog)
+                except (ValueError,KeyError,WriteProofError) as exc:
+                    self.window._flash_status(str(exc),10);return False
             if operation in {'rename','reorder'}:
                 reason=ordinary_request_reason(presentation.source_playlist_catalog,command)
                 if reason:self.window._flash_status(reason,10);return False
@@ -895,13 +900,15 @@ class PlaylistEditController(QObject):
                     if not causal:
                         later['error']='Native library changed outside this saved operation; review and retry this queued edit'
                         continue
-                    if later['request']['operation'] in (*CREATE_SMART_OPERATIONS, 'delete_smart', 'delete_tree','move_smart','move','create_normalized','create_folder_normalized'):
+                    if ('delete_scope_profile' in later['request'] or
+                            later['request']['operation'] in (*CREATE_SMART_OPERATIONS, 'delete_smart', 'delete_tree','move_smart','move','create_normalized','create_folder_normalized')):
                         from soundbox.rekordbox_playlist_store import (renew_smart_request,
                             renew_smart_delete_request,renew_tree_delete_request,renew_smart_move_request,
-                            renew_normalized_create_request,renew_node_move_request)
+                            renew_normalized_create_request,renew_node_move_request,renew_ordinary_delete_request)
                         try:
                             renew={**dict.fromkeys(CREATE_SMART_OPERATIONS,renew_smart_request),'delete_smart':renew_smart_delete_request,
                                    'delete_tree':renew_tree_delete_request,'move_smart':renew_smart_move_request,
+                                   'delete':renew_ordinary_delete_request,
                                    'move':renew_node_move_request,
                                    'create_normalized':renew_normalized_create_request,
                                    'create_folder_normalized':renew_normalized_create_request}[later['request']['operation']]
@@ -1332,6 +1339,8 @@ class NativePlaylistsMixin:
     def _native_reload_pending_playlist(self,display_path):
         """Playlist-only feedback reuses art already prepared for these rows."""
         if self.stack.currentIndex()==1:return
+        activate=getattr(self,'_activate_browser_columns',None)
+        if activate is not None:activate('rb:'+display_path)
         from .tag_selection_view import rows as selected_rows
         rows=selected_rows(self,self._playlist_rows(display_path))
         prepared={};uncertain=set()
@@ -1615,18 +1624,26 @@ class NativePlaylistsMixin:
                   else self.playlist_controller.reason())
         if reason:
             self._flash_status(reason, 10);return
+        source_owner=self.lib
+        repository=getattr(self,'_state_repository',None)
+        def state_epoch():
+            owner=getattr(self,'_state_repository',None)
+            return (owner,getattr(owner,'generation',None),getattr(getattr(owner,'area',None),'generation',None))
+        epoch=state_epoch()
         captured = None
         if row['Attribute'] == 1:
             from soundbox.rekordbox_playlist_store import tree_bindings,tree_delete_for
             try:
                 catalog=self._native_presentation().source_playlist_catalog
-                bindings=tree_bindings(catalog,identity)
+                bindings=tree_bindings(catalog,identity,command_limit=None)
                 if any(binding['attribute']==4 for binding in bindings):
                     captured=tree_delete_for(catalog,identity)
                     for command in command_requests(captured):
                         if command['operation']=='delete_smart':
                             reason=self.playlist_controller.smart_delete_reason(command['playlist_id'])
                             if reason:self._flash_status(reason,10);return
+                else:
+                    captured=request_for(catalog,'delete',identity=identity)
             except (ValueError,KeyError,WriteProofError) as exc:
                 self._flash_status(str(exc),10);return
         kind='folder and its playlists' if row['Attribute']==1 else 'playlist'
@@ -1634,11 +1651,13 @@ class NativePlaylistsMixin:
                 f'Delete the rekordbox {kind} “{row["Name"]}”?\nSongs remain in Collection and audio files are preserved.',
                 QMessageBox.Yes|QMessageBox.No,QMessageBox.No)==QMessageBox.Yes:
             fresh=self._native_node(identity)
-            if self._native_node_scope(fresh)!=scope:
+            if (self.lib is not source_owner or self._native_node_scope(fresh)!=scope
+                    or getattr(self,'_state_repository',None) is not repository or state_epoch()!=epoch):
                 self._flash_status('The playlist changed during confirmation; choose it again',10);return
             if captured is not None:
-                from soundbox.rekordbox_playlist_store import renew_tree_delete_request
-                try:request=renew_tree_delete_request(captured,self._native_presentation().source_playlist_catalog)
+                from soundbox.rekordbox_playlist_store import renew_tree_delete_request,renew_ordinary_delete_request
+                renew=renew_tree_delete_request if captured['operation']=='delete_tree' else renew_ordinary_delete_request
+                try:request=renew(captured,self._native_presentation().source_playlist_catalog)
                 except (ValueError,KeyError,WriteProofError) as exc:
                     self._flash_status(str(exc),10);return
                 self.playlist_controller.enqueue(request)

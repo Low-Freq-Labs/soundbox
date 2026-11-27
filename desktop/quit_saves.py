@@ -8,7 +8,7 @@ from soundbox.state_io import StateChangedError
 
 QUEUES = ('shared_import_jobs', 'analysis_jobs', 'native_analysis_jobs',
           'pending_prep_edits', 'rekordbox_playlist_edits', 'pending_tag_definitions',
-          'pending_tag_assignments', 'pending_metadata_edits')
+          'pending_tag_assignments', 'pending_metadata_edits', 'usb_settings_edits')
 METADATA = ('pending_metadata_edits', 'source_truth_migration', 'source_truth_alias_next')
 
 
@@ -57,8 +57,9 @@ class QuitSaves(QObject):
         if self.checkpoint is None and self.error is None:
             values = failed_intentions(w.settings)
             acknowledgements=[]
-            for name in ('playlist_controller','tag_definition_controller'):
-                ack=getattr(getattr(w,name,None),'ack',None)
+            for name in ('playlist_controller','tag_definition_controller','usb_settings_controller'):
+                controller=(vars(w).get(name) if name=='usb_settings_controller' else getattr(w,name,None))
+                ack=getattr(controller,'ack',None)
                 captured=ack.retention_capture() if ack is not None else None
                 if captured is not None:
                     acknowledgements.append((ack,captured));values[ack.key]=deepcopy(captured['queue'])

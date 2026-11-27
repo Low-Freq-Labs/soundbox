@@ -4,7 +4,7 @@ from __future__ import annotations
 from copy import deepcopy
 from operator import attrgetter
 
-from soundbox import metadata, metadata_provenance
+from soundbox import metadata, metadata_context, metadata_provenance
 
 _DISPLAY_FIELDS=('track_id','name','artist','location_uri','bpm','key','total_time',
                  'date_added','added_ts','genre','kind','size','bitrate','rating','year','imported')
@@ -96,7 +96,9 @@ def registry_inputs(library, origins, overrides, previous=None):
         by_local[local]=None if local in by_local else origin
     baseline=(previous['rows'] if previous is not None and previous['scope']==scope
               and previous.get('cleanup_enabled', True)==library.metadata_cleanup_enabled else {})
-    rows={};bases=[];trusted=[];changed=set()
+    rows={};bases=[];trusted=[];changed=set();manual_rows={}
+    manual_before=previous.get('manual_rows',{}) if previous is not None and previous['scope']==scope else {}
+    source=metadata_context.scope(library)
     for key,track in library.tracks_by_id.items():
         origin=None if key in library.source_binding_issues else by_local.get(key)
         scalar=(_display_scalars(track),track.native_id,track.source_uuid,
@@ -104,6 +106,7 @@ def registry_inputs(library, origins, overrides, previous=None):
         before=baseline.get(key)
         if before is not None and before[0]==scalar and before[1]==origin and before[4]==track.info:
             row=before
+            manual=manual_before.get(key)
         else:
             changed.add(key)
             name,artist,fulfilled=(metadata_provenance.display_registry_inputs(track,scope,origin)
@@ -114,7 +117,10 @@ def registry_inputs(library, origins, overrides, previous=None):
             if library.metadata_cleanup_enabled:
                 base=(overrides.get(key) or '').strip() or fulfilled or base
             row=(scalar,deepcopy(origin),base,votes,deepcopy(track.info))
+            manual=metadata_context.prepare_row(track,source,origin)
+        if manual is not None:manual_rows[key]=manual
         rows[key]=row;bases.append(row[2]);trusted.extend(row[3])
     trusted.extend(value for value in overrides.values() if value.strip())
-    return bases,trusted,dict(scope=scope,rows=rows,changed_ids=frozenset(changed),
+    library.metadata_context=metadata_context.ManualContext(source,manual_rows)
+    return bases,trusted,dict(scope=scope,rows=rows,manual_rows=manual_rows,changed_ids=frozenset(changed),
                              cleanup_enabled=library.metadata_cleanup_enabled)

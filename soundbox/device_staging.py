@@ -70,6 +70,7 @@ def _owned(fd: int, name: str, handle: int) -> bool:
 def staged_output(
     destination: Path, parent_fd: ParentContext, revalidate: Callable[[], None],
     *, after_publish: Callable[[int], None] | None = None, mode: int = 0o666,
+    replace: bool = True,
 ) -> Iterator[BinaryIO]:
     """Keep one exclusively created file open through publication and cleanup.
 
@@ -98,7 +99,10 @@ def staged_output(
                         raise RuntimeError('Device parent changed before publication')
                 if not _owned(fd, temporary, handle):
                     raise RuntimeError('Device temporary file changed before publication')
-                os.replace(temporary, name, src_dir_fd=fd, dst_dir_fd=fd)
+                if replace:
+                    os.replace(temporary, name, src_dir_fd=fd, dst_dir_fd=fd)
+                else:
+                    _rename_new(fd, temporary, name)
                 if after_publish is not None:
                     after_publish(fd)
         finally:
@@ -126,12 +130,44 @@ def _exclusive_rename_call() -> Callable[[int, bytes, int, bytes, int], int]:
     return cast(Callable[[int, bytes, int, bytes, int], int], call)
 
 
+def exclusive_rename(source_parent: int, source: str,
+                     destination_parent: int, destination: str) -> None:
+    """Move one leaf between already pinned parents without replacing a name.
+
+    Callers own path admission, entity verification and interruption recovery.
+    This syscall alone grants no authority over either file or directory.
+    """
+    if (not source or not destination or source in ('.', '..') or destination in ('.', '..')
+            or '/' in source or '/' in destination):
+        raise ValueError('Exclusive publication requires single leaf names')
+    if _exclusive_rename_call()(source_parent, os.fsencode(source), destination_parent,
+                                os.fsencode(destination), 4):
+        code = ctypes.get_errno()
+        raise OSError(code, os.strerror(code), destination)
+
+
+def exclusive_rename_from_path(source: Path, destination_parent: int,
+                               destination: str) -> None:
+    """Restore an exact admitted path without opening its privacy-owned parent.
+
+    Protected macOS Trash permits an exact tagged-file operation while refusing
+    directory access. Its caller must verify source ownership and revalidate the
+    pinned destination; the syscall never replaces a concurrently arriving leaf.
+    """
+    source = Path(source)
+    if (not source.is_absolute() or '..' in source.parts or not destination
+            or destination in ('.', '..') or '/' in destination):
+        raise ValueError('Exclusive restoration requires an absolute source and destination leaf')
+    if _exclusive_rename_call()(-2, os.fsencode(source), destination_parent,
+                                os.fsencode(destination), 4):
+        code = ctypes.get_errno()
+        raise OSError(code, os.strerror(code), destination)
+
+
 def _rename_new(parent: int, temporary: str, name: str) -> None:
     # Darwin RENAME_EXCL=4. No replacing fallback: a new media payload has no
     # authority over an occupant which appeared after planning.
-    if _exclusive_rename_call()(parent, os.fsencode(temporary), parent, os.fsencode(name), 4):
-        code = ctypes.get_errno()
-        raise OSError(code, os.strerror(code), name)
+    exclusive_rename(parent, temporary, parent, name)
 
 
 class NewFilePublication:

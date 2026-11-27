@@ -57,6 +57,151 @@ class PlaylistTreeDeletion(unittest.TestCase):
         try:return _state(conn)
         finally:conn.close()
 
+    def ordinary_request(self):
+        conn=_connect(self.database)
+        try:
+            conn.execute('UPDATE djmdPlaylist SET Attribute=0,SmartList=NULL WHERE Attribute=4');conn.commit()
+        finally:conn.close()
+        self.xml.write_bytes(self.xml.read_bytes().replace(b'Attribute="4"',b'Attribute="0"'))
+        return store.request_for(self.writer.snapshot(),'delete',identity='2000')
+
+    def test_ordinary_confirmation_keeps_exact_legacy_native_multinode_protocol(self):
+        request=self.ordinary_request()
+        legacy={key:value for key,value in request.items() if key not in store._FOLDER_DELETE_FIELDS}
+        store.validate_request(legacy)
+        conn=_connect(self.database,readonly=True)
+        try:
+            with mock.patch.object(planner,'delete',wraps=planner.delete) as native:
+                guarded=store.build_plan(conn,request,self.xml.read_bytes())
+            native.assert_called_once()
+            original=store.build_plan(conn,legacy,self.xml.read_bytes())
+        finally:conn.close()
+        self.assertEqual(guarded,original)
+        # One ordinary native primitive, rather than smart-tree child clocks.
+        self.assertNotIn('requests',request)
+        self.writer.apply(request,collection_pins=self.writer.prepare_collection_pins(request))
+        self.assertFalse(any(row['ID'] in {'2000','2100','2200','2300','2400'}
+            and row['rb_local_deleted']==0 for row in self.writer.snapshot()['nodes']))
+
+    def test_large_ordinary_folder_keeps_one_native_plan_without_composed_command_capacity_limit(self):
+        self.ordinary_request()
+        conn=_connect(self.database)
+        payload=self.xml.read_bytes()
+        try:
+            template=store.row(conn,'djmdPlaylist','2200');columns=list(template)
+            for offset in range(300):
+                identity=str(4000+offset)
+                node={**template,'ID':identity,'UUID':native_uuid(4000+offset),'ParentID':'2000','Seq':3+offset}
+                conn.execute(f'INSERT INTO djmdPlaylist ({",".join(columns)}) VALUES ({",".join("?" for _ in columns)})',
+                             [node[key] for key in columns])
+                payload=xml.append_node(payload,identity,'2000',0)
+            conn.commit()
+        finally:conn.close()
+        self.xml.write_bytes(payload);current=self.writer.snapshot()
+        request=store.request_for(current,'delete',identity='2000')
+        self.assertEqual(len(request['delete_descendants']),305)
+        legacy={key:value for key,value in request.items() if key not in store._FOLDER_DELETE_FIELDS}
+        conn=_connect(self.database,readonly=True)
+        try:
+            with mock.patch.object(planner,'delete',wraps=planner.delete) as native:
+                guarded=store.build_plan(conn,request,payload)
+            native.assert_called_once()
+            self.assertEqual(guarded,store.build_plan(conn,legacy,payload))
+        finally:conn.close()
+        # The independently measured smart leaf composition remains bounded.
+        with self.assertRaises(WriteProofError):store.tree_delete_for(current,'2000')
+        self.writer.apply(request)
+        selected={binding['id'] for binding in request['delete_descendants']}
+        self.assertFalse(any(row['ID'] in selected and row['rb_local_deleted']==0
+                             for row in self.writer.snapshot()['nodes']))
+
+    def test_ordinary_scope_rejects_late_descendant_membership_identity_and_rename(self):
+        request=self.ordinary_request();current=self.writer.snapshot()
+        mutations=[]
+        added=deepcopy(current)
+        added['nodes'].append({**current['nodes'][0],'ID':'999','UUID':native_uuid(999),'ParentID':'2000','Seq':3})
+        mutations.append(added)
+        for field,value in (('UUID',native_uuid(999)),('Name','Changed after confirmation'),('ParentID','root')):
+            changed=deepcopy(current)
+            next(row for row in changed['nodes'] if row['ID']=='2200')[field]=value
+            mutations.append(changed)
+        changed=deepcopy(current)
+        changed['members'].append({**changed['members'][0],'ID':'late','UUID':native_uuid(999)})
+        mutations.append(changed)
+        for changed in mutations:
+            changed['revision']=planner.revision(changed['nodes'],changed['members'])
+            with self.subTest(changed=changed),self.assertRaises((ConflictError,WriteProofError,ValueError)):
+                store.renew_ordinary_delete_request(request,changed)
+        # A causal unrelated ACK may change native metadata and the global
+        # revision, but never the confirmed semantic scope or operation ID.
+        unrelated=deepcopy(current)
+        next(row for row in unrelated['nodes'] if row['ID']=='3000')['Name']='Unrelated'
+        next(row for row in unrelated['nodes'] if row['ID']=='2000')['updated_at']='later native clock'
+        unrelated['revision']=planner.revision(unrelated['nodes'],unrelated['members'])
+        renewed=store.renew_ordinary_delete_request(request,unrelated)
+        for key in (*store._FOLDER_DELETE_FIELDS,'operation_id'):
+            self.assertEqual(renewed[key],request[key])
+        self.assertEqual(renewed['revision'],unrelated['revision'])
+
+    def test_ordinary_native_plan_cannot_hide_new_scope_behind_old_revision(self):
+        request=self.ordinary_request();current=self.writer.snapshot()
+        current['nodes'].append({**current['nodes'][0],'ID':'999','UUID':native_uuid(999),'ParentID':'2000','Seq':3})
+        conn=_connect(self.database,readonly=True)
+        try:
+            with mock.patch.object(planner,'delete',side_effect=AssertionError('Unconfirmed native deletion')):
+                with self.assertRaises(ConflictError):store._single_plan(conn,request,self.xml.read_bytes(),current=current)
+        finally:conn.close()
+
+    def test_ordinary_interruption_restart_and_legacy_journal_receipt_reconstruction(self):
+        request=self.ordinary_request();before=self.state(),self.xml.read_bytes()
+        def interrupt(phase):
+            if phase=='sql-applied':raise RuntimeError('owned folder interruption')
+        with mock.patch.object(store,'_fault',side_effect=interrupt):
+            with self.assertRaises(RuntimeError):self.writer.apply(request)
+        restarted=store.PlaylistStore(self.authority,self.root/'recovery')
+        self.assertEqual(restarted.recover(),'rolled-back')
+        self.assertEqual((self.state(),self.xml.read_bytes()),before)
+        renewed=restarted.prepare_retry(request)
+        self.assertNotEqual(renewed['operation_id'],request['operation_id'])
+        for key in store._FOLDER_DELETE_FIELDS:self.assertEqual(renewed[key],request[key])
+        # Old saved requests and their interrupted journals reconstruct exactly
+        # as before; recovering them must never silently add the new marker.
+        legacy={key:value for key,value in renewed.items() if key not in store._FOLDER_DELETE_FIELDS}
+        with mock.patch.object(store,'_fault',side_effect=interrupt):
+            with self.assertRaises(RuntimeError):restarted.apply(legacy)
+        self.assertEqual(restarted.recover(),'rolled-back')
+        legacy=restarted.prepare_retry(legacy)
+        self.assertFalse(store._FOLDER_DELETE_FIELDS.intersection(legacy))
+        restarted.apply(legacy)
+        exact=self.state(),self.xml.read_bytes()
+        self.assertEqual(restarted.prepare_retry(legacy),legacy)
+        restarted.apply(legacy)
+        self.assertEqual((self.state(),self.xml.read_bytes()),exact)
+
+    def test_ordinary_committed_receipt_replay_rejects_new_descendant_references(self):
+        request=self.ordinary_request()
+        def interrupted_commit(phase):
+            if phase=='sql-committed':raise RuntimeError('owned committed folder interruption')
+        with mock.patch.object(store,'_fault',side_effect=interrupted_commit):
+            with self.assertRaises(RuntimeError):self.writer.apply(request)
+        self.writer=store.PlaylistStore(self.authority,self.root/'recovery')
+        self.assertEqual(self.writer.recover(),'committed')
+        self.assertEqual(self.writer.prepare_retry(request),request)
+        exact=self.state(),self.xml.read_bytes()
+        self.writer.apply(request)
+        self.assertEqual((self.state(),self.xml.read_bytes()),exact)
+        conn=_connect(self.database)
+        try:
+            template=store.row(conn,'djmdPlaylist','1000');columns=list(template)
+            child={**template,'ID':'999','UUID':native_uuid(999),'ParentID':'2000','Seq':1}
+            conn.execute(f'INSERT INTO djmdPlaylist ({",".join(columns)}) VALUES ({",".join("?" for _ in columns)})',
+                         [child[key] for key in columns]);conn.commit()
+        finally:conn.close()
+        before=self.state(),self.xml.read_bytes()
+        with self.assertRaises(ConflictError):self.writer.prepare_retry(request)
+        with self.assertRaises(ConflictError):self.writer.apply(request)
+        self.assertEqual((self.state(),self.xml.read_bytes()),before)
+
     def test_complete_envelope_matches_independent_sequential_native_primitives(self):
         request=self.request();before=self.state();before_xml=self.xml.read_bytes()
         self.assertEqual([child['playlist_id'] for child in request['requests']],['2200','2300','2100','2400','2000'])
@@ -215,6 +360,108 @@ class TreeDeletionGestures(unittest.TestCase):
         catalog=self.window.lib.source_playlist_catalog;catalog['nodes']=[node,*children]
         catalog['revision']=planner.revision(catalog['nodes'],[])
         self.window.lib.playlists=[Playlist('2000',['List'],[],'2000'),Playlist('3000',['List'],[],'3000')]
+
+    def ordinary_catalog(self):
+        catalog=self.window.lib.source_playlist_catalog
+        for node in catalog['nodes']:
+            if node['Attribute']==4:node.update(Attribute=0,SmartList=None)
+        catalog['revision']=planner.revision(catalog['nodes'],catalog['members'])
+        return catalog
+
+    def test_ordinary_confirmation_captures_native_multinode_request(self):
+        from desktop.rekordbox_playlists import QMessageBox
+        before=deepcopy(self.ordinary_catalog())
+        with mock.patch.object(QMessageBox,'question',return_value=QMessageBox.Yes):
+            self.window._native_delete('1000')
+        request=self.controller.pending[0]['request']
+        self.assertEqual(request['operation'],'delete')
+        self.assertEqual(request['delete_scope_profile'],store.ORDINARY_FOLDER_DELETE_PROFILE)
+        self.assertEqual([row['id'] for row in request['delete_descendants']],['2000','3000','1000'])
+        self.assertEqual(self.window.lib.source_playlist_catalog,before)
+        self.assertEqual(self.window._native_presentation().source_playlist_catalog['nodes'],[])
+        self.window._save_state.assert_called_once()
+
+    def test_large_ordinary_folder_confirmation_preserves_native_multinode_capacity(self):
+        from desktop.rekordbox_playlists import QMessageBox
+        catalog=self.ordinary_catalog();template=catalog['nodes'][1]
+        for offset in range(300):
+            catalog['nodes'].append({**template,'ID':str(4000+offset),'UUID':native_uuid(4000+offset),'Seq':3+offset})
+        catalog['revision']=planner.revision(catalog['nodes'],catalog['members'])
+        with mock.patch.object(QMessageBox,'question',return_value=QMessageBox.Yes) as confirmation:
+            self.window._native_delete('1000')
+        confirmation.assert_called_once()
+        self.assertEqual(len(self.controller.pending),1)
+        request=self.controller.pending[0]['request']
+        self.assertEqual(request['operation'],'delete')
+        self.assertEqual(len(request['delete_descendants']),303)
+        self.assertNotIn('requests',request)
+        self.assertEqual(self.window._native_presentation().source_playlist_catalog['nodes'],[])
+        self.window._save_state.assert_called_once()
+
+    def test_ordinary_late_child_is_refused_at_confirmation_admission_and_restarted_projection(self):
+        from desktop.rekordbox_playlists import QMessageBox,PlaylistEditController
+        catalog=self.ordinary_catalog();captured=store.request_for(catalog,'delete',identity='1000')
+        def added(*_args):
+            catalog['nodes'].append({**catalog['nodes'][1],'ID':'4000','UUID':native_uuid(4000),'Seq':3})
+            catalog['revision']=planner.revision(catalog['nodes'],catalog['members'])
+            return QMessageBox.Yes
+        with mock.patch.object(QMessageBox,'question',side_effect=added):self.window._native_delete('1000')
+        self.assertEqual(self.controller.pending,[]);self.window._save_state.assert_not_called()
+        self.assertFalse(self.controller.enqueue(captured));self.window._save_state.assert_not_called()
+        # Reopen a saved request even if a bad catalog producer kept its old
+        # revision. Neither restart validation nor projection expands scope.
+        catalog['revision']=captured['revision']
+        self.window.settings['rekordbox_playlist_edits']=[dict(source=str(self.window.lib.source),
+            library_id=self.window.lib.source_library_id,request=captured,error='',retry=False)]
+        self.controller.stop()
+        restarted=PlaylistEditController(self.window,store_factory=lambda _lib:None)
+        self.addCleanup(restarted.stop);self.window.playlist_controller=restarted
+        self.assertEqual(restarted.queue_error(),'')
+        self.assertEqual({row['ID'] for row in self.window._native_presentation().source_playlist_catalog['nodes']},
+                         {'1000','2000','3000','4000'})
+
+    def test_ordinary_cancel_and_save_failure_preserve_previous_queue_and_view(self):
+        from desktop.rekordbox_playlists import QMessageBox
+        before=deepcopy(self.ordinary_catalog())
+        with mock.patch.object(QMessageBox,'question',return_value=QMessageBox.No):self.window._native_delete('1000')
+        self.assertEqual(self.controller.pending,[]);self.window._save_state.assert_not_called()
+        self.window._save_state.return_value=False
+        with mock.patch.object(QMessageBox,'question',return_value=QMessageBox.Yes):self.window._native_delete('1000')
+        self.assertEqual(self.controller.pending,[])
+        self.assertNotIn('rekordbox_playlist_edits',self.window.settings)
+        self.assertEqual(self.window._native_presentation().source_playlist_catalog,before)
+        self.window._save_state.assert_called_once()
+
+    def test_ordinary_confirmation_preserves_newer_queued_descendant_edit(self):
+        from desktop.rekordbox_playlists import QMessageBox
+        catalog=self.ordinary_catalog()
+        def edited(*_args):
+            self.assertTrue(self.controller.enqueue(store.request_for(catalog,'rename',identity='2000',name='Newer child')))
+            return QMessageBox.Yes
+        with mock.patch.object(QMessageBox,'question',side_effect=edited):self.window._native_delete('1000')
+        self.assertEqual([job['request']['operation'] for job in self.controller.pending],['rename'])
+        self.assertEqual(next(row for row in self.window._native_presentation().source_playlist_catalog['nodes']
+            if row['ID']=='2000')['Name'],'Newer child')
+        self.window._save_state.assert_called_once()
+
+    def test_ordinary_confirmation_rejects_reloaded_source_and_restored_state_epoch(self):
+        from desktop.rekordbox_playlists import QMessageBox
+        self.ordinary_catalog()
+        owner=self.window.lib
+        repository=SimpleNamespace(generation=1,area=SimpleNamespace(generation=1))
+        self.window._state_repository=repository
+        for change in ('source','identity','restored'):
+            self.window.lib=owner;repository.area.generation=1
+            def changed(*_args):
+                if change=='source':self.window.lib=replace(owner)
+                elif change=='identity':
+                    self.window.lib=replace(owner,source_playlist_catalog=deepcopy(owner.source_playlist_catalog))
+                    self.window.lib.source_playlist_catalog['nodes'][0]['UUID']=native_uuid(999)
+                else:repository.area.generation+=1
+                return QMessageBox.Yes
+            with self.subTest(change=change),mock.patch.object(QMessageBox,'question',side_effect=changed):
+                self.window._native_delete('1000')
+            self.assertEqual(self.controller.pending,[]);self.window._save_state.assert_not_called()
 
     def test_advertised_folder_delete_captures_whole_tree_before_any_worker(self):
         from desktop.rekordbox_playlists import QMessageBox

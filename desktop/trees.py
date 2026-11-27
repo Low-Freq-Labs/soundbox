@@ -33,6 +33,7 @@ RB_NODE_ROLE = Qt.UserRole + 21  # stable native playlist/folder ID
 RB_NODE_KIND_ROLE = Qt.UserRole + 22
 NATIVE_BINDING_ROLE = Qt.UserRole + 83
 NATIVE_PLAYLIST_MIME = 'application/x-soundbox-native-playlists-v1'
+EXPORT_ROOTS_MIME = 'application/x-soundbox-export-folder-roots-v1'
 _NATIVE_LOCAL_MIME = 'application/x-soundbox-native-drag-local-selection-v1'
 CUSTOM_FOLDER_ROLE = Qt.UserRole + 11  # local folder UUID, independent of playlist names
 
@@ -127,6 +128,21 @@ def _descendant_native_bindings(item):
         value=item.data(0,NATIVE_BINDING_ROLE)
         return [native_playlist_binding(value) if value is not None else None]
     return [binding for index in range(item.childCount()) for binding in _descendant_native_bindings(item.child(index))]
+
+
+def _set_export_folder_roots(mime, items):
+    roots = []
+    try:
+        for item in items:
+            if item.data(0, CUSTOM_FOLDER_ROLE):
+                roots.append(dict(kind='local', id=item.data(0, CUSTOM_FOLDER_ROLE)))
+            elif (item.data(0, NATIVE_TREE_ROLE) and item.data(0, RB_NODE_KIND_ROLE) == 1
+                    and item.data(0, NATIVE_BINDING_ROLE) is not None):
+                roots.append(dict(kind='native', binding=native_playlist_binding(item.data(0, NATIVE_BINDING_ROLE))))
+    except (ValueError, TypeError):
+        mime.setData(EXPORT_ROOTS_MIME, b'')
+    else:
+        if roots:mime.setData(EXPORT_ROOTS_MIME, json.dumps(roots,ensure_ascii=False).encode())
 
 
 # ---- drag/drop mime: each line is "<kind>\t<value>"; kinds: rb, cust, trk ----
@@ -487,9 +503,33 @@ class PlaylistFolderTree(NoTypeAhead, QTreeWidget):
             if event.button() == Qt.LeftButton and self.is_folder(item) else None)
         self._folder_position = event.position().toPoint()
         self._folder_expanded = item.isExpanded() if self._folder_press else False
+        self._playlist_press = None
+        self._playlist_mouse_press = None
+        self._playlist_dragged = False
+        if (event.button() == Qt.LeftButton and item is not None
+                and not self.is_folder(item) and item.flags() & Qt.ItemIsDragEnabled
+                and self.dragEnabled()):
+            # Current-item changes navigate the browser. Wait until this is a
+            # click before selecting, so dragging another set leaves the active
+            # device/page and its truthful sidebar selection intact.
+            self._playlist_press = QPersistentModelIndex(self.indexFromItem(item))
+            self._playlist_mouse_press = event.clone()
+            event.accept()
+            return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
+        playlist_press = getattr(self, '_playlist_press', None)
+        if (playlist_press is not None and playlist_press.isValid()
+                and event.buttons() & Qt.LeftButton
+                and (event.position().toPoint()-self._folder_position).manhattanLength() >= QApplication.startDragDistance()):
+            self._playlist_dragged = True
+            try:
+                self.startDrag(Qt.CopyAction | Qt.MoveAction)
+            finally:
+                self._playlist_press = None
+                self._playlist_mouse_press = None
+            return
         press = getattr(self, '_folder_press', None)
         if (press is not None and press.isValid() and event.buttons() & Qt.LeftButton
                 and (event.position().toPoint()-self._folder_position).manhattanLength() >= QApplication.startDragDistance()):
@@ -497,6 +537,22 @@ class PlaylistFolderTree(NoTypeAhead, QTreeWidget):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
+        deferred = getattr(self, '_playlist_mouse_press', None)
+        playlist_press = getattr(self, '_playlist_press', None)
+        self._playlist_mouse_press = None
+        self._playlist_press = None
+        if getattr(self, '_playlist_dragged', False):
+            self._playlist_dragged = False
+            event.accept()
+            return
+        if deferred is not None:
+            if (playlist_press is not None and playlist_press.isValid()
+                    and self.indexAt(event.position().toPoint()) == playlist_press):
+                super().mousePressEvent(deferred)
+                super().mouseReleaseEvent(event)
+            else:
+                event.accept()
+            return
         press = getattr(self, '_folder_press', None)
         self._folder_press = None
         super().mouseReleaseEvent(event)
@@ -505,6 +561,10 @@ class PlaylistFolderTree(NoTypeAhead, QTreeWidget):
             if item.isExpanded() == self._folder_expanded:item.setExpanded(not self._folder_expanded)
 
     def _playlist_drag_items(self):
+        playlist_press = getattr(self, '_playlist_press', None)
+        if playlist_press is not None and playlist_press.isValid():
+            item = self.itemFromIndex(QModelIndex(playlist_press))
+            return self.selectedItems() if item.isSelected() else [item]
         press = getattr(self, '_folder_press', None)
         self._folder_press = None
         if press is not None and press.isValid():return [self.itemFromIndex(QModelIndex(press))]
@@ -537,6 +597,7 @@ class PlaylistTree(PlaylistFolderTree):
             paths += _descendant_rb_paths(it)
         md = QMimeData()
         md.setText("\n".join(f"rb\t{p}" for p in dict.fromkeys(paths)))
+        _set_export_folder_roots(md, items)
         return md
 
     def startDrag(self, actions):  # type: ignore[override]
@@ -639,6 +700,7 @@ class SoundBoxTree(PlaylistFolderTree):
                 for index in range(item.childCount()):collect(item.child(index))
         for item in items:collect(item)
         md.setText("\n".join(dict.fromkeys(lines)))
+        _set_export_folder_roots(md, items)
         return md
 
     def startDrag(self, actions):  # type: ignore[override]
@@ -870,6 +932,7 @@ class UnifiedPlaylistTree(SoundBoxTree):
             # Legacy native alias text can contain newlines. Only the separate
             # local selection may supplement a typed native export selection.
             md.setData(_NATIVE_LOCAL_MIME,json.dumps(local_text).encode())
+        _set_export_folder_roots(md, items)
         md.setText('\n'.join(dict.fromkeys(lines)));return md
 
     def startDrag(self,actions):
@@ -1014,6 +1077,7 @@ class DeviceTree(NoTypeAhead, QTreeWidget):
     """External devices — drop target (rb/cust/sbview). Dropping starts an export."""
     dropped = Signal(str, list)  # device_path, [(kind, value)]
     dropped_role = Signal(str, list, str)  # physical mount, selected jobs, explicit role
+    navigation_requested = Signal(object)
 
     def __init__(self):
         super().__init__()
@@ -1025,6 +1089,35 @@ class DeviceTree(NoTypeAhead, QTreeWidget):
         self.setRootIsDecorated(False)
         self.setIndentation(0)
         self._hover = QPersistentModelIndex()
+
+    def mousePressEvent(self, event):
+        # Context menus have their own event; selection belongs to navigation.
+        if event.button() == Qt.RightButton:
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.RightButton:
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.RightButton:
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
+    def keyPressEvent(self, event):
+        selected = self.selectedItems()
+        super().keyPressEvent(event)
+        item = self.currentItem()
+        navigation = (Qt.Key_Up, Qt.Key_Down, Qt.Key_Home, Qt.Key_End,
+                      Qt.Key_PageUp, Qt.Key_PageDown)
+        if item is not None and (event.key() in (Qt.Key_Return, Qt.Key_Enter)
+                or event.key() in navigation and item.isSelected() and item not in selected):
+            self.navigation_requested.emit(item)
 
     def _set_hover(self, item):
         index = QPersistentModelIndex(self.indexFromItem(item)) if item is not None else QPersistentModelIndex()
@@ -1062,6 +1155,14 @@ class DeviceTree(NoTypeAhead, QTreeWidget):
         dev = item.data(0, DEVPATH_ROLE) if item else None
         self._set_hover(None)
         items = []
+        if e.mimeData().hasFormat(EXPORT_ROOTS_MIME):
+            try:
+                raw=bytes(e.mimeData().data(EXPORT_ROOTS_MIME))
+                if len(raw)>4*1024**2:raise ValueError('Unbounded folder roots')
+                roots=json.loads(raw)
+                if not isinstance(roots,list) or not 1<=len(roots)<=4096:raise ValueError('Invalid folder roots')
+                items.append(('folder-roots',json.dumps(roots,ensure_ascii=False)))
+            except (ValueError,TypeError,UnicodeError):e.ignore();return
         typed=e.mimeData().hasFormat(NATIVE_PLAYLIST_MIME)
         if typed:
             try:

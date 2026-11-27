@@ -679,7 +679,14 @@ class SettingsPageMixin:
         """
         from PySide6.QtCore import QCoreApplication, QEvent, QEventLoop, QThread, QTimer
         from .workers import _running
+        usb_pages=vars(self).get('usb_device_pages')
+        if usb_pages is not None:usb_pages.flush_auto_settings()
         if (self._state_maintenance or self._state_publication or self._backup_worker is not None
+                or bool(getattr(usb_pages,'_unadmitted_settings',()))
+                or getattr(vars(self).get('usb_settings_controller'),'busy',False)
+                # Accepted folder expansion/metadata probes publish at joined
+                # TaskOwner retirement, even after their thread has finished.
+                or getattr(getattr(self,'_import_tasks',None),'pending',0)
                 or getattr(getattr(self, '_art_requests', None), 'manual_pending', lambda:False)()
                 or getattr(getattr(self,'_state_committer',None),'pending',False)
                 or getattr(getattr(self,'prep_controller',None),'admission_pending',False)

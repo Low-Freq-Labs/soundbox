@@ -42,12 +42,12 @@ REQUIRED_RUNTIME_MODULES = (
     "soundbox.native_snapshot",
     "soundbox.ipod_usb_identity", "soundbox.stock_ipod_identity",
     "desktop.native_analysis", "desktop.tag_controller",
-    "desktop.source_intent_admission", "desktop.tag_state", "desktop.tag_order",
+    "desktop.source_intent_admission", "desktop.usb_settings", "desktop.tag_state", "desktop.tag_order",
     "desktop.tag_selection_view", "desktop.quit_saves", "desktop.stock_playlist_order",
     "soundbox.rekordbox_tag_order", "soundbox.stock_playlist_order", "soundbox.stock_plan_observations",
     "soundbox.rekordbox_tag_rename", "soundbox.rekordbox_playlist_move",
     "soundbox.rekordbox_playlist_create",
-    "soundbox.playlist_creation_placement",
+    "soundbox.playlist_creation_placement", "soundbox.export_selection",
 )
 
 

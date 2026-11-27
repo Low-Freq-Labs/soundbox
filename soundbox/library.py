@@ -192,6 +192,20 @@ class Playlist:
     # Preserve a former SoundBox playlist's device identity after native adoption.
     # This is an export binding, never native source-edit authority.
     export_key: str = ""
+    # Detached export intent only; canonical source ancestry remains unchanged.
+    export_folder_path: list[str] | None = None
+
+    @property
+    def destination_folder_path(self) -> list[str]:
+        if self.export_folder_path is None:
+            return self.folder_path
+        destination = self.export_folder_path
+        if (not isinstance(destination, list)
+                or any(type(part) is not str for part in destination)
+                or len(destination) > len(self.folder_path)
+                or (destination and self.folder_path[-len(destination):] != destination)):
+            raise ValueError('Export folder selection no longer matches its source ancestry')
+        return destination
 
     @property
     def effective_keys(self) -> list[str]:
@@ -230,6 +244,9 @@ class Library:
     source_tag_categories: list[TagCategory] = field(default_factory=list)
     # Source-bound display/export choice, never source-write authority.
     metadata_cleanup_enabled: bool = True
+    # Prepared exact-source manual display inputs; omitted from reader/cache IPC.
+    # They grant no write authority and must be rebuilt by presentation owners.
+    metadata_context: object | None = field(default=None, repr=False, compare=False)
 
     @property
     def track_count(self) -> int:

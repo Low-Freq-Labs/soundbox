@@ -20,6 +20,51 @@ from soundbox.sync import clean_applefiles
 
 
 class DeviceStaging(unittest.TestCase):
+    def test_exclusive_stage_preserves_a_leaf_arriving_after_streaming(self):
+        with tempfile.TemporaryDirectory() as area:
+            target=Path(area).resolve();session=DeviceSession(target,[])
+            destination=target/'new.wav'
+            with self.assertRaises(FileExistsError):
+                with device_staging.staged_output(destination,session.parent_fd,session.revalidate,
+                                                  replace=False) as output:
+                    output.write(b'owned new copy');destination.write_bytes(b'foreign arrival')
+            self.assertEqual(destination.read_bytes(),b'foreign arrival')
+            self.assertFalse(list(target.glob('.soundbox-*.sbpart')))
+
+    def test_cross_parent_exclusive_moves_preserve_existing_occupants(self):
+        with tempfile.TemporaryDirectory() as area:
+            root=Path(area).resolve();source=root/'source';source.mkdir();target=root/'target';target.mkdir()
+            (source/'owned').write_bytes(b'owned');(target/'occupied').write_bytes(b'foreign')
+            first=os.open(source,os.O_RDONLY|os.O_DIRECTORY);second=os.open(target,os.O_RDONLY|os.O_DIRECTORY)
+            try:
+                with self.assertRaises(FileExistsError):
+                    device_staging.exclusive_rename(first,'owned',second,'occupied')
+                self.assertEqual((source/'owned').read_bytes(),b'owned')
+                self.assertEqual((target/'occupied').read_bytes(),b'foreign')
+                device_staging.exclusive_rename(first,'owned',second,'new')
+                self.assertFalse((source/'owned').exists());self.assertEqual((target/'new').read_bytes(),b'owned')
+            finally:os.close(first);os.close(second)
+
+    def test_exact_path_restore_never_opens_protected_source_parent_or_replaces_arrival(self):
+        with tempfile.TemporaryDirectory() as area:
+            root=Path(area).resolve();source=root/'protected';source.mkdir();target=root/'target';target.mkdir()
+            original=source/'tagged.wav';original.write_bytes(b'original');(target/'arrived.wav').write_bytes(b'foreign')
+            destination=os.open(target,os.O_RDONLY|os.O_DIRECTORY)
+            try:
+                with mock.patch.object(device_staging.os,'open',side_effect=AssertionError('Source parent access')):
+                    with self.assertRaises(FileExistsError):
+                        device_staging.exclusive_rename_from_path(original,destination,'arrived.wav')
+                    device_staging.exclusive_rename_from_path(original,destination,'restored.wav')
+                self.assertEqual((target/'arrived.wav').read_bytes(),b'foreign')
+                self.assertEqual((target/'restored.wav').read_bytes(),b'original')
+            finally:os.close(destination)
+
+    def test_exclusive_rename_rejects_paths_in_leaf_arguments_before_the_syscall(self):
+        for source,target in (('../escape','new'),('valid','../escape'),('.', 'new'),('valid','')):
+            with self.subTest(source=source,target=target), \
+                    mock.patch.object(device_staging,'_exclusive_rename_call',side_effect=AssertionError('Unsafe syscall')):
+                with self.assertRaises(ValueError):device_staging.exclusive_rename(3,source,4,target)
+
     def test_known_copy_digest_needs_one_source_read_and_independent_destination_proof(self):
         with tempfile.TemporaryDirectory() as area:
             root=Path(area).resolve();sources=root/'sources';sources.mkdir();target=root/'target';target.mkdir()

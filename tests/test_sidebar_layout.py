@@ -8,11 +8,11 @@ from PySide6.QtCore import QCoreApplication, QEvent, QRect, Qt, QTimer
 from PySide6.QtGui import QPainter, QPixmap
 from PySide6.QtWidgets import (QApplication, QMainWindow, QStackedWidget,
                               QPushButton, QStyle, QStyleOptionViewItem, QTableView,
-                              QTreeWidgetItem, QVBoxLayout, QWidget)
+                              QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from desktop.app import MainWindow
 from desktop.devices import DeviceFacts
-from desktop.model import TrackModel
+from desktop.model import COLUMNS, TrackModel
 from desktop.state_commit import PREFERENCE_KEYS
 from soundbox.device_operations import DeviceOperationCoordinator
 from soundbox.device_profile import DeviceProfile
@@ -32,6 +32,7 @@ class SidebarLayout(unittest.TestCase):
         w = self.window
         w.resize(1100, 700)
         w.settings = {'source_curation': {'pins': {'song': {'title': 'preserved'}}}}
+        w.lib = None
         w._settings_dirty_keys = set()
         w._settings_save_timer = QTimer(w)
         w._settings_save_timer.setSingleShot(True)
@@ -59,6 +60,11 @@ class SidebarLayout(unittest.TestCase):
             layout.setContentsMargins(0, 0, 0, 0)
             w.table = QTableView()
             w.table.setModel(TrackModel([]))
+            # Column restore mirrors the real Artists header before either
+            # browser is shown; retain that collaborator in this hidden host.
+            w.artists_view = QTreeWidget(panel)
+            w.artists_view.setColumnCount(len(COLUMNS))
+            w.artists_view.hide()
             layout.addWidget(w.table)
             return panel
         w._main_stack = content

@@ -187,7 +187,7 @@ class UsbPlaylistDeleteSelection(unittest.TestCase):
         self.pages.set_snapshot(self.snapshot,name='Generated',profile=self.profile,free=0,drift=629)
         self.deleted=[];self.pages.delete_requested.connect(self.deleted.append)
 
-    def test_checked_playlists_delete_only_exact_leaf_ids_and_reject_folder_or_stale_menu(self):
+    def test_checked_leaves_and_explicit_empty_folder_delete_exact_ids_and_reject_stale_menu(self):
         tree=self.pages.playlist_tree;first,second,folder=(tree.topLevelItem(i) for i in range(3))
         first.setCheckState(0,Qt.Checked);second.setCheckState(0,Qt.Checked)
         self.assertEqual(self.pages._checked_playlist_ids(),('1','2'))
@@ -195,14 +195,19 @@ class UsbPlaylistDeleteSelection(unittest.TestCase):
                 side_effect=lambda menu,_pos:menu.actions()[0].trigger()):self.pages._playlist_context_menu(QPoint(0,0))
         self.assertEqual(self.deleted,[['1','2']])
         first.setCheckState(0,Qt.Unchecked);second.setCheckState(0,Qt.Unchecked)
-        folder.setCheckState(0,Qt.Checked);self.assertFalse(self.pages._checked_playlist_ids())
+        folder.setCheckState(0,Qt.Checked)
+        self.assertEqual(self.pages._checked_playlist_ids(),('3',))
+        with mock.patch.object(tree,'itemAt',return_value=folder),mock.patch('desktop.usb_device_view.exec_transient_menu',
+                side_effect=lambda menu,_pos:menu.actions()[0].trigger()):self.pages._playlist_context_menu(QPoint(0,0))
+        self.assertEqual(self.deleted,[['1','2'],['3']])
+        folder.setCheckState(0,Qt.Unchecked)
         first.setCheckState(0,Qt.Checked)
         def replaced(menu,_pos):
             self.pages.set_snapshot(replace(self.snapshot),name='Generated',profile=self.profile,free=0,drift=0)
             menu.actions()[0].trigger()
         with mock.patch.object(tree,'itemAt',return_value=first),mock.patch('desktop.usb_device_view.exec_transient_menu',side_effect=replaced):
             self.pages._playlist_context_menu(QPoint(0,0))
-        self.assertEqual(self.deleted,[['1','2']])
+        self.assertEqual(self.deleted,[['1','2'],['3']])
         self.pages.playlist_tree.topLevelItem(0).setCheckState(0,Qt.Checked)
         self.pages.set_playlist_deletion_available(False)
         self.assertFalse(self.pages._checked_playlist_ids())
