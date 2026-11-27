@@ -1,5 +1,20 @@
 # SoundBox current handoff
 
+## Resume checkpoint — November26,2026
+
+Source and the244-item RC plan are committed and published. Code commit is
+`d8ce06cb850b15147a2dfb49f778f58526538d37`; later commits update handoff prose
+only. All5,876 tests passed, and personal180 plus its installer are built and
+verified. **Personal178 is still installed and running.** Installation of180,
+fresh closed-state/curation capture, normal relaunch/preservation verification
+and final delivery cleanup remain unfinished. No real capture/install phase or
+temporary previous-app rollback has been created for180.
+
+The next session must resolve that pending local delivery first, then execute
+the [RC checklist](rc-beta-checklist.md). No RC checkbox is complete from the
+earlier release gate alone. Recheck actual processes/artifacts/state before
+acting; recorded PIDs, counts and plans are dated observations, not fresh truth.
+
 ## Candidate — cleanup and first-tester preparation
 
 Sonny's November26 request is to finish this existing delivery, then hand over
@@ -9,7 +24,7 @@ features, including online artwork, and stages current6.8.7.0303, latest6 patch
 and latest7 acceptance. No rekordbox upgrade or new live test is authorized by
 the planning document itself.
 
-The current working tree adds library-bound cleanup choices, three first-launch
+The committed candidate adds library-bound cleanup choices, three first-launch
 pages, independent opt-in automatic artwork, white fresh/Reset appearance and
 reference browser columns. It also fixes feature-credit placement, majority case
 within collaborations, inline click-away/Tab editing, and bounded native metadata
@@ -18,10 +33,12 @@ are implemented. These changes are not yet the installed personal178 described
 below; do not infer installed or friend-library acceptance from source checks.
 
 Read-only backup/current-library comparisons preserve the original ZIP and all
-matched manual corrections. The final current plan has181 changed tracks:
+matched manual corrections. The November25–26 read-only plan had181 changed tracks:
 183 case-only fields,9 feature fields,9 existing explicit-alias credit fields and
 one demonstrated descriptor/artist correction. No unexpected manual reversal or
-new lost feature credit remains in that comparison. Original-corpus pure planning
+new lost feature credit remained in that captured comparison. Recompute against
+the fresh closed state before installation;181 is not a current write scope.
+Original-corpus pure planning
 and the independent current curation oracle have different purposes.
 
 The same frozen39-field native-copy workload measures59.568→28.551s with exact
